@@ -85,7 +85,8 @@ module PEMK
       # Audit item 4: switches/variables/self-switches detection shadow.
       if @config.flag_state != :off
         @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys,
-                                    repeatable: manifest_repeatable, logger: @log)
+                                    repeatable: manifest_repeatable, latched: manifest_latched,
+                                    logger: @log)
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
@@ -1165,6 +1166,15 @@ module PEMK
       m = @world.flag_manifest
       sec = m.is_a?(Hash) ? m["self_switches"] : nil
       sec.is_a?(Hash) ? Array(sec["repeatable"]) : []
+    end
+
+    # "map:event:letter" the project writes both ON and OFF - a latch rather than a
+    # one-shot marker, so never the server's to bank. Absent from an older export just
+    # means the list is empty (the pre-fix behaviour), never a boot error.
+    def manifest_latched
+      m = @world.flag_manifest
+      sec = m.is_a?(Hash) ? m["self_switches"] : nil
+      sec.is_a?(Hash) ? Array(sec["latched"]) : []
     end
 
     # The build-time tier table, pushed so BOTH sides provably agree on the policy.

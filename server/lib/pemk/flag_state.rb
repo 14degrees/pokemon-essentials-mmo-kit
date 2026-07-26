@@ -29,7 +29,7 @@ module PEMK
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, facts: nil, repeatable: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, repeatable: nil, latched: nil, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
@@ -40,6 +40,13 @@ module PEMK
       # it as a monotonic fact would restore it ON forever and the event would never
       # re-arm. The manifest has always exported this list; the ledger now reads it.
       @repeatable = Array(repeatable).map(&:to_s).to_set
+      # "map:event:letter" the project writes BOTH ON and OFF - a latch, not a one-shot
+      # marker. The Pokemon Institute fossil NPCs are the case that proved it: page 1
+      # sets A when you hand a fossil over, page 2 clears it when you collect. Banking
+      # that replays the collection page at every login (and one of the two crashes the
+      # client on it). Letter-precise, unlike @repeatable: excluding a latch letter must
+      # not unprotect a genuine one-shot letter on the same event.
+      @latched = Array(latched).map(&:to_s).to_set
       # id <-> stable key for fact-tier switches. Keys are name-derived because the
       # compiler renumbers ids, so the stored fact survives a renumber and resolves
       # back to whatever id currently carries that name.
@@ -64,7 +71,7 @@ module PEMK
     def grant_facts(account_id, switches, selfsw, seq: 0, now: Time.now)
       keys = []
       switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
-      selfsw.each   { |k| keys << "ss:#{k}" unless repeatable?(k) }
+      selfsw.each   { |k| keys << "ss:#{k}" if bankable?(k) }
       return 0 if keys.empty?
 
       granted = 0
@@ -121,7 +128,10 @@ module PEMK
     def cooldowns_for(account_id)
       out = {}
       @db[:event_cooldowns].where(account_id: account_id).select(:event_key, :at).each do |r|
-        out[r[:event_key]] = r[:at] unless @repeatable.any? && !@repeatable.include?(r[:event_key])
+        # The SAME filter the write side uses. It was written the other way round, so an
+        # export that dropped an event from the repeatable list kept handing its stale
+        # row back forever - the read and the write have to agree on what is ours.
+        out[r[:event_key]] = r[:at] if @repeatable.include?(r[:event_key])
       end
       out
     rescue StandardError => e
@@ -137,6 +147,13 @@ module PEMK
     # behaviour, and withholding facts from an older client forever is worse than the
     # narrow window this bounds. -> number promoted.
     def commit_facts(account_id, upto_seq = nil, now: Time.now)
+      # The watermark is a client claim like any other: clamp it to the highest seq we
+      # actually recorded, so an inflated one cannot promote a fact from a snapshot the
+      # server never saw. Under-claiming stays allowed - it only defers a promotion.
+      if upto_seq.is_a?(Integer)
+        high = @db[:flag_snapshots].where(account_id: account_id).get(:last_seq) || 0
+        upto_seq = high if upto_seq > high
+      end
       ds = @db[:progression_facts].where(account_id: account_id, durable_at: nil)
       ds = ds.where { granted_seq <= upto_seq } if upto_seq.is_a?(Integer)
       ds.update(durable_at: now)
@@ -190,7 +207,7 @@ module PEMK
           # Filtered on READ as well as on grant, so a re-export that newly marks an
           # event repeatable takes effect at once - no operator surgery on rows banked
           # under the old policy.
-          ss << key unless repeatable?(key)
+          ss << key if bankable?(key)
         elsif (id = @fact_id_by_key[k])
           sw << id
         end
@@ -201,7 +218,14 @@ module PEMK
       { switches: [], self_switches: [] }
     end
 
-    # key is "map:event:letter"; the manifest lists the event as "map:event".
+    # Is this self-switch a monotonic one-shot marker, i.e. the server's to bank?
+    # key is "map:event:letter".
+    def bankable?(key)
+      !repeatable?(key) && !@latched.include?(key.to_s)
+    end
+
+    # The manifest lists a repeatable EVENT as "map:event" - pbSetEventTime drives every
+    # letter of it - so this match deliberately ignores the letter.
     def repeatable?(key)
       return false if @repeatable.empty?
 

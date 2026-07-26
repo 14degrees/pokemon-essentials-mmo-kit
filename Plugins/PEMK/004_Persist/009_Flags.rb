@@ -214,8 +214,13 @@ module PEMK
           next unless parts.length == 2
 
           k = [parts[0].to_i, parts[1].to_i]
+          # Only ever raise a MISSING or LOWER Integer. setVariable parks arbitrary
+          # objects in this same namespace (berry plants keep a growth record here), so
+          # "not an Integer" must mean leave it alone, not treat it as absent and
+          # clobber it. The manifest filter makes that unreachable today; this makes it
+          # a local invariant instead of one that depends on the export.
           cur = $PokemonGlobal.eventvars[k]
-          next if cur.is_a?(Integer) && cur >= at
+          next unless cur.nil? || (cur.is_a?(Integer) && cur < at)
 
           $PokemonGlobal.eventvars[k] = at
           $game_self_switches[[k[0], k[1], "A"]] = true

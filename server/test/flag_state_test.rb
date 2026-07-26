@@ -425,4 +425,64 @@ class FlagStateTest < Minitest::Test
     assert_empty @fs.cooldowns_for(@a)
   end
 
+  # === latched self-switches are not one-shot markers ==========================
+  # The Pokemon Institute fossil NPCs drive self-switch A in BOTH directions: page 1
+  # sets it when you hand a fossil over, page 2 clears it when you collect the result.
+  # Banking that replays the collection page at every login - and one of the two calls
+  # pbAddToParty(0,1) there, which raises "Unknown ID 0." and crashes the client.
+
+  def latched_state
+    PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: { 4 => "sw:defeated_gym_1" },
+                        latched: ["11:2:A", "11:4:A"])
+  end
+
+  def test_a_latched_self_switch_is_never_banked
+    fs = latched_state
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:4:A", "5:2:A"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["5:2:A"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # Letter-precise, unlike the repeatable list: a latch on A must not unprotect a
+  # genuine one-shot on B of the same event.
+  def test_only_the_latched_letter_is_exempt
+    fs = latched_state
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:2:B"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["11:2:B"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # A re-export that newly detects a latch must stop sending rows banked before it.
+  def test_a_latch_banked_under_the_old_policy_stops_being_sent
+    @fs.apply_flags(@a, snap(self_switches: ["11:2:A"]), 1)
+    @fs.commit_facts(@a)
+    assert_equal ["11:2:A"], @fs.facts_for(@a)[:self_switches]
+    assert_empty latched_state.facts_for(@a)[:self_switches]
+  end
+
+  # === the watermark is a client claim like any other ==========================
+
+  def test_an_inflated_watermark_is_clamped_to_what_the_server_saw
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 2)
+    # a client claiming its blob covers seq 999 cannot promote past the recorded high-water
+    @fs.commit_facts(@a, 999)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches], "clamped to last_seq 2, which covers both"
+
+    @db[:progression_facts].where(account_id: @a).update(durable_at: nil, granted_seq: 5)
+    @fs.commit_facts(@a, 999)
+    assert_empty @fs.facts_for(@a)[:switches], "seq 5 is above the recorded high-water"
+  end
+
+  # The read filter must agree with the write filter, or an export that drops an event
+  # keeps handing its stale row back forever.
+  def test_a_cooldown_row_left_by_an_older_manifest_is_not_returned
+    fs = repeatable_state
+    fs.apply_flags(@a, snap.merge(event_times: { "13:17" => 1_000 }), 1)
+    refute_empty fs.cooldowns_for(@a)
+
+    dropped = PEMK::FlagState.new(@db, policy: { switches: [] }, facts: {}, repeatable: ["6:2"])
+    assert_empty dropped.cooldowns_for(@a)
+  end
+
 end

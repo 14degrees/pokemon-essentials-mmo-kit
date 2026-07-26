@@ -280,4 +280,16 @@ check(results, "event_times_tolerates_a_missing_namespace") do
   PEMK::Flags.event_times == {}
 end
 
+# A non-Integer in the eventvars slot means "not ours" - leave it alone. setVariable
+# parks arbitrary objects in this same namespace (berry plants keep a growth record
+# there), and treating one as absent would clobber it and force self-switch A on.
+check(results, "cooldown_leaves_a_non_integer_slot_alone") do
+  $game_self_switches = Game_SelfSwitches.new
+  record = { :stage => 2, :planted => 1234 }
+  $PokemonGlobal.eventvars = { [13, 17] => record }
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  $PokemonGlobal.eventvars[[13, 17]].equal?(record) && $game_self_switches[[13, 17, "A"]] == false
+end
+
 puts JSON.generate(results)
