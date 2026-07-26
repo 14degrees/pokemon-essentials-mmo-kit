@@ -218,6 +218,7 @@ class FlagStateTest < Minitest::Test
 
   def test_facts_are_granted_from_a_snapshot_and_survive_a_rollback
     @fs.apply_flags(@a, snap(switches: [4, 9], self_switches: ["5:2:A"]), 1)
+    @fs.commit_facts(@a)
     f = @fs.facts_for(@a)
     assert_equal [4, 9], f[:switches]
     assert_equal ["5:2:A"], f[:self_switches]
@@ -231,6 +232,7 @@ class FlagStateTest < Minitest::Test
 
   def test_only_fact_tier_switches_become_facts
     @fs.apply_flags(@a, snap(switches: [1, 2, 3, 4]), 1)   # 1,2,3 are mirror-tier
+    @fs.commit_facts(@a)
     assert_equal [4], @fs.facts_for(@a)[:switches]
   end
 
@@ -243,6 +245,7 @@ class FlagStateTest < Minitest::Test
   # stored under "sw:defeated_gym_1" resolves to whatever id now carries that name.
   def test_a_renumbered_switch_still_resolves_to_its_fact
     @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a)
     renumbered = PEMK::FlagState.new(@db, policy: { switches: [88] },
                                      facts: { 88 => "sw:defeated_gym_1" })
     assert_equal [88], renumbered.facts_for(@a)[:switches]
@@ -256,6 +259,7 @@ class FlagStateTest < Minitest::Test
 
   def test_an_operator_revoked_fact_is_not_sent
     @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a)
     @db[:progression_facts].where(account_id: @a).update(revoked_at: Time.now)
     assert_empty @fs.facts_for(@a)[:switches]
   end
@@ -265,6 +269,7 @@ class FlagStateTest < Minitest::Test
   # missed writes. The trust gate caught this in a live session.
   def test_materializing_facts_folds_them_into_the_mirror
     @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    @fs.commit_facts(@a)
     # the player reloads an older save that lost the self-switch
     @fs.apply_flags(@a, snap(switches: [4], self_switches: []), 2)
 
@@ -282,6 +287,60 @@ class FlagStateTest < Minitest::Test
     f = @fs.materialize_facts(@a)
     assert_empty f[:switches]
     assert_empty f[:self_switches]
+  end
+
+  # === fact durability is bound to the client's save commit ===================
+  # Granting on the snapshot alone restored a switch onto a save that never got what
+  # the event granted beside it - the gym flag came back, the badge did not.
+
+  def test_a_fact_is_pending_until_the_client_saves
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    assert_equal 2, @db[:progression_facts].where(account_id: @a).count, "granted..."
+    assert_empty @fs.facts_for(@a)[:switches], "...but not handed back before a save"
+    assert_empty @fs.facts_for(@a)[:self_switches]
+
+    @fs.commit_facts(@a, 1)
+    assert_equal [4], @fs.facts_for(@a)[:switches]
+    assert_equal ["5:2:A"], @fs.facts_for(@a)[:self_switches]
+  end
+
+  def test_the_watermark_holds_back_facts_the_blob_predates
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 2)
+
+    @fs.commit_facts(@a, 1)   # the blob was serialized at flags seq 1
+    assert_equal [4], @fs.facts_for(@a)[:switches], "switch 9 is not in that save yet"
+
+    @fs.commit_facts(@a, 2)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches]
+  end
+
+  # A pre-020 client sends no watermark. Withholding its facts forever is worse than
+  # the window this bounds, so a missing seq promotes everything pending.
+  def test_a_client_without_a_watermark_promotes_everything
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 1)
+    @fs.commit_facts(@a, nil)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches]
+  end
+
+  def test_committing_twice_does_not_move_the_durability_stamp
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a, 1)
+    first = @db[:progression_facts].where(account_id: @a).get(:durable_at)
+    assert_equal 0, @fs.commit_facts(@a, 1), "already durable - nothing left to promote"
+    assert_equal first, @db[:progression_facts].where(account_id: @a).get(:durable_at)
+  end
+
+  # The restore only ever writes state the client provably had on disk, so a pending
+  # fact must not reach the mirror either.
+  def test_materialize_ignores_pending_facts
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    @fs.apply_flags(@a, snap(switches: [], self_switches: []), 2)   # rolled back, never saved
+
+    f = @fs.materialize_facts(@a)
+    assert_empty f[:switches]
+    assert_empty f[:self_switches]
+    assert_nil @fs.snapshot(@a)[:mirror].to_h["ss/5:2:A"], "nothing was restored, so nothing to fold"
   end
 
 end

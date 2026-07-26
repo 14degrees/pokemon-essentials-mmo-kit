@@ -386,8 +386,14 @@ module PEMK
       # Persist the SERVER-tracked position (captured on the reactor thread when the
       # frame arrived, not client-claimed) alongside the blob, so the next login seeds
       # the position audit. nil (no presence yet) leaves the stored position untouched.
+      fseq = env[:flags_seq]
       @mailbox.submit(account_id) do
         @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv, position: last_pos)
+        # The blob is the client's durability boundary: progression facts granted up
+        # to the flags seq it carries are now on the player's disk, so promote them
+        # out of pending. Anything granted after it waits for the next save, or a
+        # crash here would restore a switch onto a save that lacks its payout.
+        @flag_state&.commit_facts(account_id, fseq)
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
     end

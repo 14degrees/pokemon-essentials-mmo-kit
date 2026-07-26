@@ -49,8 +49,13 @@ module PEMK
 
     # Union the facts implied by an absolute snapshot into the ledger. Grant-only:
     # a rollback cannot take one back, which is what makes rewind detection moot.
+    #
+    # A fresh fact is PENDING. It becomes durable only once a save blob arrives that
+    # contains it (commit_facts) - restoring a switch onto a save that never got what
+    # the event granted beside it leaves unfinishable progress: the gym flag comes
+    # back, the badge does not, and the leader will not rebattle.
     # -> number of NEW facts granted.
-    def grant_facts(account_id, switches, selfsw, now: Time.now)
+    def grant_facts(account_id, switches, selfsw, seq: 0, now: Time.now)
       keys = []
       switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
       selfsw.each   { |k| keys << "ss:#{k}" }
@@ -60,12 +65,29 @@ module PEMK
       keys.uniq.each do |k|
         n = @db[:progression_facts]
             .insert_conflict   # DO NOTHING: the set-union is the whole semantics
-            .insert(account_id: account_id, fact_key: k, first_at: now)
+            .insert(account_id: account_id, fact_key: k, first_at: now,
+                    granted_seq: seq.is_a?(Integer) ? seq : 0)
         granted += 1 if n
       end
       granted
     rescue StandardError => e
       @log.call("flags: grant_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # The client wrote a save blob. Everything the :flags channel had sent by then is
+    # inside it (Checkpoint#commit flushes the sync channels before serializing), so
+    # promote those facts from pending to durable.
+    #
+    # A client that sends no watermark promotes everything pending: it is the pre-020
+    # behaviour, and withholding facts from an older client forever is worse than the
+    # narrow window this bounds. -> number promoted.
+    def commit_facts(account_id, upto_seq = nil, now: Time.now)
+      ds = @db[:progression_facts].where(account_id: account_id, durable_at: nil)
+      ds = ds.where { granted_seq <= upto_seq } if upto_seq.is_a?(Integer)
+      ds.update(durable_at: now)
+    rescue StandardError => e
+      @log.call("flags: commit_facts failed #{e.class}: #{e.message}")
       0
     end
 
@@ -98,7 +120,10 @@ module PEMK
     # self_switches: ["m:e:A",...] }. A fact whose name no longer maps to an id
     # (the dev deleted or renamed the switch) is simply dropped, never guessed.
     def facts_for(account_id)
-      rows = @db[:progression_facts].where(account_id: account_id, revoked_at: nil).select_map(:fact_key)
+      rows = @db[:progression_facts]
+             .where(account_id: account_id, revoked_at: nil)
+             .exclude(durable_at: nil)   # pending = the client never saved it; do not invent it
+             .select_map(:fact_key)
       sw = []
       ss = []
       rows.each do |k|
@@ -147,7 +172,7 @@ module PEMK
           unless drift.empty?
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
-          grant_facts(account_id, switches, selfsw, now: now)
+          grant_facts(account_id, switches, selfsw, seq: seq, now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]
         end
