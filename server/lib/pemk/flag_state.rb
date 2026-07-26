@@ -29,11 +29,17 @@ module PEMK
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, facts: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, repeatable: nil, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
       @owned_vars     = to_id_set(policy && (policy[:variables] || policy["variables"]))
+      # "map:event" of events the manifest found to be on a cooldown (berry plants,
+      # daily respawns - anything whose text reaches for expired?/pbSetEventTime).
+      # Their self-switch is deliberately cleared when the timer elapses, so banking
+      # it as a monotonic fact would restore it ON forever and the event would never
+      # re-arm. The manifest has always exported this list; the ledger now reads it.
+      @repeatable = Array(repeatable).map(&:to_s).to_set
       # id <-> stable key for fact-tier switches. Keys are name-derived because the
       # compiler renumbers ids, so the stored fact survives a renumber and resolves
       # back to whatever id currently carries that name.
@@ -58,7 +64,7 @@ module PEMK
     def grant_facts(account_id, switches, selfsw, seq: 0, now: Time.now)
       keys = []
       switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
-      selfsw.each   { |k| keys << "ss:#{k}" }
+      selfsw.each   { |k| keys << "ss:#{k}" unless repeatable?(k) }
       return 0 if keys.empty?
 
       granted = 0
@@ -128,7 +134,11 @@ module PEMK
       ss = []
       rows.each do |k|
         if k.start_with?("ss:")
-          ss << k[3..]
+          key = k[3..]
+          # Filtered on READ as well as on grant, so a re-export that newly marks an
+          # event repeatable takes effect at once - no operator surgery on rows banked
+          # under the old policy.
+          ss << key unless repeatable?(key)
         elsif (id = @fact_id_by_key[k])
           sw << id
         end
@@ -137,6 +147,14 @@ module PEMK
     rescue StandardError => e
       @log.call("flags: facts_for failed #{e.class}: #{e.message}")
       { switches: [], self_switches: [] }
+    end
+
+    # key is "map:event:letter"; the manifest lists the event as "map:event".
+    def repeatable?(key)
+      return false if @repeatable.empty?
+
+      parts = key.to_s.split(":")
+      parts.length >= 2 && @repeatable.include?("#{parts[0]}:#{parts[1]}")
     end
 
     def to_id_set(list)

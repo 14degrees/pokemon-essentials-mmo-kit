@@ -84,7 +84,8 @@ module PEMK
       end
       # Audit item 4: switches/variables/self-switches detection shadow.
       if @config.flag_state != :off
-        @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys, logger: @log)
+        @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys,
+                                    repeatable: manifest_repeatable, logger: @log)
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
@@ -1154,6 +1155,15 @@ module PEMK
         out[id.to_i] = e["key"] if e.is_a?(Hash) && e["tier"] == "fact" && e["key"]
       end
       out
+    end
+
+    # "map:event" of the events the manifest found to be on a cooldown. Their
+    # self-switch is cleared on purpose when the timer elapses, so it must never be
+    # banked as a monotonic fact.
+    def manifest_repeatable
+      m = @world.flag_manifest
+      sec = m.is_a?(Hash) ? m["self_switches"] : nil
+      sec.is_a?(Hash) ? Array(sec["repeatable"]) : []
     end
 
     # The build-time tier table, pushed so BOTH sides provably agree on the policy.

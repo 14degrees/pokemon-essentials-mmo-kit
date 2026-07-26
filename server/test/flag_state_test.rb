@@ -343,4 +343,40 @@ class FlagStateTest < Minitest::Test
     assert_nil @fs.snapshot(@a)[:mirror].to_h["ss/5:2:A"], "nothing was restored, so nothing to fold"
   end
 
+  # === repeatable events must never become facts ==============================
+  # A berry plant / daily respawn clears its own self-switch when the cooldown
+  # elapses. Banking it monotonically restores it ON at every login and the event
+  # never re-arms. The manifest has always exported the list; the ledger reads it now.
+
+  def repeatable_state
+    PEMK::FlagState.new(@db, policy: { switches: [1, 2, 3, 4, 9] },
+                        facts: { 4 => "sw:defeated_gym_1" }, repeatable: ["13:17"])
+  end
+
+  def test_a_repeatable_events_self_switch_is_not_banked
+    fs = repeatable_state
+    fs.apply_flags(@a, snap(switches: [4], self_switches: ["13:17:A", "5:2:A"]), 1)
+    fs.commit_facts(@a)
+    f = fs.facts_for(@a)
+    assert_equal ["5:2:A"], f[:self_switches], "the cooldown marker must stay the client's"
+    assert_equal [4], f[:switches]
+  end
+
+  # Other events on the same map are unaffected - the match is on map:event, not map.
+  def test_only_the_named_event_is_exempt
+    fs = repeatable_state
+    fs.apply_flags(@a, snap(self_switches: ["13:17:A", "13:18:A"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["13:18:A"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # A re-export that newly marks an event repeatable must take effect immediately,
+  # without operator surgery on rows banked under the old policy.
+  def test_a_fact_banked_before_the_policy_changed_stops_being_sent
+    @fs.apply_flags(@a, snap(self_switches: ["13:17:A"]), 1)
+    @fs.commit_facts(@a)
+    assert_equal ["13:17:A"], @fs.facts_for(@a)[:self_switches]
+    assert_empty repeatable_state.facts_for(@a)[:self_switches]
+  end
+
 end
