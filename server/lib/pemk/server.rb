@@ -820,7 +820,8 @@ module PEMK
       return unless @flag_state
 
       seq = env[:seq]
-      payload = { switches: env[:switches], variables: env[:variables], self_switches: env[:self_switches] }
+      payload = { switches: env[:switches], variables: env[:variables],
+                  self_switches: env[:self_switches], event_times: env[:event_times] }
       # A dropped job (queue full) must NOT leave the client believing its snapshot
       # landed — it would advance its seq and the server would then reject every
       # later one as stale. Nack so the client can resend.

@@ -193,6 +193,7 @@ module PEMK
           if snap.hash != @flag_last
             c.send_message({ :type => :flags, :switches => snap[:switches],
                              :variables => snap[:variables], :self_switches => snap[:self_switches],
+                             :event_times => snap[:event_times],
                              :seq => (@seq[:flags] += 1) })
             @flag_last = snap.hash
           end

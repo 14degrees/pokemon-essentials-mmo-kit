@@ -379,4 +379,50 @@ class FlagStateTest < Minitest::Test
     assert_empty repeatable_state.facts_for(@a)[:self_switches]
   end
 
+  # === repeatable events: the cooldown half ===================================
+  # 020 stopped banking a repeatable event's self-switch, which left the rollback free
+  # to reset its timer. The timestamp is the honest monotonic half.
+
+  def snap_t(times, seq = 1, fs = nil)
+    (fs || repeatable_state).apply_flags(@a, snap.merge(event_times: times), seq)
+  end
+
+  def test_a_cooldown_only_ever_moves_forward
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000 }, 1, fs)
+    snap_t({ "13:17" => 2_000 }, 2, fs)
+    assert_equal({ "13:17" => 2_000 }, fs.cooldowns_for(@a))
+
+    snap_t({ "13:17" => 500 }, 3, fs)   # rolled back save
+    assert_equal({ "13:17" => 2_000 }, fs.cooldowns_for(@a), "a rollback cannot reset the timer")
+  end
+
+  # setVariable parks arbitrary values in eventvars; only manifest-classified
+  # repeatable events are the server's business.
+  def test_only_repeatable_events_are_stored
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000, "4:9" => 1_000 }, 1, fs)
+    assert_equal ["13:17"], fs.cooldowns_for(@a).keys
+  end
+
+  def test_a_junk_timestamp_is_dropped_not_stored
+    fs = repeatable_state
+    snap_t({ "13:17" => -5 }, 1, fs)
+    snap_t({ "13:17" => "soon" }, 2, fs)
+    assert_empty fs.cooldowns_for(@a)
+  end
+
+  def test_cooldowns_ride_the_login_payload
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000 }, 1, fs)
+    assert_equal({ "13:17" => 1_000 }, fs.materialize_facts(@a)[:event_times])
+  end
+
+  # Without a repeatable list nothing is a cooldown - the layer stays inert rather
+  # than persisting every integer a fan script left in eventvars.
+  def test_no_manifest_list_means_no_cooldowns
+    @fs.apply_flags(@a, snap.merge(event_times: { "13:17" => 1_000 }), 1)
+    assert_empty @fs.cooldowns_for(@a)
+  end
+
 end

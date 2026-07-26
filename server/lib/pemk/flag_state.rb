@@ -81,6 +81,54 @@ module PEMK
       0
     end
 
+    # --- repeatable events: the cooldown half -----------------------------------
+    #
+    # A repeatable event's self-switch is deliberately NOT a fact (it must be able to
+    # clear), which leaves the rollback free to reset the timer and farm the respawn
+    # early. The timestamp is the honest monotonic half - each harvest moves it
+    # forward - so the server keeps the maximum and hands it back at login.
+    #
+    # times: { "13:17" => 1_753_000_000 }. Only events the manifest calls repeatable
+    # are kept, so an eventvars entry a fan script parked there never travels.
+    def note_cooldowns(account_id, times, now: Time.now)
+      return 0 unless times.is_a?(Hash) && !@repeatable.empty?
+
+      kept = 0
+      seen = 0
+      times.each do |key, at|
+        break if (seen += 1) > MAX_ENTRIES   # hostile input must not drive an unbounded scan
+
+        k = key.to_s
+        next unless at.is_a?(Integer) && at.positive? && @repeatable.include?(k)
+
+        @db[:event_cooldowns]
+          .insert_conflict(target: %i[account_id event_key],
+                           update: { at: Sequel.function(:GREATEST, Sequel[:excluded][:at],
+                                                         Sequel[:event_cooldowns][:at]),
+                                     updated_at: now })
+          .insert(account_id: account_id, event_key: k, at: at, updated_at: now)
+        kept += 1
+      end
+      kept
+    rescue StandardError => e
+      @log.call("flags: note_cooldowns failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # -> { "13:17" => at }. The CLIENT decides whether to apply one: it holds the live
+    # eventvars and only raises a value that is missing or older, so an event that
+    # legitimately expired is never re-locked.
+    def cooldowns_for(account_id)
+      out = {}
+      @db[:event_cooldowns].where(account_id: account_id).select(:event_key, :at).each do |r|
+        out[r[:event_key]] = r[:at] unless @repeatable.any? && !@repeatable.include?(r[:event_key])
+      end
+      out
+    rescue StandardError => e
+      @log.call("flags: cooldowns_for failed #{e.class}: #{e.message}")
+      {}
+    end
+
     # The client wrote a save blob. Everything the :flags channel had sent by then is
     # inside it (Checkpoint#commit flushes the sync channels before serializing), so
     # promote those facts from pending to durable.
@@ -106,6 +154,10 @@ module PEMK
     # mirror stays a live measurement instead of being invalidated.
     def materialize_facts(account_id, now: Time.now)
       f = facts_for(account_id)
+      # Cooldowns ride the same login payload but are NOT folded into the mirror: the
+      # client decides whether each one applies (it holds the live eventvars), so the
+      # server cannot know what it wrote. eventvars is outside the mirror anyway.
+      f[:event_times] = cooldowns_for(account_id)
       return f if f[:switches].empty? && f[:self_switches].empty?
 
       row = @db[:flag_snapshots].where(account_id: account_id).first
@@ -191,6 +243,7 @@ module PEMK
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
           grant_facts(account_id, switches, selfsw, seq: seq, now: now)
+          note_cooldowns(account_id, payload[:event_times], now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]
         end
