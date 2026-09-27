@@ -74,6 +74,24 @@ class ServerRoutingTest < Minitest::Test
     b.close
   end
 
+  # The invite's name lands in the target's "X wants to trade! Accept?" box, which
+  # runs message codes: "\ch[51,0,A]" there would set the target's variable 51.
+  def test_a_relayed_name_carries_no_message_codes
+    a, = open_authed("Codes", "passwordA1")
+    b, b_id = open_authed("Taker", "passwordB1")
+
+    send_env(a, { type: :trade_invite, to: b_id, trade_id: "t1", name: "\\ch[51,0,A]Eve<b>\u202e" })
+    assert_equal "ch[51,0,A]Eveb", recv(b)[:env][:name]
+
+    send_env(a, { type: :challenge, to: b_id, name: "\\se[bang]" + "x" * 40 })
+    assert_equal "se[bang]xxxxxxxx", recv(b)[:env][:name]
+
+    send_env(a, { type: :challenge_decline, to: b_id, name: "\\<>" })
+    refute recv(b)[:env].key?(:name)   # nothing printable left: the client shows "?"
+    a.close
+    b.close
+  end
+
   # An accepted challenge opens the peer session both payload frames require.
   def agree(a, a_id, b, b_id)
     send_env(a, { type: :challenge, to: b_id })

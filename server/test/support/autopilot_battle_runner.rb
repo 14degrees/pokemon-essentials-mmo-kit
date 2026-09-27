@@ -92,7 +92,7 @@ class FakeBag
 end
 $bag = FakeBag.new
 
-Move    = Struct.new(:id, :name, :pp, :total_pp, :type)
+Move    = Struct.new(:id, :name, :pp, :total_pp, :type, :power)
 Mon     = Struct.new(:name, :species, :level, :hp, :totalhp) do
   def able?; hp.positive?; end
 end
@@ -349,6 +349,19 @@ check(results, "auto_mode_plays_on_its_own") do
   scene.pbShowPokedex(:PIDGEY)
   cmd == 0 && tried == [0, 1] && switch == 2 && prompts == [0, -1, ""] &&
     !scene.ui_calls.include?(:pokedex)
+end
+
+# The first move may be a status move: used forever, the battle would never end.
+check(results, "auto_mode_uses_the_strongest_move") do
+  command("18b battle mode auto")
+  scene, battle = fresh_scene
+  battle.battlers[0].moves = [Move.new(:GROWL, "Growl", 40, 40, :NORMAL, 0),
+                              Move.new(:TACKLE, "Tackle", 35, 35, :NORMAL, 40),
+                              Move.new(:VINEWHIP, "Vine Whip", 25, 25, :GRASS, 45)]
+  battle.refuse = [2]
+  tried = []
+  scene.pbFightMenu(0) { |i| tried << i; !battle.refuse.include?(i) }
+  tried == [2, 1]   # the strongest, and when it is refused the next strongest
 end
 
 check(results, "paused_messages_close_on_their_own_off_the_keys") do

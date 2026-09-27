@@ -6,8 +6,8 @@
 # yes/no and other prompts, forgetting a move, and a nickname. Each point is hooked:
 #   keys   (default) the engine's own UI runs; the point is only reported in "state"
 #   agent  the point waits for a "decide" command
-#   auto   a plain policy answers: first usable move, first healthy Pokémon, the
-#          default answer to prompts
+#   auto   a plain policy answers: the strongest usable move, the first healthy
+#          Pokémon, the default answer to prompts
 # Either way the Battle code receives exactly the value its UI would have returned,
 # so everything after the choice (move registration, the PEMK PvP sync, RNG
 # recording, server-adjudicated catches) runs unchanged.
@@ -210,7 +210,8 @@ module PEMK
           next nil unless m && m.id
 
           { "index" => i, "name" => m.name, "id" => m.id.to_s, "pp" => m.pp, "total_pp" => m.total_pp,
-            "type" => m.type.to_s, "usable" => (b.pbCanChooseMove?(idx_battler, i, false) ? true : false) }
+            "type" => m.type.to_s, "power" => (m.respond_to?(:power) ? m.power.to_i : 0),
+            "usable" => (b.pbCanChooseMove?(idx_battler, i, false) ? true : false) }
         end.compact
       end
 
@@ -309,8 +310,11 @@ if PEMK::Autopilot.active? && defined?(Battle::Scene)
         tried = []
         loop do
           opts = ctl.move_options(self, idxBattler)
+          # The strongest move left, so that a battle ends: the first one could be a
+          # status move used forever.
           d = ctl.ask(self, "fight", idxBattler, opts) do
-            pick = opts.find { |o| o["usable"] && !tried.include?(o["index"]) }
+            left = opts.select { |o| o["usable"] && !tried.include?(o["index"]) }
+            pick = left.max_by { |o| [o["power"].to_i, -o["index"]] }
             pick ? pick["index"] : -1
           end
           return pemk_ap_orig_pbFightMenu(idxBattler, megaEvoPossible, &block) if d == :keys

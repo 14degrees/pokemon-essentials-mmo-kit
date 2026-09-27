@@ -16,8 +16,8 @@
 # saves: flush T1 primitives FIRST (the monster sweep assigns mint nonces at
 # flush and they must Marshal into the very blob being written), THEN the core
 # write via the preserved original Game.save, THEN the blob push. Manual pushes
-# force:true (instant); auto pushes force:false so the existing content-hash +
-# 30s throttle bounds the wire unconditionally.
+# force:true (instant), and so do URGENT checkpoints (bounded by their 1s floor);
+# ambient ones force:false, so the content hash + 30s throttle bound the wire.
 #
 # Fully silent (no player-facing UI). The Save button keeps working and now
 # doubles as "force an immediate full push". OFFLINE (never logged in): inert —
@@ -195,10 +195,15 @@ module PEMK
     def execute(now)
       @running = true
       reasons = @pending[:reasons].uniq
+      # A high-value gain goes to the server now, not within 30s: a crash before a
+      # throttled push brings the older blob back at login, and after a trade that
+      # takes both Pokémon away while the registry has already swapped them. The 1s
+      # urgent floor bounds these pushes (the server budgets a burst of 10, then 1/s).
+      urgent = urgent_pending?
       ok = false
       push = nil
       begin
-        ok, push = commit(force: false)
+        ok, push = commit(force: urgent)
       rescue => e
         # Own rescue + cooldown: Pump's rescue alone would retry a throwing
         # Marshal every frame (a 60fps exception storm). Core Game.save only

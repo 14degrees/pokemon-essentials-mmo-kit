@@ -139,12 +139,22 @@ module PEMK
         presses   = 0
         last_tap  = nil
         quiet_at  = nil
+        screen_at = nil
         Autopilot.start_job(id) do
           next false if VInput.down?(use)
 
           # Anything the agent has to act on ends the run of taps: tapping on would
-          # answer for it (a menu) or wait on something taps cannot give (text).
-          if (stop = needs_the_agent)
+          # answer for it (a menu) or wait on something taps cannot give (text). A
+          # screen gets a moment first: the pause menu closes on its own once the
+          # line it showed has been read.
+          stop = needs_the_agent
+          if stop == "screen"
+            screen_at ||= Autopilot.now
+            next false if Autopilot.now - screen_at < QUIET
+          else
+            screen_at = nil
+          end
+          if stop
             next Autopilot.respond(id, "ok" => true, "presses" => presses, "stopped" => stop,
                                        "message" => Observe.current_message, "menus" => Observe.menus)
           end
@@ -173,13 +183,15 @@ module PEMK
         end
       end
 
-      # -> what the agent must handle next, or nil when taps can carry on.
+      # -> what the agent must handle next, or nil when taps can carry on. A screen
+      # with a message over it ("Trade request sent...", shown from the pause menu)
+      # is waiting on that message, which taps close.
       def needs_the_agent
         return "menu"   unless Observe.menus.empty?
         return "text"   if TextEntry.awaiting
         return "item"   if ItemChoice.awaiting
         return "battle" if BattleControl.attached?
-        return "screen" unless Observe.screens.empty?
+        return "screen" if Observe.current_message.nil? && !Observe.screens.empty?
 
         nil
       end

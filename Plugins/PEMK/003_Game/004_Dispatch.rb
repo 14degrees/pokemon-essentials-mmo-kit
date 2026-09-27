@@ -5,9 +5,44 @@
 # Kept tiny on purpose — the message protocol grows here as phases are added.
 #===============================================================================
 module PEMK
+  # Text another player sent, as we may print it. pbMessage runs codes: a
+  # "\ch[...]" in a name would set one of our game variables, "\se[...]" plays a
+  # sound. The dedicated server cleans names too; this holds for any server.
+  # Mirrors server/lib/pemk/plain_text.rb.
+  NAME_MAX     = 16
+  CHARSET_NAME = /\A[A-Za-z0-9_\- ]{1,64}\z/   # a Graphics/Characters file, no path
+
+  def self.plain_name(value)
+    return nil unless value.is_a?(String)
+
+    s = value.dup.force_encoding(Encoding::UTF_8).scrub("")
+    s = s.gsub(/[[:cntrl:]\p{Cf}\\<>]/, "").squeeze(" ").strip
+    s = s[0, NAME_MAX].to_s.strip
+    s.empty? ? nil : s
+  end
+
+  def self.plain_charset(value)
+    value.is_a?(String) && value.match?(CHARSET_NAME) ? value : nil
+  end
+
   module Dispatch
+    # A frame's player-written fields, made safe before any handler sees them.
+    def self.plain(msg)
+      return msg unless msg.key?(:name) || msg.key?(:char)
+
+      out = msg.dup
+      { :name => :plain_name, :char => :plain_charset }.each do |key, cleaner|
+        next unless out.key?(key)
+
+        value = PEMK.send(cleaner, out[key])
+        value ? out[key] = value : out.delete(key)
+      end
+      out
+    end
+
     def self.handle(msg)
       return unless msg.is_a?(Hash)
+      msg = plain(msg)
       case msg[:type]
       when :pos, :dir, :spawn, :step
         Remotes.apply_pos(msg)
