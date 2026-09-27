@@ -111,6 +111,9 @@ module PEMK
         begin
           File.open(tmp, "rb+") { |f| f.fsync } rescue nil   # power-loss: data hits disk before the rename
           File.rename(tmp, save_file)
+          # These bytes contain every flag frame the flush above sent: stamp the
+          # watermark the server uses to make progression facts durable.
+          (PEMK::Sync.mark_blob_watermark rescue nil)
         rescue StandardError => e
           PEMK.log("checkpoint: atomic rename failed: #{e.class}: #{e.message}")
           ok = false

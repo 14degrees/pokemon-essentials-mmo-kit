@@ -174,6 +174,23 @@ loud warning if replayable records pile up with no verdict.
 
 Full design + honest limits: [`docs/LAYER-D-BATTLE-DESIGN.md`](LAYER-D-BATTLE-DESIGN.md).
 
+## (Advanced) Server-owned story progression
+
+`PEMK_FLAG_STATE` (off by default) lets the server keep the story progression it
+has seen saved and hand it back at login, so a lost or rolled-back save no longer
+re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
+
+1. `PEMK_FLAG_STATE=shadow` — the server records the story state and restores
+   nothing. Play for a while and read the server log: `DELTA DRIFT` should not
+   appear, and `SUSPECT rewind` should only name real rollbacks.
+2. `PEMK_FLAG_STATE=on` — saved progression comes back at every login.
+
+There is nothing to declare in RPG Maker: which switches count as progression is
+worked out from your own events. After updating the kit, delete
+`server/data/world.json` and do a debug launch, so the export picks up the new
+format. Details and limits: [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECURITY.md)
+(section *Story state*).
+
 ## Understand what you're running (deeper docs)
 
 - **Project overview & what works today:** [`README.md`](../README.md)

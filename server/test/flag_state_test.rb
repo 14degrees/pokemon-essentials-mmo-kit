@@ -218,6 +218,7 @@ class FlagStateTest < Minitest::Test
 
   def test_facts_are_granted_from_a_snapshot_and_survive_a_rollback
     @fs.apply_flags(@a, snap(switches: [4, 9], self_switches: ["5:2:A"]), 1)
+    @fs.commit_facts(@a)
     f = @fs.facts_for(@a)
     assert_equal [4, 9], f[:switches]
     assert_equal ["5:2:A"], f[:self_switches]
@@ -231,6 +232,7 @@ class FlagStateTest < Minitest::Test
 
   def test_only_fact_tier_switches_become_facts
     @fs.apply_flags(@a, snap(switches: [1, 2, 3, 4]), 1)   # 1,2,3 are mirror-tier
+    @fs.commit_facts(@a)
     assert_equal [4], @fs.facts_for(@a)[:switches]
   end
 
@@ -243,6 +245,7 @@ class FlagStateTest < Minitest::Test
   # stored under "sw:defeated_gym_1" resolves to whatever id now carries that name.
   def test_a_renumbered_switch_still_resolves_to_its_fact
     @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a)
     renumbered = PEMK::FlagState.new(@db, policy: { switches: [88] },
                                      facts: { 88 => "sw:defeated_gym_1" })
     assert_equal [88], renumbered.facts_for(@a)[:switches]
@@ -256,6 +259,7 @@ class FlagStateTest < Minitest::Test
 
   def test_an_operator_revoked_fact_is_not_sent
     @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a)
     @db[:progression_facts].where(account_id: @a).update(revoked_at: Time.now)
     assert_empty @fs.facts_for(@a)[:switches]
   end
@@ -265,6 +269,7 @@ class FlagStateTest < Minitest::Test
   # missed writes. The trust gate caught this in a live session.
   def test_materializing_facts_folds_them_into_the_mirror
     @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    @fs.commit_facts(@a)
     # the player reloads an older save that lost the self-switch
     @fs.apply_flags(@a, snap(switches: [4], self_switches: []), 2)
 
@@ -282,6 +287,243 @@ class FlagStateTest < Minitest::Test
     f = @fs.materialize_facts(@a)
     assert_empty f[:switches]
     assert_empty f[:self_switches]
+  end
+
+  # === fact durability is bound to the client's save commit ===================
+  # Granting on the snapshot alone restored a switch onto a save that never got what
+  # the event granted beside it - the gym flag came back, the badge did not.
+
+  def test_a_fact_is_pending_until_the_client_saves
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    assert_equal 2, @db[:progression_facts].where(account_id: @a).count, "granted..."
+    assert_empty @fs.facts_for(@a)[:switches], "...but not handed back before a save"
+    assert_empty @fs.facts_for(@a)[:self_switches]
+
+    @fs.commit_facts(@a, 1)
+    assert_equal [4], @fs.facts_for(@a)[:switches]
+    assert_equal ["5:2:A"], @fs.facts_for(@a)[:self_switches]
+  end
+
+  def test_the_watermark_holds_back_facts_the_blob_predates
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 2)
+
+    @fs.commit_facts(@a, 1)   # the blob was serialized at flags seq 1
+    assert_equal [4], @fs.facts_for(@a)[:switches], "switch 9 is not in that save yet"
+
+    @fs.commit_facts(@a, 2)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches]
+  end
+
+  # A pre-020 client sends no watermark. Withholding its facts forever is worse than
+  # the window this bounds, so a missing seq promotes everything pending.
+  def test_a_client_without_a_watermark_promotes_everything
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 1)
+    @fs.commit_facts(@a, nil)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches]
+  end
+
+  def test_committing_twice_does_not_move_the_durability_stamp
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.commit_facts(@a, 1)
+    first = @db[:progression_facts].where(account_id: @a).get(:durable_at)
+    assert_equal 0, @fs.commit_facts(@a, 1), "already durable - nothing left to promote"
+    assert_equal first, @db[:progression_facts].where(account_id: @a).get(:durable_at)
+  end
+
+  # The restore only ever writes state the client provably had on disk, so a pending
+  # fact must not reach the mirror either.
+  def test_materialize_ignores_pending_facts
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)
+    @fs.apply_flags(@a, snap(switches: [], self_switches: []), 2)   # rolled back, never saved
+
+    f = @fs.materialize_facts(@a)
+    assert_empty f[:switches]
+    assert_empty f[:self_switches]
+    assert_nil @fs.snapshot(@a)[:mirror].to_h["ss/5:2:A"], "nothing was restored, so nothing to fold"
+  end
+
+  # The seq keeps counting across sessions (the client adopts the server's high-water
+  # at login), so "granted at or below the watermark" alone does not prove the blob
+  # holds a fact. A crash between the snapshot and the save loses the fact with its
+  # session, and the next session's first save must not promote it.
+  def test_a_fact_lost_with_its_session_is_not_promoted_by_the_next_save
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)   # granted, then a crash
+    @fs.apply_flags(@a, snap(switches: [], self_switches: []), 2)           # the next session never had it
+    @fs.commit_facts(@a, 2)
+    assert_empty @fs.facts_for(@a)[:switches]
+    assert_empty @fs.facts_for(@a)[:self_switches]
+  end
+
+  # Earned again, the fact is granted again at the snapshot that carries it, so a blob
+  # serialized before that snapshot still cannot promote it.
+  def test_a_fact_earned_again_is_promoted_only_by_a_save_that_holds_it
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: []), 2)    # lost with the session
+    @fs.apply_flags(@a, snap(switches: [4]), 3)   # earned again
+    @fs.commit_facts(@a, 2)
+    assert_empty @fs.facts_for(@a)[:switches], "the blob at seq 2 does not hold it"
+    @fs.commit_facts(@a, 3)
+    assert_equal [4], @fs.facts_for(@a)[:switches]
+  end
+
+  # === repeatable events must never become facts ==============================
+  # A berry plant / daily respawn clears its own self-switch when the cooldown
+  # elapses. Banking it monotonically restores it ON at every login and the event
+  # never re-arms. The manifest has always exported the list; the ledger reads it now.
+
+  def repeatable_state
+    PEMK::FlagState.new(@db, policy: { switches: [1, 2, 3, 4, 9] },
+                        facts: { 4 => "sw:defeated_gym_1" }, repeatable: ["13:17"])
+  end
+
+  def test_a_repeatable_events_self_switch_is_not_banked
+    fs = repeatable_state
+    fs.apply_flags(@a, snap(switches: [4], self_switches: ["13:17:A", "5:2:A"]), 1)
+    fs.commit_facts(@a)
+    f = fs.facts_for(@a)
+    assert_equal ["5:2:A"], f[:self_switches], "the cooldown marker must stay the client's"
+    assert_equal [4], f[:switches]
+  end
+
+  # Other events on the same map are unaffected - the match is on map:event, not map.
+  def test_only_the_named_event_is_exempt
+    fs = repeatable_state
+    fs.apply_flags(@a, snap(self_switches: ["13:17:A", "13:18:A"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["13:18:A"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # A re-export that newly marks an event repeatable must take effect immediately,
+  # without operator surgery on rows banked under the old policy.
+  def test_a_fact_banked_before_the_policy_changed_stops_being_sent
+    @fs.apply_flags(@a, snap(self_switches: ["13:17:A"]), 1)
+    @fs.commit_facts(@a)
+    assert_equal ["13:17:A"], @fs.facts_for(@a)[:self_switches]
+    assert_empty repeatable_state.facts_for(@a)[:self_switches]
+  end
+
+  # === repeatable events: the cooldown half ===================================
+  # 020 stopped banking a repeatable event's self-switch, which left the rollback free
+  # to reset its timer. The timestamp is the honest monotonic half.
+
+  def snap_t(times, seq = 1, fs = nil)
+    (fs || repeatable_state).apply_flags(@a, snap.merge(event_times: times), seq)
+  end
+
+  def test_a_cooldown_only_ever_moves_forward
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000 }, 1, fs)
+    snap_t({ "13:17" => 2_000 }, 2, fs)
+    assert_equal({ "13:17" => 2_000 }, fs.cooldowns_for(@a))
+
+    snap_t({ "13:17" => 500 }, 3, fs)   # rolled back save
+    assert_equal({ "13:17" => 2_000 }, fs.cooldowns_for(@a), "a rollback cannot reset the timer")
+  end
+
+  # setVariable parks arbitrary values in eventvars; only manifest-classified
+  # repeatable events are the server's business.
+  def test_only_repeatable_events_are_stored
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000, "4:9" => 1_000 }, 1, fs)
+    assert_equal ["13:17"], fs.cooldowns_for(@a).keys
+  end
+
+  def test_a_junk_timestamp_is_dropped_not_stored
+    fs = repeatable_state
+    snap_t({ "13:17" => -5 }, 1, fs)
+    snap_t({ "13:17" => "soon" }, 2, fs)
+    assert_empty fs.cooldowns_for(@a)
+  end
+
+  def test_cooldowns_ride_the_login_payload
+    fs = repeatable_state
+    snap_t({ "13:17" => 1_000 }, 1, fs)
+    assert_equal({ "13:17" => 1_000 }, fs.materialize_facts(@a)[:event_times])
+  end
+
+  # Without a repeatable list nothing is a cooldown - the layer stays inert rather
+  # than persisting every integer a fan script left in eventvars.
+  def test_no_manifest_list_means_no_cooldowns
+    @fs.apply_flags(@a, snap.merge(event_times: { "13:17" => 1_000 }), 1)
+    assert_empty @fs.cooldowns_for(@a)
+  end
+
+  # === latched self-switches are not one-shot markers ==========================
+  # The Pokemon Institute fossil NPCs drive self-switch A in BOTH directions: page 1
+  # sets it when you hand a fossil over, page 2 clears it when you collect the result.
+  # Banking that replays the collection page at every login - and one of the two calls
+  # pbAddToParty(0,1) there, which raises "Unknown ID 0." and crashes the client.
+
+  def latched_state
+    PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: { 4 => "sw:defeated_gym_1" },
+                        latched: ["11:2:A", "11:4:A"])
+  end
+
+  def test_a_latched_self_switch_is_never_banked
+    fs = latched_state
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:4:A", "5:2:A"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["5:2:A"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # Letter-precise, unlike the repeatable list: a latch on A must not unprotect a
+  # genuine one-shot on B of the same event.
+  def test_only_the_latched_letter_is_exempt
+    fs = latched_state
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:2:B"]), 1)
+    fs.commit_facts(@a)
+    assert_equal ["11:2:B"], fs.facts_for(@a)[:self_switches]
+  end
+
+  # A re-export that newly detects a latch must stop sending rows banked before it.
+  def test_a_latch_banked_under_the_old_policy_stops_being_sent
+    @fs.apply_flags(@a, snap(self_switches: ["11:2:A"]), 1)
+    @fs.commit_facts(@a)
+    assert_equal ["11:2:A"], @fs.facts_for(@a)[:self_switches]
+    assert_empty latched_state.facts_for(@a)[:self_switches]
+  end
+
+  # The game clears latched and repeatable self-switches itself (a fossil NPC handing
+  # back its result, a berry plant re-arming), so those going OFF is not a rollback.
+  def test_self_switches_the_game_clears_are_not_rewind_evidence
+    fs = PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: {},
+                             repeatable: ["13:17"], latched: ["11:2:A", "11:4:A"])
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:4:A", "13:17:A", "13:17:B", "5:2:A"]), 1)
+    _, flags = fs.apply_flags(@a, snap(self_switches: ["5:2:A"]), 2)   # 4 cleared, all by the game
+    assert_empty flags
+  end
+
+  def test_one_shot_markers_still_count_beside_them
+    fs = PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: {}, latched: ["11:2:A"])
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "1:1:A", "1:2:A", "2:7:A"]), 1)
+    _, flags = fs.apply_flags(@a, snap(self_switches: []), 2)   # 3 one-shots and a latch
+    assert_includes flags, "rewind"
+  end
+
+  # === the watermark is a client claim like any other ==========================
+
+  def test_an_inflated_watermark_is_clamped_to_what_the_server_saw
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: [4, 9]), 2)
+    # a client claiming its blob covers seq 999 cannot promote past the recorded high-water
+    @fs.commit_facts(@a, 999)
+    assert_equal [4, 9], @fs.facts_for(@a)[:switches], "clamped to last_seq 2, which covers both"
+
+    @db[:progression_facts].where(account_id: @a).update(durable_at: nil, granted_seq: 5)
+    @fs.commit_facts(@a, 999)
+    assert_empty @fs.facts_for(@a)[:switches], "seq 5 is above the recorded high-water"
+  end
+
+  # The read filter must agree with the write filter, or an export that drops an event
+  # keeps handing its stale row back forever.
+  def test_a_cooldown_row_left_by_an_older_manifest_is_not_returned
+    fs = repeatable_state
+    fs.apply_flags(@a, snap.merge(event_times: { "13:17" => 1_000 }), 1)
+    refute_empty fs.cooldowns_for(@a)
+
+    dropped = PEMK::FlagState.new(@db, policy: { switches: [] }, facts: {}, repeatable: ["6:2"])
+    assert_empty dropped.cooldowns_for(@a)
   end
 
 end

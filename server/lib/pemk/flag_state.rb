@@ -16,7 +16,9 @@ module PEMK
   #   * self-switches that were ON and are now OFF => THE signal. A self-switch is the
   #     engine's "this one-shot event has happened" marker; vanilla event scripts set
   #     them and effectively never clear them, so a batch of them going OFF is a save
-  #     rollback, and it is exactly what re-farms NPC gifts / TMs / key items.
+  #     rollback, and it is exactly what re-farms NPC gifts / TMs / key items. The
+  #     manifest's latched and repeatable self-switches are cleared by the game
+  #     itself, so they are left out of the count.
   #   * switches going OFF and variables DECREASING are RECORDED but NOT flagged:
   #     both legitimately happen all the time (temp flags, countdowns, counters reset
   #     by events), so judging them would flood the queue with honest players.
@@ -29,11 +31,24 @@ module PEMK
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, facts: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, repeatable: nil, latched: nil, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
       @owned_vars     = to_id_set(policy && (policy[:variables] || policy["variables"]))
+      # "map:event" of events the manifest found to be on a cooldown (berry plants,
+      # daily respawns - anything whose text reaches for expired?/pbSetEventTime).
+      # Their self-switch is deliberately cleared when the timer elapses, so banking
+      # it as a monotonic fact would restore it ON forever and the event would never
+      # re-arm. The manifest has always exported this list; the ledger now reads it.
+      @repeatable = Array(repeatable).map(&:to_s).to_set
+      # "map:event:letter" the project writes BOTH ON and OFF - a latch, not a one-shot
+      # marker. The Pokemon Institute fossil NPCs are the case that proved it: page 1
+      # sets A when you hand a fossil over, page 2 clears it when you collect. Banking
+      # that replays the collection page at every login (and one of the two crashes the
+      # client on it). Letter-precise, unlike @repeatable: excluding a latch letter must
+      # not unprotect a genuine one-shot letter on the same event.
+      @latched = Array(latched).map(&:to_s).to_set
       # id <-> stable key for fact-tier switches. Keys are name-derived because the
       # compiler renumbers ids, so the stored fact survives a renumber and resolves
       # back to whatever id currently carries that name.
@@ -49,23 +64,128 @@ module PEMK
 
     # Union the facts implied by an absolute snapshot into the ledger. Grant-only:
     # a rollback cannot take one back, which is what makes rewind detection moot.
-    # -> number of NEW facts granted.
-    def grant_facts(account_id, switches, selfsw, now: Time.now)
-      keys = []
-      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
-      selfsw.each   { |k| keys << "ss:#{k}" }
+    #
+    # A fresh fact is PENDING. It becomes durable only once a save blob arrives that
+    # contains it (commit_facts) - restoring a switch onto a save that never got what
+    # the event granted beside it leaves unfinishable progress: the gym flag comes
+    # back, the badge does not, and the leader will not rebattle.
+    # keys: fact_keys of the snapshot. -> number of NEW facts granted.
+    def grant_facts(account_id, keys, seq: 0, now: Time.now)
       return 0 if keys.empty?
 
       granted = 0
-      keys.uniq.each do |k|
+      keys.each do |k|
         n = @db[:progression_facts]
             .insert_conflict   # DO NOTHING: the set-union is the whole semantics
-            .insert(account_id: account_id, fact_key: k, first_at: now)
+            .insert(account_id: account_id, fact_key: k, first_at: now,
+                    granted_seq: seq.is_a?(Integer) ? seq : 0)
         granted += 1 if n
       end
       granted
     rescue StandardError => e
       @log.call("flags: grant_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # A pending fact the snapshot no longer carries was lost before any save held it:
+    # the session that earned it crashed, and the next one loaded a blob without it.
+    # Forget it. Earned again, it is granted again at the seq of the snapshot that
+    # carries it, so granted_seq always opens an unbroken run of snapshots holding the
+    # fact - which is what lets commit_facts compare seqs at all, since the seq keeps
+    # counting across sessions. Durable facts are never touched: a rollback still
+    # cannot take one back. -> number of pending facts dropped.
+    def drop_lost_facts(account_id, keys)
+      @db[:progression_facts]
+        .where(account_id: account_id, durable_at: nil)
+        .exclude(fact_key: keys)
+        .delete
+    rescue StandardError => e
+      @log.call("flags: drop_lost_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # The ledger keys an absolute snapshot carries: fact-tier switches by their stable
+    # name, and every self-switch that is a one-shot marker.
+    def fact_keys(switches, selfsw)
+      keys = []
+      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
+      selfsw.each   { |k| keys << "ss:#{k}" if bankable?(k) }
+      keys.uniq
+    end
+
+    # --- repeatable events: the cooldown half -----------------------------------
+    #
+    # A repeatable event's self-switch is deliberately NOT a fact (it must be able to
+    # clear), which leaves the rollback free to reset the timer and farm the respawn
+    # early. The timestamp is the honest monotonic half - each harvest moves it
+    # forward - so the server keeps the maximum and hands it back at login.
+    #
+    # times: { "13:17" => 1_753_000_000 }. Only events the manifest calls repeatable
+    # are kept, so an eventvars entry a fan script parked there never travels.
+    def note_cooldowns(account_id, times, now: Time.now)
+      return 0 unless times.is_a?(Hash) && !@repeatable.empty?
+
+      kept = 0
+      seen = 0
+      times.each do |key, at|
+        break if (seen += 1) > MAX_ENTRIES   # hostile input must not drive an unbounded scan
+
+        k = key.to_s
+        next unless at.is_a?(Integer) && at.positive? && @repeatable.include?(k)
+
+        @db[:event_cooldowns]
+          .insert_conflict(target: %i[account_id event_key],
+                           update: { at: Sequel.function(:GREATEST, Sequel[:excluded][:at],
+                                                         Sequel[:event_cooldowns][:at]),
+                                     updated_at: now })
+          .insert(account_id: account_id, event_key: k, at: at, updated_at: now)
+        kept += 1
+      end
+      kept
+    rescue StandardError => e
+      @log.call("flags: note_cooldowns failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # -> { "13:17" => at }. The CLIENT decides whether to apply one: it holds the live
+    # eventvars and only raises a value that is missing or older, so an event that
+    # legitimately expired is never re-locked.
+    def cooldowns_for(account_id)
+      out = {}
+      @db[:event_cooldowns].where(account_id: account_id).select(:event_key, :at).each do |r|
+        # The SAME filter the write side uses. It was written the other way round, so an
+        # export that dropped an event from the repeatable list kept handing its stale
+        # row back forever - the read and the write have to agree on what is ours.
+        out[r[:event_key]] = r[:at] if @repeatable.include?(r[:event_key])
+      end
+      out
+    rescue StandardError => e
+      @log.call("flags: cooldowns_for failed #{e.class}: #{e.message}")
+      {}
+    end
+
+    # The client wrote a save blob. Everything the :flags channel had sent by then is
+    # inside it (Checkpoint#commit flushes the sync channels before serializing), so
+    # promote those facts from pending to durable. Comparing seqs is enough because a
+    # pending row only survives while every snapshot since its granted_seq carried it
+    # (drop_lost_facts).
+    #
+    # A client that sends no watermark promotes everything pending: it is the pre-020
+    # behaviour, and withholding facts from an older client forever is worse than the
+    # narrow window this bounds. -> number promoted.
+    def commit_facts(account_id, upto_seq = nil, now: Time.now)
+      # The watermark is a client claim like any other: clamp it to the highest seq we
+      # actually recorded, so an inflated one cannot promote a fact from a snapshot the
+      # server never saw. Under-claiming stays allowed - it only defers a promotion.
+      if upto_seq.is_a?(Integer)
+        high = @db[:flag_snapshots].where(account_id: account_id).get(:last_seq) || 0
+        upto_seq = high if upto_seq > high
+      end
+      ds = @db[:progression_facts].where(account_id: account_id, durable_at: nil)
+      ds = ds.where { granted_seq <= upto_seq } if upto_seq.is_a?(Integer)
+      ds.update(durable_at: now)
+    rescue StandardError => e
+      @log.call("flags: commit_facts failed #{e.class}: #{e.message}")
       0
     end
 
@@ -78,6 +198,10 @@ module PEMK
     # mirror stays a live measurement instead of being invalidated.
     def materialize_facts(account_id, now: Time.now)
       f = facts_for(account_id)
+      # Cooldowns ride the same login payload but are NOT folded into the mirror: the
+      # client decides whether each one applies (it holds the live eventvars), so the
+      # server cannot know what it wrote. eventvars is outside the mirror anyway.
+      f[:event_times] = cooldowns_for(account_id)
       return f if f[:switches].empty? && f[:self_switches].empty?
 
       row = @db[:flag_snapshots].where(account_id: account_id).first
@@ -98,12 +222,19 @@ module PEMK
     # self_switches: ["m:e:A",...] }. A fact whose name no longer maps to an id
     # (the dev deleted or renamed the switch) is simply dropped, never guessed.
     def facts_for(account_id)
-      rows = @db[:progression_facts].where(account_id: account_id, revoked_at: nil).select_map(:fact_key)
+      rows = @db[:progression_facts]
+             .where(account_id: account_id, revoked_at: nil)
+             .exclude(durable_at: nil)   # pending = the client never saved it; do not invent it
+             .select_map(:fact_key)
       sw = []
       ss = []
       rows.each do |k|
         if k.start_with?("ss:")
-          ss << k[3..]
+          key = k[3..]
+          # Filtered on READ as well as on grant, so a re-export that newly marks an
+          # event repeatable takes effect at once - no operator surgery on rows banked
+          # under the old policy.
+          ss << key if bankable?(key)
         elsif (id = @fact_id_by_key[k])
           sw << id
         end
@@ -112,6 +243,21 @@ module PEMK
     rescue StandardError => e
       @log.call("flags: facts_for failed #{e.class}: #{e.message}")
       { switches: [], self_switches: [] }
+    end
+
+    # Is this self-switch a monotonic one-shot marker, i.e. the server's to bank?
+    # key is "map:event:letter".
+    def bankable?(key)
+      !repeatable?(key) && !@latched.include?(key.to_s)
+    end
+
+    # The manifest lists a repeatable EVENT as "map:event" - pbSetEventTime drives every
+    # letter of it - so this match deliberately ignores the letter.
+    def repeatable?(key)
+      return false if @repeatable.empty?
+
+      parts = key.to_s.split(":")
+      parts.length >= 2 && @repeatable.include?("#{parts[0]}:#{parts[1]}")
     end
 
     def to_id_set(list)
@@ -147,7 +293,10 @@ module PEMK
           unless drift.empty?
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
-          grant_facts(account_id, switches, selfsw, now: now)
+          keys = fact_keys(switches, selfsw)
+          grant_facts(account_id, keys, seq: seq, now: now)
+          drop_lost_facts(account_id, keys)
+          note_cooldowns(account_id, payload[:event_times], now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]
         end
@@ -308,7 +457,9 @@ module PEMK
       return ["truncated"] if row[:truncated]
 
       prev_self = Array(row[:self_switches].to_a)
-      cleared   = prev_self - selfsw
+      # Only one-shot markers count. The game clears latched and repeatable ones
+      # itself, and a map full of re-arming berry plants is not a rollback.
+      cleared   = (prev_self - selfsw).select { |k| bankable?(k) }
       prev_sw   = Array(row[:switches].to_a)
       sw_off    = prev_sw - switches
       prev_vars = row[:variables].to_h

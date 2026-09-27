@@ -111,8 +111,14 @@ module PEMK
 
       if (m = script.match(/pbItemBall\(\s*:([A-Za-z0-9_]+)/))
         { :kind => "item", :item => m[1], :x => event.x, :y => event.y, :event_id => event.id }
-      elsif (m = script.match(/pbReceiveItem\(\s*:([A-Za-z0-9_]+)/))
-        { :kind => "gift", :item => m[1], :x => event.x, :y => event.y, :event_id => event.id }
+      elsif (items = script.scan(/pbReceiveItem\(\s*:([A-Za-z0-9_]+)/).flatten).any?
+        # More than one branch means the event picks a reward, so it is a PRIZE, not a
+        # one-shot gift. The Game Corner lottery is the case: five tiers, and taking the
+        # first match labelled the whole daily event as a Master Ball story gift - which
+        # sent a review chasing a re-farm that did not exist. Ship every tier.
+        kind = items.uniq.length > 1 ? "prize" : "gift"
+        { :kind => kind, :item => items.first, :items => items.uniq,
+          :x => event.x, :y => event.y, :event_id => event.id }
       end
     rescue
       nil
