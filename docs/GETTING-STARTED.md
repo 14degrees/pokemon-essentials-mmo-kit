@@ -198,6 +198,7 @@ format. Details and limits: [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECUR
 - **The dedicated server (operations, tests, database):** [`server/README.md`](../server/README.md)
 - **Security model & anti-cheat roadmap:** [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECURITY.md)
 - **Server-authoritative battles (design):** [`docs/LAYER-D-BATTLE-DESIGN.md`](LAYER-D-BATTLE-DESIGN.md)
+- **Automated in-game testing (autopilot + autotest scenarios):** [`docs/AUTOTEST.md`](AUTOTEST.md)
 
 ---
 
