@@ -484,6 +484,23 @@ class FlagStateTest < Minitest::Test
     assert_empty latched_state.facts_for(@a)[:self_switches]
   end
 
+  # The game clears latched and repeatable self-switches itself (a fossil NPC handing
+  # back its result, a berry plant re-arming), so those going OFF is not a rollback.
+  def test_self_switches_the_game_clears_are_not_rewind_evidence
+    fs = PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: {},
+                             repeatable: ["13:17"], latched: ["11:2:A", "11:4:A"])
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "11:4:A", "13:17:A", "13:17:B", "5:2:A"]), 1)
+    _, flags = fs.apply_flags(@a, snap(self_switches: ["5:2:A"]), 2)   # 4 cleared, all by the game
+    assert_empty flags
+  end
+
+  def test_one_shot_markers_still_count_beside_them
+    fs = PEMK::FlagState.new(@db, policy: { switches: [4] }, facts: {}, latched: ["11:2:A"])
+    fs.apply_flags(@a, snap(self_switches: ["11:2:A", "1:1:A", "1:2:A", "2:7:A"]), 1)
+    _, flags = fs.apply_flags(@a, snap(self_switches: []), 2)   # 3 one-shots and a latch
+    assert_includes flags, "rewind"
+  end
+
   # === the watermark is a client claim like any other ==========================
 
   def test_an_inflated_watermark_is_clamped_to_what_the_server_saw

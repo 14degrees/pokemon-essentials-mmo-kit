@@ -16,7 +16,9 @@ module PEMK
   #   * self-switches that were ON and are now OFF => THE signal. A self-switch is the
   #     engine's "this one-shot event has happened" marker; vanilla event scripts set
   #     them and effectively never clear them, so a batch of them going OFF is a save
-  #     rollback, and it is exactly what re-farms NPC gifts / TMs / key items.
+  #     rollback, and it is exactly what re-farms NPC gifts / TMs / key items. The
+  #     manifest's latched and repeatable self-switches are cleared by the game
+  #     itself, so they are left out of the count.
   #   * switches going OFF and variables DECREASING are RECORDED but NOT flagged:
   #     both legitimately happen all the time (temp flags, countdowns, counters reset
   #     by events), so judging them would flood the queue with honest players.
@@ -455,7 +457,9 @@ module PEMK
       return ["truncated"] if row[:truncated]
 
       prev_self = Array(row[:self_switches].to_a)
-      cleared   = prev_self - selfsw
+      # Only one-shot markers count. The game clears latched and repeatable ones
+      # itself, and a map full of re-arming berry plants is not a rollback.
+      cleared   = (prev_self - selfsw).select { |k| bankable?(k) }
       prev_sw   = Array(row[:switches].to_a)
       sw_off    = prev_sw - switches
       prev_vars = row[:variables].to_h
