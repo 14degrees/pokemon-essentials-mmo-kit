@@ -183,22 +183,30 @@ module Autotest
       pairs.sort_by { |(x, y), _| (x - me["x"].to_i).abs + (y - me["y"].to_i).abs }
     end
 
-    # Plays the wild battle by throwing +ball+ at every turn until it ends (caught),
-    # answering anything else with its first choice. Bounded.
-    def catch_with(ball, seconds: 150)
+    # Plays the wild battle: +warm_up+ turns of the lead's first move (the foe
+    # attacks meanwhile), then +ball+ at every turn until it ends. A fainted lead is
+    # replaced by the first able Pokemon; anything else takes its first choice.
+    # Bounded.
+    def catch_with(ball, warm_up: 0, seconds: 150)
       battle!("mode", "agent")
       deadline = Autotest.mono + seconds
+      turns = 0
       loop do
         r = ap!("wait_until decision|no_battle within 30", timeout: 40)
         return true if r["matched"] == "no_battle"
         raise Failure, "#{@name}: the battle is still on after #{seconds}s" if Autotest.mono > deadline
 
-        case state.dig("battle", "awaiting", "kind")
-        when "command" then decide!("bag")
-        when "item"    then decide!(ball)
-        when "party"   then decide!("cancel")
-        when "name"    then decide!("")                    # no nickname
-        else                decide!("0")
+        awaiting = state.dig("battle", "awaiting") || {}
+        case awaiting["kind"]
+        when "command"
+          decide!(turns < warm_up ? "fight" : "bag")
+          turns += 1
+        when "item" then decide!(ball)
+        when "party"
+          able = Array(awaiting["options"]).find { |o| o["able"] && !o["active"] }
+          decide!(able ? able["index"].to_s : "cancel")
+        when "name" then decide!("")                       # no nickname
+        else             decide!("0")
         end
       end
     ensure
