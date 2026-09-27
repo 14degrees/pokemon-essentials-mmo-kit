@@ -57,6 +57,7 @@ module PEMK
         when "menu"       then !Observe.menus.empty?
         when "no_menu"    then Observe.menus.empty?
         when "menu_with"  then menu_with?(arg)
+        when "text"       then !TextEntry.awaiting.nil?
         when "map"        then $game_map && $game_map.map_id == arg.to_i
         when "scene"      then $scene && $scene.class.name == arg.to_s
         end
@@ -68,7 +69,7 @@ module PEMK
       end
 
       TAKES_ARG = %w[map scene menu_with].freeze
-      KNOWN     = %w[idle battle no_battle decision message no_message menu no_menu menu_with map scene].freeze
+      KNOWN     = %w[idle battle no_battle decision message no_message menu no_menu menu_with text map scene].freeze
 
       def cmd_wait_until(id, rest)
         words  = rest.split
@@ -140,6 +141,12 @@ module PEMK
                                        "message" => Observe.current_message, "menus" => Observe.menus)
           end
           if Observe.current_message.nil?
+            # An event still running is mid-conversation (the nurse's healing jingle
+            # sits between two lines), not done.
+            if (pbMapInterpreterRunning? rescue false)
+              quiet_at = nil
+              next false
+            end
             quiet_at ||= Autopilot.now
             next false if Autopilot.now - quiet_at < QUIET
 
@@ -185,6 +192,73 @@ module PEMK
       Autopilot.verb("dismiss")    { |id, rest| cmd_dismiss(id, rest) }
       Autopilot.verb("advance")    { |id, rest| cmd_advance(id, rest) }
       Autopilot.verb("fast")       { |id, rest| cmd_fast(id, rest) }
+    end
+
+    # Text the engine asks for (player name, nicknames, the PEMK login). Its entry
+    # screens need real typing, which virtual keys cannot give, so an autopilot window
+    # takes the text from "type TEXT" instead: queued ahead of the prompt, or answered
+    # while it waits. The prompt shows in "state" as text_entry; the text itself is
+    # never logged (passwords go through here).
+    module TextEntry
+      @queued   = nil
+      @awaiting = nil
+      @answer   = nil
+
+      module_function
+
+      def awaiting
+        @awaiting
+      end
+
+      def ask(prompt, min, max, initial, secret = false)
+        Observe.note(prompt, "text")
+        if @queued
+          text = @queued
+          @queued = nil
+          return text[0, max]
+        end
+        @awaiting = { "prompt" => Observe.clean(prompt), "min" => min, "max" => max,
+                      "initial" => (secret ? "" : initial.to_s), "secret" => secret ? true : false }
+        @answer = nil
+        loop do
+          Graphics.update   # the autopilot tick answers "type" from in here
+          Input.update
+          break unless @answer.nil?
+        end
+        text = @answer
+        @answer = nil
+        text[0, max]
+      ensure
+        @awaiting = nil
+      end
+
+      def cmd_type(id, rest)
+        if @awaiting
+          @answer = rest
+          Autopilot.respond(id, "ok" => true, "answered" => @awaiting["prompt"])
+        else
+          @queued = rest
+          Autopilot.respond(id, "ok" => true, "queued" => true)
+        end
+      end
+
+      Autopilot.verb("type") { |id, rest| cmd_type(id, rest) }
+    end
+  end
+end
+
+if PEMK::Autopilot.active?
+  if defined?(pbEnterText) && !defined?(pemk_ap_orig_pbEnterText)
+    alias pemk_ap_orig_pbEnterText pbEnterText
+    def pbEnterText(helptext, minlength, maxlength, initialText = "", _mode = 0, _pokemon = nil, _nofadeout = false)
+      PEMK::Autopilot::TextEntry.ask(helptext, minlength, maxlength, initialText)
+    end
+  end
+
+  if defined?(pbMessageFreeText) && !defined?(pemk_ap_orig_pbMessageFreeText)
+    alias pemk_ap_orig_pbMessageFreeText pbMessageFreeText
+    def pbMessageFreeText(message, currenttext, passwordbox, maxlength, _width = 240)
+      PEMK::Autopilot::TextEntry.ask(message, 0, maxlength, currenttext, passwordbox)
     end
   end
 end

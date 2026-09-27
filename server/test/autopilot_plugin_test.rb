@@ -36,6 +36,21 @@ class AutopilotPluginTest < Minitest::Test
                            "#{failures.map { |k, v| "  #{k}: #{v}" }.join("\n")}\n\n#{out}"
   end
 
+  WORLD_RUNNER = File.join(File.expand_path("..", __dir__), "test", "support", "autopilot_world_runner.rb")
+
+  # Walking on a fake map (a detour around a wall, no path, an interrupting message),
+  # talking to an NPC, the events list, and text entry through "type".
+  def test_world_verbs_behave
+    out = IO.popen([RbConfig.ruby, "-W0", WORLD_RUNNER], err: %i[child out], &:read)
+    assert $?.success?, "world runner crashed:\n#{out}"
+
+    results = JSON.parse(out.lines.last)
+    refute_empty results
+    failures = results.reject { |_, v| v == "ok" }
+    assert_empty failures, "world behaviour failed:\n" \
+                           "#{failures.map { |k, v| "  #{k}: #{v}" }.join("\n")}\n\n#{out}"
+  end
+
   # Off unless a debug launch AND the env var: a player build must never be remote-controlled.
   def test_it_stays_off_without_a_debug_launch
     code = <<~RUBY

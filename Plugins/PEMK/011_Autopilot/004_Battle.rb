@@ -265,7 +265,7 @@ module PEMK
   end
 end
 
-if PEMK::Autopilot.active?
+if PEMK::Autopilot.active? && defined?(Battle::Scene)
   class Battle::Scene
     unless method_defined?(:pemk_ap_orig_pbCommandMenu)
       alias_method :pemk_ap_orig_pbStartBattle,          :pbStartBattle

@@ -24,7 +24,7 @@ module Graphics
   class << self
     def frame_count; @frame; end
     def ticks; @frame; end
-    def update; @frame += 1; end
+    def update; @frame += 1; $live_windows.each { |w| w.update unless w.disposed? || w.idle }; end
     def screenshot(path); File.binwrite(path, "PNG"); end
   end
 end
@@ -47,9 +47,12 @@ end
 
 def _INTL(s, *_args); s; end
 
+$live_windows = []
+
 class Window_DrawableCommand
-  attr_accessor :visible, :active, :index
-  def initialize(*_args); @visible = true; @active = true; @index = 0; @disposed = false; end
+  attr_accessor :visible, :active, :index, :idle   # idle: its loop is not running
+  def initialize(*_args); @visible = true; @active = true; @index = 0; @disposed = false; $live_windows << self; end
+  def update; end
   def disposed?; @disposed; end
   def dispose; @disposed = true; end
 end
@@ -60,6 +63,9 @@ class Window_CommandPokemon < Window_DrawableCommand
 end
 
 def pbMessageDisplay(_w, message, _lbl = true, _cp = nil); message; end
+
+$event_running = false
+def pbMapInterpreterRunning?; $event_running; end
 
 # Like the engine's: a window that only waits for USE.
 def pbTopRightWindow(_text, _scene = nil)
@@ -442,6 +448,44 @@ check(results, "dismiss_clears_a_chain_of_lines") do
   r && r["ok"] && r["presses"] == 3 && PEMK::Autopilot::Observe.current_message.nil?
 end
 
+# The nurse: a line, a healing jingle with no line on screen (the event still runs),
+# then more lines. dismiss must carry on through the gap.
+check(results, "dismiss_waits_out_a_pause_inside_an_event") do
+  queue = ["OK, I'll take your Pokémon.", :pause, "Thank you for waiting.", "We hope to see you again!"]
+  obs = PEMK::Autopilot::Observe
+  pause_left = 0
+  $event_running = true
+  send_cmd("27b dismiss")
+  r = nil
+  900.times do
+    Graphics.update
+    Input.update
+    if obs.current_message
+      obs.pop_message if Input.trigger?(Input::USE)
+    elsif pause_left.positive?
+      pause_left -= 1
+    elsif queue.first == :pause
+      queue.shift
+      pause_left = 120   # two seconds of jingle
+    elsif !queue.empty?
+      obs.push_message(queue.shift)
+    else
+      $event_running = false
+    end
+    r = reply
+    break if r
+  end
+  $event_running = false
+  r && r["ok"] && r["presses"] == 3 && queue.empty?
+end
+
+check(results, "clean_strips_codes_but_not_words") do
+  c = PEMK::Autopilot::Observe
+  c.clean("\\rHello, and welcome\\wtnp[10]") == "Hello, and welcome" &&
+    c.clean("\\bWould you like to rest\\c[1] your Pokémon?") == "Would you like to rest your Pokémon?" &&
+    c.clean("\\wdWe hope to see you again!\\1") == "We hope to see you again!"
+end
+
 check(results, "dismiss_stops_at_a_choice") do
   PEMK::Autopilot::Observe.push_message("Do you want a Pokémon?")
   menu = Window_CommandPokemon.new(%w[Yes No])
@@ -458,6 +502,18 @@ check(results, "wait_until_a_menu_with_an_entry") do
   r = await
   menu.dispose
   r && r["ok"] && r["matched"] == "menu_with"
+end
+
+# The debug menu stays open behind the prompt its command opened; only the menu
+# still being updated takes the keys, so only it is listed (seen in a real run).
+check(results, "a_menu_left_in_the_background_is_not_listed") do
+  back = Window_CommandPokemon.new(%w[Fight Run])
+  back.idle = true
+  front = Window_CommandPokemon.new(%w[Yes No])
+  r = command("31 state")
+  back.dispose
+  front.dispose
+  r && r["menus"].map { |m| m["commands"] } == [%w[Yes No]]
 end
 
 check(results, "wait_accepts_seconds") do

@@ -29,7 +29,8 @@ module Graphics
     attr_reader :shots, :ticks
     attr_writer :frame_count   # Game.load restores it from the save's play time
     def frame_count; @frame_count || @frame; end
-    def update; @frame += 1; @ticks += 1; end
+    # A frame also updates the open menus, as their loops do in the engine.
+    def update; @frame += 1; @ticks += 1; $live_windows.each { |w| w.update unless w.disposed? || w.idle }; end
     def screenshot(path); @shots << path; File.binwrite(path, "PNG"); end
   end
 end
@@ -51,9 +52,12 @@ module Input
   end
 end
 
+$live_windows = []
+
 class Window_DrawableCommand
-  attr_accessor :visible, :active, :index
-  def initialize(*_args); @visible = true; @active = true; @index = 0; @disposed = false; end
+  attr_accessor :visible, :active, :index, :idle   # idle: its loop is not running
+  def initialize(*_args); @visible = true; @active = true; @index = 0; @disposed = false; $live_windows << self; end
+  def update; end
   def disposed?; @disposed; end
   def dispose; @disposed = true; end
 end

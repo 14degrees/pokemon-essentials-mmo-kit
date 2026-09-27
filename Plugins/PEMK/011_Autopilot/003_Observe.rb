@@ -13,8 +13,9 @@
 module PEMK
   module Autopilot
     module Observe
-      MAX_WINDOWS = 16
-      MAX_LOG     = 40
+      MAX_WINDOWS  = 16
+      MAX_LOG      = 40
+      FRESH_FRAMES = 3   # a menu not updated for longer is in the background
 
       @messages = []   # texts on screen, innermost last (a choice can open over a message)
       @windows  = []   # command windows, newest last; disposed ones are pruned
@@ -60,6 +61,7 @@ module PEMK
         s["trainer"] = trainer_info if $player
         s["party"]   = party_info if $player
         s["battle"]  = BattleControl.snapshot if defined?(BattleControl) && BattleControl.attached?
+        s["text_entry"] = TextEntry.awaiting if defined?(TextEntry) && TextEntry.awaiting
         s["log"]     = @log.last(12)
         s
       end
@@ -86,10 +88,12 @@ module PEMK
         @messages.last
       end
 
-      # Visible, active command lists, newest last: what a key press would act on.
+      # Visible, active command lists that their loop is still updating, newest last:
+      # what a key press would act on.
       def active_windows
         @windows.reject! { |w| gone?(w) }
-        @windows.select { |w| w.visible && w.active }
+        recent = PEMK::Autopilot.frame - FRESH_FRAMES
+        @windows.select { |w| w.visible && w.active && w.instance_variable_get(:@pemk_ap_seen).to_i >= recent }
       rescue StandardError
         []
       end
@@ -134,13 +138,17 @@ module PEMK
         true
       end
 
+      # The engine's codes without brackets. Only these are stripped: a greedy "\ and
+      # letters" rule ate the first word of "\rHello" (the nurse's colour code).
+      BARE_CODES = /\\(?:pog|pg|pm|cn|pt|wu|wm|wd|op|cl|r|b|g|1|\.|\||\^|!)/i
+
       # Message text without the engine's formatting codes (\c[1], \se[...], <b>...).
       def clean(text)
         t = text.to_s.dup
         t.gsub!(/\\pn/i) { $player ? $player.name.to_s : "" }
         t.gsub!(/\\n/i, " ")
         t.gsub!(/\\[a-z]+\[[^\]]*\]/i, "")
-        t.gsub!(/\\[a-z.|^!]+/i, "")
+        t.gsub!(BARE_CODES, "")
         t.gsub!(/<[^>]*>/, "")
         t.gsub!(/[\x00-\x1f]/, " ")
         t.squeeze(" ").strip
@@ -165,12 +173,24 @@ if PEMK::Autopilot.active?
   end
 
   # Every command list (pause menu, choices, debug menu...) is a Window_DrawableCommand.
-  class Window_DrawableCommand
-    unless method_defined?(:pemk_ap_orig_initialize) || private_method_defined?(:pemk_ap_orig_initialize)
-      alias_method :pemk_ap_orig_initialize, :initialize
-      def initialize(*args, &block)
-        pemk_ap_orig_initialize(*args, &block)
-        PEMK::Autopilot::Observe.track_window(self)
+  # The one taking input is updated by its loop every frame; a menu left open in the
+  # background (the debug menu behind the prompt its command opened) is not, which is
+  # how "menus" tells them apart.
+  if defined?(Window_DrawableCommand)
+    class Window_DrawableCommand
+      unless method_defined?(:pemk_ap_orig_initialize) || private_method_defined?(:pemk_ap_orig_initialize)
+        alias_method :pemk_ap_orig_initialize, :initialize
+        alias_method :pemk_ap_orig_update, :update
+
+        def initialize(*args, &block)
+          pemk_ap_orig_initialize(*args, &block)
+          PEMK::Autopilot::Observe.track_window(self)
+        end
+
+        def update(*args, &block)
+          pemk_ap_orig_update(*args, &block)
+          @pemk_ap_seen = PEMK::Autopilot.frame
+        end
       end
     end
   end
