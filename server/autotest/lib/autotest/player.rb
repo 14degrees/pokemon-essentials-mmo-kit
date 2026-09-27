@@ -9,7 +9,7 @@ module Autotest
     VERBS = %w[press hold release wait wait_until choose type pick dismiss walk_to talk_to enter
                face interact warp events event_pages battle decide fast advance screenshot save
                set_switch get_switch set_var get_var set_selfswitch get_selfswitch
-               add_item add_pokemon heal money abort].freeze
+               add_item get_item add_pokemon heal money abort].freeze
 
     attr_reader :name, :instance, :email, :pid
 
@@ -153,6 +153,14 @@ module Autotest
 
     def party_species
       Array(state["party"]).map { |p| p["species"] }
+    end
+
+    # Holds an arrow over a map edge until the next map is loaded.
+    def cross(key, map)
+      hold!(key)
+      wait_until!("map #{map} within 10", timeout: 20)
+      release!(key)
+      wait_until!("idle within 5", timeout: 15)
     end
 
     # The other players this window draws on its map, by name.

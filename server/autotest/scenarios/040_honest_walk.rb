@@ -10,23 +10,16 @@ Autotest.scenario "an honest walk is never corrected", flags: { PEMK_POS_ENFORCE
   a.new_game("Walker")
   id = s.account_id(a)
 
-  cross = lambda do |key, map|            # hold an arrow over a map edge
-    a.hold!(key)
-    a.wait_until!("map #{map} within 10", timeout: 20)
-    a.release!(key)
-    a.wait_until!("idle within 5", timeout: 15)
-  end
-
   a.enter!(3)                              # the bedroom stairs (a warp within the map)
   a.wait_until!("idle within 10", timeout: 20)
   a.enter!(1)                              # the house's front door
   a.wait_until!("map 2 within 10", timeout: 20)
   a.wait_until!("idle within 5", timeout: 15)
   a.walk_to!(14, 0, timeout: 60)           # Lappet Town's north exit
-  cross.call("UP", 5)                      # Route 1
+  a.cross("UP", 5)                         # Route 1
   a.walk_to!(18, 20, timeout: 60)
   a.walk_to!(18, 23, timeout: 60)
-  cross.call("DOWN", 2)                    # back to Lappet Town
+  a.cross("DOWN", 2)                       # back to Lappet Town
   a.enter!(2, timeout: 60)                 # the Pokemon Lab: Oak's welcome starts at
   a.wait_until!("map 4 within 10", timeout: 20)   # once and walks the player to him
   a.converse
