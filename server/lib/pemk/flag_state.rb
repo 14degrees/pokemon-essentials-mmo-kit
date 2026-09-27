@@ -67,15 +67,12 @@ module PEMK
     # contains it (commit_facts) - restoring a switch onto a save that never got what
     # the event granted beside it leaves unfinishable progress: the gym flag comes
     # back, the badge does not, and the leader will not rebattle.
-    # -> number of NEW facts granted.
-    def grant_facts(account_id, switches, selfsw, seq: 0, now: Time.now)
-      keys = []
-      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
-      selfsw.each   { |k| keys << "ss:#{k}" if bankable?(k) }
+    # keys: fact_keys of the snapshot. -> number of NEW facts granted.
+    def grant_facts(account_id, keys, seq: 0, now: Time.now)
       return 0 if keys.empty?
 
       granted = 0
-      keys.uniq.each do |k|
+      keys.each do |k|
         n = @db[:progression_facts]
             .insert_conflict   # DO NOTHING: the set-union is the whole semantics
             .insert(account_id: account_id, fact_key: k, first_at: now,
@@ -86,6 +83,32 @@ module PEMK
     rescue StandardError => e
       @log.call("flags: grant_facts failed #{e.class}: #{e.message}")
       0
+    end
+
+    # A pending fact the snapshot no longer carries was lost before any save held it:
+    # the session that earned it crashed, and the next one loaded a blob without it.
+    # Forget it. Earned again, it is granted again at the seq of the snapshot that
+    # carries it, so granted_seq always opens an unbroken run of snapshots holding the
+    # fact - which is what lets commit_facts compare seqs at all, since the seq keeps
+    # counting across sessions. Durable facts are never touched: a rollback still
+    # cannot take one back. -> number of pending facts dropped.
+    def drop_lost_facts(account_id, keys)
+      @db[:progression_facts]
+        .where(account_id: account_id, durable_at: nil)
+        .exclude(fact_key: keys)
+        .delete
+    rescue StandardError => e
+      @log.call("flags: drop_lost_facts failed #{e.class}: #{e.message}")
+      0
+    end
+
+    # The ledger keys an absolute snapshot carries: fact-tier switches by their stable
+    # name, and every self-switch that is a one-shot marker.
+    def fact_keys(switches, selfsw)
+      keys = []
+      switches.each { |id| (k = @fact_key_by_id[id]) && keys << k }
+      selfsw.each   { |k| keys << "ss:#{k}" if bankable?(k) }
+      keys.uniq
     end
 
     # --- repeatable events: the cooldown half -----------------------------------
@@ -141,7 +164,9 @@ module PEMK
 
     # The client wrote a save blob. Everything the :flags channel had sent by then is
     # inside it (Checkpoint#commit flushes the sync channels before serializing), so
-    # promote those facts from pending to durable.
+    # promote those facts from pending to durable. Comparing seqs is enough because a
+    # pending row only survives while every snapshot since its granted_seq carried it
+    # (drop_lost_facts).
     #
     # A client that sends no watermark promotes everything pending: it is the pre-020
     # behaviour, and withholding facts from an older client forever is worse than the
@@ -266,7 +291,9 @@ module PEMK
           unless drift.empty?
             @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
           end
-          grant_facts(account_id, switches, selfsw, seq: seq, now: now)
+          keys = fact_keys(switches, selfsw)
+          grant_facts(account_id, keys, seq: seq, now: now)
+          drop_lost_facts(account_id, keys)
           note_cooldowns(account_id, payload[:event_times], now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
           result = [:ack, flags]

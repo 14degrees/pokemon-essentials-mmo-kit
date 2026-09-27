@@ -343,6 +343,30 @@ class FlagStateTest < Minitest::Test
     assert_nil @fs.snapshot(@a)[:mirror].to_h["ss/5:2:A"], "nothing was restored, so nothing to fold"
   end
 
+  # The seq keeps counting across sessions (the client adopts the server's high-water
+  # at login), so "granted at or below the watermark" alone does not prove the blob
+  # holds a fact. A crash between the snapshot and the save loses the fact with its
+  # session, and the next session's first save must not promote it.
+  def test_a_fact_lost_with_its_session_is_not_promoted_by_the_next_save
+    @fs.apply_flags(@a, snap(switches: [4], self_switches: ["5:2:A"]), 1)   # granted, then a crash
+    @fs.apply_flags(@a, snap(switches: [], self_switches: []), 2)           # the next session never had it
+    @fs.commit_facts(@a, 2)
+    assert_empty @fs.facts_for(@a)[:switches]
+    assert_empty @fs.facts_for(@a)[:self_switches]
+  end
+
+  # Earned again, the fact is granted again at the snapshot that carries it, so a blob
+  # serialized before that snapshot still cannot promote it.
+  def test_a_fact_earned_again_is_promoted_only_by_a_save_that_holds_it
+    @fs.apply_flags(@a, snap(switches: [4]), 1)
+    @fs.apply_flags(@a, snap(switches: []), 2)    # lost with the session
+    @fs.apply_flags(@a, snap(switches: [4]), 3)   # earned again
+    @fs.commit_facts(@a, 2)
+    assert_empty @fs.facts_for(@a)[:switches], "the blob at seq 2 does not hold it"
+    @fs.commit_facts(@a, 3)
+    assert_equal [4], @fs.facts_for(@a)[:switches]
+  end
+
   # === repeatable events must never become facts ==============================
   # A berry plant / daily respawn clears its own self-switch when the cooldown
   # elapses. Banking it monotonically restores it ON at every login and the event
