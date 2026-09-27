@@ -3,3 +3,6 @@
 # never CRLF-mangled. (The mkxp-z game tree keeps git's default handling.)
 /server/**   text eol=lf
 /protocol/** text eol=lf
+# Shell scripts anywhere (tools/autopilot/ap.sh runs under Git Bash): a CRLF
+# checkout breaks them.
+*.sh         text eol=lf
