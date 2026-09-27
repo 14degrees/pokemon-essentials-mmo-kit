@@ -44,7 +44,7 @@ module PEMK
 
         !(gt.in_menu || gt.in_battle || gt.message_window_showing || gt.player_transferring ||
           $game_player.moving? || (pbMapInterpreterRunning? rescue false) || !Observe.menus.empty? ||
-          !Observe.screens.empty? || TextEntry.awaiting)
+          !Observe.screens.empty? || TextEntry.awaiting || ItemChoice.awaiting)
       end
 
       def condition(name, arg)
@@ -59,6 +59,7 @@ module PEMK
         when "no_menu"    then Observe.menus.empty?
         when "menu_with"  then menu_with?(arg)
         when "text"       then !TextEntry.awaiting.nil?
+        when "item"       then !ItemChoice.awaiting.nil?
         when "map"        then $game_map && $game_map.map_id == arg.to_i
         when "scene"      then $scene && $scene.class.name == arg.to_s
         end
@@ -70,7 +71,8 @@ module PEMK
       end
 
       TAKES_ARG = %w[map scene menu_with].freeze
-      KNOWN     = %w[idle battle no_battle decision message no_message menu no_menu menu_with text map scene].freeze
+      KNOWN     = %w[idle battle no_battle decision message no_message menu no_menu menu_with text item
+                     map scene].freeze
 
       def cmd_wait_until(id, rest)
         words  = rest.split
@@ -128,8 +130,11 @@ module PEMK
 
       # --- messages -------------------------------------------------------------
 
+      # The real bound is the command's time budget; the tap count only guards a box
+      # that never closes. It is generous because a line with a jingle
+      # ("obtained Omanyte!", \wtnp[80]) ignores USE for seconds.
       def cmd_dismiss(id, rest)
-        max       = rest.to_i.positive? ? rest.to_i : 20
+        max       = rest.to_i.positive? ? rest.to_i : 200
         use       = VInput.key("USE")
         presses   = 0
         last_tap  = nil
@@ -172,6 +177,7 @@ module PEMK
       def needs_the_agent
         return "menu"   unless Observe.menus.empty?
         return "text"   if TextEntry.awaiting
+        return "item"   if ItemChoice.awaiting
         return "battle" if BattleControl.attached?
         return "screen" unless Observe.screens.empty?
 
@@ -256,6 +262,88 @@ module PEMK
       end
 
       Autopilot.verb("type") { |id, rest| cmd_type(id, rest) }
+    end
+
+    # An item the engine asks the player to choose from the bag (pbChooseItem,
+    # pbChooseFossil, pbChooseApricorn - all end in PokemonBagScreen#
+    # pbChooseItemScreen). The bag UI is skipped: "pick ITEM" answers with an item
+    # the bag holds and the filter allows, "pick cancel" backs out. The choice shows
+    # in "state" as item_choice, with the items that would be listed.
+    module ItemChoice
+      @queued   = nil
+      @awaiting = nil
+      @answer   = nil
+
+      module_function
+
+      def awaiting
+        @awaiting
+      end
+
+      def allowed(bag, filter)
+        slots = bag.pockets.compact.flatten(1).compact
+        slots.map(&:first).uniq.select { |item| filter.nil? || filter.call(item) }
+      rescue StandardError
+        []
+      end
+
+      # -> the chosen item id, or nil for cancel.
+      def ask(bag, filter)
+        items = allowed(bag, filter)
+        if @queued
+          pick = @queued
+          @queued = nil
+          return resolve(pick, items)
+        end
+        @awaiting = { "allowed" => items.first(50).map(&:to_s) }
+        @answer = nil
+        loop do
+          Graphics.update
+          Input.update
+          break unless @answer.nil?
+        end
+        pick = @answer
+        @answer = nil
+        resolve(pick, items)
+      ensure
+        @awaiting = nil
+      end
+
+      def resolve(pick, items)
+        return nil if pick == :cancel
+
+        items.find { |i| i.to_s.casecmp?(pick.to_s) }
+      end
+
+      def cmd_pick(id, rest)
+        word = rest.strip
+        pick = word.casecmp?("cancel") ? :cancel : word.upcase
+        if @awaiting
+          allowed = @awaiting["allowed"]
+          unless pick == :cancel || allowed.include?(pick)
+            return Autopilot.respond(id, "ok" => false, "error" => "#{word} is not on offer", "allowed" => allowed)
+          end
+
+          @answer = pick
+          Autopilot.respond(id, "ok" => true, "picked" => pick.to_s)
+        else
+          @queued = pick
+          Autopilot.respond(id, "ok" => true, "queued" => true)
+        end
+      end
+
+      Autopilot.verb("pick") { |id, rest| cmd_pick(id, rest) }
+    end
+  end
+end
+
+if PEMK::Autopilot.active? && defined?(PokemonBagScreen) &&
+   !PokemonBagScreen.method_defined?(:pemk_ap_orig_pbChooseItemScreen)
+  class PokemonBagScreen
+    alias_method :pemk_ap_orig_pbChooseItemScreen, :pbChooseItemScreen
+
+    def pbChooseItemScreen(proc = nil)
+      PEMK::Autopilot::ItemChoice.ask(@bag, proc)
     end
   end
 end

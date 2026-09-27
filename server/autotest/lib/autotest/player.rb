@@ -6,8 +6,8 @@ module Autotest
   # account is created on first login through the config credentials.
   class Player
     PASSWORD = "autotest-password"
-    VERBS = %w[press hold release wait wait_until choose type dismiss walk_to talk_to enter
-               face interact warp events battle decide fast advance screenshot save
+    VERBS = %w[press hold release wait wait_until choose type pick dismiss walk_to talk_to enter
+               face interact warp events event_pages battle decide fast advance screenshot save
                set_switch get_switch set_var get_var set_selfswitch get_selfswitch
                add_item add_pokemon heal money abort].freeze
 
@@ -115,6 +115,41 @@ module Autotest
 
     def log_tail(count = 40)
       File.exist?(log_path) ? File.readlines(log_path, chomp: true).last(count) : []
+    end
+
+    # Reads a conversation to its end, answering each question with the next answer:
+    # a menu entry, an item to pick, or a text to type. Fails when a question comes
+    # with no answer left, or when answers are left over.
+    def converse(*answers, seconds: 90)
+      queue = answers.map(&:to_s)
+      deadline = Autotest.mono + seconds
+      loop do
+        raise Failure, "#{@name}: the conversation is still going after #{seconds}s" if Autotest.mono > deadline
+
+        r = dismiss!(timeout: 90)
+        stop = r["stopped"]
+        if stop.nil?
+          raise Failure, "#{@name}: the conversation ended with answers left: #{queue.inspect}" unless queue.empty?
+          return r if idle?(5)
+
+          next
+        end
+        answer = queue.shift
+        unless answer
+          raise Failure, "#{@name}: a #{stop} came with no answer left (#{r['message'].inspect} #{r['menus'].inspect})"
+        end
+
+        case stop
+        when "menu" then choose!(answer)
+        when "item" then pick!(answer)
+        when "text" then type!(answer)
+        else raise Failure, "#{@name}: the conversation stopped at a #{stop}"
+        end
+      end
+    end
+
+    def party_species
+      Array(state["party"]).map { |p| p["species"] }
     end
 
     # A new account starts the intro at once: skip the help, choose, type the name,

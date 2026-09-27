@@ -61,6 +61,13 @@ def pbMessageFreeText(_m, _c, _p, _max, _w = 240); :ui; end
 
 class Scene_Map; end
 
+# The bag and the screen that picks an item from it (pbChooseItem and friends).
+FakeBag = Struct.new(:pockets)
+class PokemonBagScreen
+  def initialize(bag); @bag = bag; end
+  def pbChooseItemScreen(_proc = nil); :bag_ui; end
+end
+
 # A full-screen UI in Essentials' shape: pbStartScene / pbEndScene.
 class FakeParty_Scene
   def pbStartScene(*_args); end
@@ -314,6 +321,39 @@ check(results, "what_stops_a_dismiss") do
   text = acts.needs_the_agent
   PEMK::Autopilot::TextEntry.instance_variable_set(:@awaiting, nil)
   before.nil? && screen == "screen" && text == "text"
+end
+
+# The fossil reviver asks for a fossil from the bag: pick answers, filtered like the
+# bag would be, without driving the bag UI.
+check(results, "pick_answers_an_item_choice") do
+  bag = FakeBag.new([nil, [[:POTION, 3], [:HELIXFOSSIL, 1]], [[:FOSSILIZEDBIRD, 1]]])
+  screen = PokemonBagScreen.new(bag)
+  fossil = ->(item) { item.to_s.include?("FOSSIL") }
+  command("11 pick helixfossil")
+  queued = screen.pbChooseItemScreen(fossil)
+  refused = nil
+  $world_hook = lambda do
+    next unless PEMK::Autopilot::ItemChoice.awaiting && refused.nil?
+
+    refused = :sent
+    send_cmd("12 pick POTION")   # not a fossil: refused, the choice stays open
+  end
+  cancel_sent = false
+  waiting = Thread.new { screen.pbChooseItemScreen(fossil) }
+  deadline = Time.now + 5
+  until !waiting.alive? || Time.now > deadline
+    Graphics.update
+    r = reply
+    if r && r["id"] == "12"
+      refused = r
+      send_cmd("13 pick cancel") unless cancel_sent
+      cancel_sent = true
+    end
+  end
+  $world_hook = nil
+  got = waiting.value
+  queued == :HELIXFOSSIL && refused.is_a?(Hash) && refused["ok"] == false &&
+    refused["allowed"] == %w[HELIXFOSSIL FOSSILIZEDBIRD] && got.nil?
 end
 
 check(results, "setters_refuse_before_a_game_is_loaded") do

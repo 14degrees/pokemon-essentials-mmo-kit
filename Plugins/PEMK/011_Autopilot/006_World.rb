@@ -74,6 +74,7 @@ module PEMK
         return "menu"     unless Observe.menus.empty?
         return "screen"   unless Observe.screens.empty?
         return "text"     if TextEntry.awaiting
+        return "item"     if ItemChoice.awaiting
         return "event"    if (pbMapInterpreterRunning? rescue false)
 
         nil
@@ -284,6 +285,38 @@ module PEMK
         Autopilot.respond(id, "ok" => true, "map" => $game_map.map_id, "events" => list)
       end
 
+      # event_pages EVENT - an event's pages as the editor stores them: the conditions
+      # that pick the live page and the command list (code, indent, parameters), so
+      # the agent can read what an NPC waits for instead of guessing.
+      def cmd_event_pages(id, rest)
+        return Autopilot.respond(id, "ok" => false, "error" => "not on a map") unless on_map?
+
+        ev = $game_map.events[rest.to_i]
+        return Autopilot.respond(id, "ok" => false, "error" => "no event #{rest.strip} on this map") unless ev
+
+        rpg = ev.instance_variable_get(:@event)
+        pages = rpg.pages.each_with_index.map do |page, i|
+          c = page.condition
+          { "page" => i + 1, "trigger" => page.trigger,
+            "condition" => { "switch1" => (c.switch1_valid ? c.switch1_id : nil),
+                             "switch2" => (c.switch2_valid ? c.switch2_id : nil),
+                             "variable" => (c.variable_valid ? [c.variable_id, c.variable_value] : nil),
+                             "self_switch" => (c.self_switch_valid ? c.self_switch_ch : nil) },
+            "commands" => page.list.map { |cmd| [cmd.code, cmd.indent, plain(cmd.parameters)] } }
+        end
+        Autopilot.respond(id, "ok" => true, "event" => ev.id, "name" => ev.name.to_s, "pages" => pages)
+      end
+
+      # Parameters flattened to JSON-safe values (RPG objects become their class name).
+      def plain(value)
+        case value
+        when Array then value.map { |v| plain(v) }
+        when String, Integer, Float, true, false, nil then value
+        when Symbol then value.to_s
+        else value.class.name
+        end
+      end
+
       def cmd_warp(id, rest)
         map, x, y = rest.split.map { |v| Integer(v, exception: false) }
         return Autopilot.respond(id, "ok" => false, "error" => "warp MAP X Y") unless map && x && y
@@ -353,6 +386,7 @@ module PEMK
       Autopilot.verb("talk_to")  { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("enter")    { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("events")   { |id, _| cmd_events(id) }
+      Autopilot.verb("event_pages") { |id, rest| cmd_event_pages(id, rest) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
       %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
          get_switch get_var get_selfswitch].each do |name|

@@ -82,6 +82,7 @@ module PEMK
         s["party"]   = party_info if $player
         s["battle"]  = BattleControl.snapshot if defined?(BattleControl) && BattleControl.attached?
         s["text_entry"] = TextEntry.awaiting if defined?(TextEntry) && TextEntry.awaiting
+        s["item_choice"] = ItemChoice.awaiting if defined?(ItemChoice) && ItemChoice.awaiting
         s["log"]     = @log.last(12)
         s
       end
@@ -158,6 +159,15 @@ module PEMK
         true
       end
 
+      # \v[n] shows a game variable; events park item ids there ("revive your
+      # \v[1]"), which the engine prints by name.
+      def variable_text(id)
+        v = $game_variables ? $game_variables[id] : nil
+        return v.to_s unless v.is_a?(Symbol)
+
+        (GameData::Item.try_get(v)&.name rescue nil) || v.to_s
+      end
+
       # The engine's codes without brackets. Only these are stripped: a greedy "\ and
       # letters" rule ate the first word of "\rHello" (the nurse's colour code).
       BARE_CODES = /\\(?:pog|pg|pm|cn|pt|wu|wm|wd|op|cl|r|b|g|1|\.|\||\^|!)/i
@@ -166,6 +176,7 @@ module PEMK
       def clean(text)
         t = text.to_s.dup
         t.gsub!(/\\pn/i) { $player ? $player.name.to_s : "" }
+        t.gsub!(/\\v\[(\d+)\]/i) { variable_text($1.to_i) }
         t.gsub!(/\\n/i, " ")
         t.gsub!(/\\[a-z]+\[[^\]]*\]/i, "")
         t.gsub!(BARE_CODES, "")
