@@ -23,12 +23,13 @@ end
 
 module Graphics
   @frame = 0
+  @ticks = 0
   @shots = []
   class << self
-    attr_reader :shots
+    attr_reader :shots, :ticks
     attr_writer :frame_count   # Game.load restores it from the save's play time
     def frame_count; @frame_count || @frame; end
-    def update; @frame += 1; end
+    def update; @frame += 1; @ticks += 1; end
     def screenshot(path); @shots << path; File.binwrite(path, "PNG"); end
   end
 end
@@ -80,6 +81,10 @@ load File.join(PLUGINS, "008_World/002_Export.rb")   # the kit's JSON writer
 load File.join(PLUGINS, "011_Autopilot/001_Autopilot.rb")
 load File.join(PLUGINS, "011_Autopilot/002_VirtualInput.rb")
 load File.join(PLUGINS, "011_Autopilot/003_Observe.rb")
+
+# Deadlines run on the wall clock; here the clock is the stub's frames at 60 a second,
+# so a check can "wait" a minute in a blink and stay deterministic.
+PEMK::Autopilot.define_singleton_method(:now) { Graphics.ticks / 60.0 }
 
 $scene = nil
 $game_temp = nil
@@ -237,6 +242,18 @@ check(results, "a_restored_play_time_does_not_break_a_wait") do
   r && r["ok"] == true
 end
 
+# A long command must not blind the agent: state still answers, and abort frees it.
+check(results, "state_and_abort_cut_into_a_running_command") do
+  send_cmd("40 wait 100000")
+  frame!
+  send_cmd("41 state")
+  seen = await(5)
+  send_cmd("42 abort")
+  frame!
+  aborted = reply   # the abort's own answer overwrote the wait's; read the file state
+  seen && seen["id"] == "41" && seen["ok"] && aborted && aborted["id"] == "42" && aborted["aborted"] == "40"
+end
+
 check(results, "screenshot_lands_in_the_channel") do
   send_cmd("20 screenshot")
   r = await
@@ -270,7 +287,8 @@ check(results, "a_stuck_command_times_out") do
   send_cmd("24 press USE 600")
   # Input.update never runs, so the key never comes up: only frames pass.
   r = nil
-  (PEMK::Autopilot::JOB_LIMIT + 5).times do
+  limit = (PEMK::Autopilot::JOB_SECONDS * 60).to_i + 5   # a minute of stub frames, and a bit
+  limit.times do
     Graphics.update
     r = reply
     break if r

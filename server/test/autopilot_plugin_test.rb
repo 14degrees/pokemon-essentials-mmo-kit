@@ -20,6 +20,22 @@ class AutopilotPluginTest < Minitest::Test
                            "#{failures.map { |k, v| "  #{k}: #{v}" }.join("\n")}\n\n#{out}"
   end
 
+  BATTLE_RUNNER = File.join(File.expand_path("..", __dir__), "test", "support", "autopilot_battle_runner.rb")
+
+  # Battle decisions over a fake Battle::Scene: keys / agent / auto modes, refusals
+  # reported back, a ball thrown at the only foe, the stuck-turn breaker, and the
+  # wait_until / choose verbs.
+  def test_battle_decisions_behave
+    out = IO.popen([RbConfig.ruby, "-W0", BATTLE_RUNNER], err: %i[child out], &:read)
+    assert $?.success?, "battle runner crashed:\n#{out}"
+
+    results = JSON.parse(out.lines.last)
+    refute_empty results
+    failures = results.reject { |_, v| v == "ok" }
+    assert_empty failures, "battle behaviour failed:\n" \
+                           "#{failures.map { |k, v| "  #{k}: #{v}" }.join("\n")}\n\n#{out}"
+  end
+
   # Off unless a debug launch AND the env var: a player build must never be remote-controlled.
   def test_it_stays_off_without_a_debug_launch
     code = <<~RUBY

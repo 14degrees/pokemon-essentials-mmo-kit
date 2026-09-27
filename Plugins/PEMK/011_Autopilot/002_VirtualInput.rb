@@ -23,6 +23,7 @@ module PEMK
       @held     = {}   # key => steps left, nil = until released
       @down     = {}   # key => steps it has been down (1 on the trigger step)
       @released = {}   # keys that came up on the current step
+      @taps     = []   # queued one-step presses, started once their key is fully up
 
       module_function
 
@@ -48,11 +49,20 @@ module PEMK
 
       def release_all
         @held.clear
+        @taps.clear
       end
 
-      # Still held, or down and not yet through its release step.
+      # A press the engine is guaranteed to see as a new trigger: it waits until the
+      # key has been up for a whole step. Holding a key that is still down from the
+      # previous press only extends it - which is how two level-up windows in a row
+      # left the second one waiting forever.
+      def tap(key)
+        @taps << key
+      end
+
+      # Still held, down and not yet through its release step, or a tap is queued.
       def down?(key)
-        @held.key?(key) || @down.key?(key)
+        @held.key?(key) || @down.key?(key) || @taps.include?(key)
       end
 
       def held_names
@@ -64,6 +74,12 @@ module PEMK
         @released = {}
         @down.each_key { |k| @released[k] = true unless @held.key?(k) }
         @released.each_key { |k| @down.delete(k) }
+        @taps.reject! do |k|
+          next false if @held.key?(k) || @down.key?(k) || @released.key?(k)
+
+          @held[k] = 1
+          true
+        end
         @held.each_key { |k| @down[k] = (@down[k] || 0) + 1 }
         @held.keys.each do |k|
           left = @held[k]

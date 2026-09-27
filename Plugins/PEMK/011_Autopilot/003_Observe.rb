@@ -14,14 +14,31 @@ module PEMK
   module Autopilot
     module Observe
       MAX_WINDOWS = 16
+      MAX_LOG     = 40
 
       @messages = []   # texts on screen, innermost last (a choice can open over a message)
       @windows  = []   # command windows, newest last; disposed ones are pruned
+      @log      = []   # recent messages, overworld and battle, oldest first
 
       module_function
 
       def push_message(text)
-        @messages.push(clean(text))
+        t = clean(text)
+        @messages.push(t)
+        note(t, "message")
+      end
+
+      # Every message that went by, so a line that closed on its own is not lost.
+      def note(text, source)
+        t = clean(text)
+        return if t.empty?
+
+        @log.push({ "frame" => PEMK::Autopilot.frame, "source" => source, "text" => t })
+        @log.shift while @log.size > MAX_LOG
+      end
+
+      def log
+        @log
       end
 
       def pop_message
@@ -42,6 +59,8 @@ module PEMK
         s["player"]  = player_info if $game_player
         s["trainer"] = trainer_info if $player
         s["party"]   = party_info if $player
+        s["battle"]  = BattleControl.snapshot if defined?(BattleControl) && BattleControl.attached?
+        s["log"]     = @log.last(12)
         s
       end
 
@@ -63,10 +82,20 @@ module PEMK
           "event"        => ($game_map ? (pbMapInterpreterRunning? rescue false) : false) }
       end
 
+      def current_message
+        @messages.last
+      end
+
       # Visible, active command lists, newest last: what a key press would act on.
-      def menus
+      def active_windows
         @windows.reject! { |w| gone?(w) }
-        @windows.select { |w| w.visible && w.active }.map do |w|
+        @windows.select { |w| w.visible && w.active }
+      rescue StandardError
+        []
+      end
+
+      def menus
+        active_windows.map do |w|
           cmds = w.respond_to?(:commands) ? Array(w.commands).map { |c| clean(c) } : nil
           { "class" => w.class.name, "commands" => cmds, "index" => w.index }
         end

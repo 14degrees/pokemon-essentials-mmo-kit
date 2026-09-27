@@ -23,16 +23,29 @@ module PEMK
     CMD_FILE  = "cmd.txt"
     RESP_FILE = "resp.txt"
     MAX_LINE  = 1024
-    JOB_LIMIT = 3600   # frames a multi-frame command may take before it gives up
+    # Verbs answered even while another command is still running, so a stuck command
+    # can always be looked at, and cancelled.
+    IMMEDIATE = %w[ping state screenshot verbs keys abort].freeze
+    # Seconds a multi-frame command may take before it gives up. Wall-clock, not
+    # frames: a window hidden behind others can run far above 60 frames a second.
+    JOB_SECONDS = 60.0
+    # vsync paces the frames only while the window is on screen; hidden behind other
+    # windows mkxp-z spins as fast as it can (thousands of frames a second, measured),
+    # which burns a core per test window and makes "a few frames" mean nothing next
+    # to the engine's real-time animations. The autopilot paces frames itself.
+    FRAME_SECONDS = 1.0 / 60
 
     @dir      = nil
+    @verbs    = {}
     @job      = nil
     @job_id   = nil
+    @limit    = JOB_SECONDS
     @deadline = nil
     # Frames are counted here, not read from Graphics.frame_count: loading a save
     # restores that counter to the saved play time, which would fire every pending
     # deadline at once.
     @frames   = 0
+    @frame_at = nil
 
     module_function
 
@@ -76,34 +89,42 @@ module PEMK
     def tick
       return unless @dir
 
+      pace
       @frames += 1
-      return step_job if @job
+      step_job if @job
 
       path = File.join(@dir, CMD_FILE)
       return unless File.file?(path)
 
       line = File.binread(path, MAX_LINE).to_s.force_encoding(Encoding::UTF_8)
+      # While a command runs, only the ones that just look (or abort it) cut in; the
+      # rest waits its turn in the file.
+      return if @job && !IMMEDIATE.include?(line.split(/\s+/, 3)[1].to_s)
+
       File.delete(path)
       run(line)
     rescue StandardError => e
       PEMK.log("autopilot: tick error #{e.class}: #{e.message}")
     end
 
+    # Verbs register themselves here (this file, 004_Battle, 005_World...), so each
+    # file owns its commands. The handler gets the command id and the rest of the line.
+    def verb(name, &handler)
+      @verbs[name] = handler
+    end
+
+    def verbs
+      @verbs.keys.sort
+    end
+
     def run(line)
-      id, verb, rest = line.strip.split(/\s+/, 3)
+      id, name, rest = line.strip.split(/\s+/, 3)
       return if id.nil? || id.empty?
 
-      case verb
-      when "ping"       then respond(id, "ok" => true, "frame" => frame)
-      when "state"      then respond(id, { "ok" => true }.merge(Observe.snapshot))
-      when "keys"       then respond(id, "ok" => true, "keys" => VInput::NAMES)
-      when "press"      then cmd_press(id, rest)
-      when "hold"       then cmd_hold(id, rest)
-      when "release"    then cmd_release(id, rest)
-      when "wait"       then cmd_wait(id, rest)
-      when "screenshot" then cmd_screenshot(id, rest)
-      else respond(id, "ok" => false, "error" => "unknown verb #{verb.inspect}")
-      end
+      handler = @verbs[name.to_s]
+      return respond(id, "ok" => false, "error" => "unknown verb #{name.inspect}", "verbs" => verbs) unless handler
+
+      handler.call(id, rest.to_s)
     rescue StandardError => e
       respond(id, "ok" => false, "error" => "#{e.class}: #{e.message}")
     end
@@ -151,13 +172,26 @@ module PEMK
       respond(id, "ok" => true, "frame" => frame)
     end
 
-    # wait FRAMES - answer after that many frames (60 = one second).
+    # wait FRAMES | wait 2s | wait 500ms. Frames are what the engine counts; seconds
+    # are what its animations and message timers run on.
     def cmd_wait(id, rest)
-      target = frame + rest.to_i.clamp(1, JOB_LIMIT - 1)
-      start_job(id) do
-        next false if frame < target
+      arg = rest.strip
+      if (m = arg.match(/\A(\d+(?:\.\d+)?)(ms|s)\z/))
+        secs = m[2] == "ms" ? m[1].to_f / 1000 : m[1].to_f
+        stop = now + secs.clamp(0.0, JOB_SECONDS - 1)
+        start_job(id) do
+          next false if now < stop
 
-        respond(id, "ok" => true, "frame" => frame)
+          respond(id, "ok" => true, "frame" => frame)
+        end
+      else
+        count  = arg.to_i.clamp(1, 100_000)
+        target = frame + count
+        start_job(id, [JOB_SECONDS, count / 10.0].max) do
+          next false if frame < target
+
+          respond(id, "ok" => true, "frame" => frame)
+        end
       end
     end
 
@@ -171,17 +205,19 @@ module PEMK
       respond(id, "ok" => true, "path" => path, "frame" => frame)
     end
 
-    # A multi-frame command: the block runs once per frame until it returns true.
-    def start_job(id, &block)
+    # A multi-frame command: the block runs once per frame until it returns true, or
+    # gives up after that many seconds.
+    def start_job(id, seconds = JOB_SECONDS, &block)
       @job      = block
       @job_id   = id
-      @deadline = frame + JOB_LIMIT
+      @limit    = seconds
+      @deadline = now + seconds
     end
 
     def step_job
-      if frame > @deadline
+      if now > @deadline
         VInput.release_all
-        respond(@job_id, "ok" => false, "error" => "timeout after #{JOB_LIMIT} frames")
+        respond(@job_id, "ok" => false, "error" => "timeout after #{@limit}s")
         @job = nil
       elsif @job.call
         @job = nil
@@ -189,6 +225,17 @@ module PEMK
     rescue StandardError => e
       @job = nil
       respond(@job_id, "ok" => false, "error" => "#{e.class}: #{e.message}")
+    end
+
+    # abort - cancel the running command: it answers "aborted", held keys come up.
+    def cmd_abort(id)
+      stopped = @job_id if @job
+      if @job
+        @job = nil
+        VInput.release_all
+        respond(stopped, "ok" => false, "error" => "aborted")
+      end
+      respond(id, "ok" => true, "aborted" => stopped)
     end
 
     def respond(id, payload)
@@ -202,6 +249,32 @@ module PEMK
     def frame
       @frames
     end
+
+    def now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    # Sleep off what is left of the frame (sleep yields the GVL, as the login loop
+    # relies on). On screen, vsync already took the time and this sleeps nothing.
+    def pace
+      t = now
+      if @frame_at
+        spare = FRAME_SECONDS - (t - @frame_at)
+        sleep(spare) if spare > 0.001
+      end
+      @frame_at = now
+    end
+
+    verb("ping")       { |id, _| respond(id, "ok" => true, "frame" => frame) }
+    verb("verbs")      { |id, _| respond(id, "ok" => true, "verbs" => verbs) }
+    verb("keys")       { |id, _| respond(id, "ok" => true, "keys" => VInput::NAMES) }
+    verb("state")      { |id, _| respond(id, { "ok" => true }.merge(Observe.snapshot)) }
+    verb("press")      { |id, rest| cmd_press(id, rest) }
+    verb("hold")       { |id, rest| cmd_hold(id, rest) }
+    verb("release")    { |id, rest| cmd_release(id, rest) }
+    verb("wait")       { |id, rest| cmd_wait(id, rest) }
+    verb("screenshot") { |id, rest| cmd_screenshot(id, rest) }
+    verb("abort")      { |id, _| cmd_abort(id) }
   end
 end
 
