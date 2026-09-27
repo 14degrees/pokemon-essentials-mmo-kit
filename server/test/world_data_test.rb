@@ -92,6 +92,19 @@ class WorldDataTest < Minitest::Test
     assert_empty w.warps_on(7)
   end
 
+  def test_warp_tiles_and_a_step_of_slack
+    w = load(sample)
+    assert w.warp_src?(5, 2, 2)                   # the warp event's own tile
+    refute w.warp_src?(5, 2, 1)
+    refute w.warp_src?(7, 2, 2)                   # map 7 has no warps
+    assert w.warp_dest?(5, 7, 10, 21, reach: 1)   # a step past the landing
+    refute w.warp_dest?(5, 7, 10, 22, reach: 1)
+    assert w.spawn_tile?(1, 5, 5)                 # the start, exactly
+    assert w.spawn_tile?(1, 6, 6, reach: 1)       # a diagonal step off it
+    refute w.spawn_tile?(1, 7, 5, reach: 1)
+    refute w.spawn_tile?(1, 6, 6)                 # no slack unless asked
+  end
+
   def test_spawns_and_connections
     w = load(sample)
     assert_equal [1, 5, 5], w.start
