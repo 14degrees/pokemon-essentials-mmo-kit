@@ -20,6 +20,7 @@ RGSS*.dll
 
 # PEMK SDK runtime artifacts (logs + throwaway diagnostic reports)
 mmo.log
+mmo_*.log
 mmo_*.txt
 mmo_*.json
 # per-machine connection config (each deployment sets its own; documented in README)

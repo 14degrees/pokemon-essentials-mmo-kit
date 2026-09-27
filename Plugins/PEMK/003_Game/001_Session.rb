@@ -26,6 +26,27 @@ module PEMK
     @self_id = v
   end
 
+  # PEMK_INSTANCE=<name> runs this window as a fully separate player on the same PC:
+  # its own config, account, session token, log and local save file, all suffixed
+  # with the name. Automated tests launch several of these side by side; unlike the
+  # older PEMK_GUEST, two instances never share a save file (a checkpoint pushes the
+  # file it just wrote, so a shared file can carry one account's save into another).
+  # -> the validated name, or nil when unset.
+  def self.instance
+    return @instance if defined?(@instance)
+
+    raw = ENV["PEMK_INSTANCE"].to_s.strip
+    @instance = raw.match?(/\A[A-Za-z0-9_-]{1,32}\z/) ? raw : nil
+  end
+
+  # "base.ext" -> "base_<instance>.ext" for per-instance files; unchanged otherwise.
+  def self.instance_file(name)
+    return name unless instance
+
+    ext = File.extname(name)
+    "#{File.basename(name, ext)}_#{instance}#{ext}"
+  end
+
   # Effective connection settings: Config defaults, overridden by an optional
   # plain-text mmo_config.txt in the game folder (so friends can set up LAN play
   # without touching Ruby). Resolved once, on first use.
@@ -37,8 +58,14 @@ module PEMK
     s = { :role => Config::ROLE, :host => Config::HOST, :port => Config::PORT,
           :bind => Config::BIND_HOST, :email => nil, :password => nil }
     # A guest instance (PEMK_GUEST) reads its OWN config so two windows on one PC
-    # can log in as distinct accounts.
-    file = ENV["PEMK_GUEST"].to_s.strip.empty? ? Config::CONFIG_FILE : "mmo_config_guest.txt"
+    # can log in as distinct accounts. A named instance (PEMK_INSTANCE) does too.
+    file = if instance
+             instance_file(Config::CONFIG_FILE)
+           elsif !ENV["PEMK_GUEST"].to_s.strip.empty?
+             "mmo_config_guest.txt"
+           else
+             Config::CONFIG_FILE
+           end
     path = File.expand_path(file)
     if File.exist?(path)
       File.foreach(path) do |line|
@@ -72,7 +99,7 @@ module PEMK
 
   # Lightweight file logger (no reliable console at all stages under mkxp-z).
   def self.log(msg)
-    File.open(File.expand_path("mmo.log"), "a") { |f| f.write("#{msg}\n") }
+    File.open(File.expand_path(instance_file("mmo.log")), "a") { |f| f.write("#{msg}\n") }
   rescue
     nil
   end
@@ -110,4 +137,16 @@ module PEMK
     @relay = nil
     @started = false
   end
+end
+
+# A named instance keeps its own local save beside the default one. The engine reads
+# SaveData::FILE_PATH at call time everywhere (load screen, Game.save, checkpoints,
+# the .bak sibling), and plugins load before Game.initialize, so redefining it here
+# moves every path at once.
+if PEMK.instance && defined?(SaveData) && SaveData.const_defined?(:FILE_PATH)
+  pemk_instance_save = File.join(File.dirname(SaveData::FILE_PATH),
+                                 PEMK.instance_file(File.basename(SaveData::FILE_PATH)))
+  SaveData.send(:remove_const, :FILE_PATH)
+  SaveData.const_set(:FILE_PATH, pemk_instance_save)
+  PEMK.log("instance #{PEMK.instance}: save file #{pemk_instance_save}")
 end

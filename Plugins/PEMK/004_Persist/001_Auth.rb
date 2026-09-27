@@ -38,6 +38,8 @@ module PEMK
     end
 
     def self.account_file
+      return PEMK.instance_file(ACCOUNT_FILE) if PEMK.instance
+
       guest? ? GUEST_ACCOUNT_FILE : ACCOUNT_FILE
     end
 
@@ -311,6 +313,8 @@ module PEMK
     end
 
     def self.token_file
+      return PEMK.instance_file("mmo_session.dat") if PEMK.instance
+
       guest? ? "mmo_session_guest.dat" : "mmo_session.dat"
     end
 

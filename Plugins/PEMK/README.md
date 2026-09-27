@@ -76,9 +76,12 @@ port = 9998
 ```
 
 A guest instance (`PlayMMO-guest.bat`, `PEMK_GUEST=1`) reads `mmo_config_guest.txt`
-instead, so two windows on one PC can be two accounts. Compile-time defaults live
-in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`); `ENABLED`/`ROLE = :off` disables
-the plugin (pure vanilla).
+instead, so two windows on one PC can be two accounts. For more than two, or for
+automated tests, name each window with `PEMK_INSTANCE=<name>` (letters, digits, `-`,
+`_`): it then uses `mmo_config_<name>.txt`, its own account and session files,
+`mmo_<name>.log`, and its own local save file, so instances never share anything.
+Compile-time defaults live in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`);
+`ENABLED`/`ROLE = :off` disables the plugin (pure vanilla).
 
 ### Playing with friends (LAN / internet)
 
