@@ -24,10 +24,12 @@
 module PEMK
   module Trade
     TIMEOUT = 30.0   # seconds a WAITING phase lingers before a local cancel
+    NOTICE_HOLD = 5.0   # at most this long, "complete" waits for the trade's save
 
     @session = nil   # active trade (see phase machine below) or nil
     @invite  = nil   # { from, name, trade_id } — an invite to prompt about
     @notice  = nil   # a queued player message
+    @notice_hold_until = nil
     @in_ui   = false # re-entrancy guard for blocking prompts
 
     module_function
@@ -42,6 +44,7 @@ module PEMK
       @session = nil
       @invite  = nil
       @notice  = nil
+      @notice_hold_until = nil
     end
 
     def own_name
@@ -142,6 +145,7 @@ module PEMK
         finish(_INTL("The trade with {1} is complete!", name))
         (PEMK::Sync.mark_mon rescue nil)
         (PEMK::Checkpoint.request(:trade) rescue nil)   # urgent -> both sides persist within ~1s
+        @notice_hold_until = now + NOTICE_HOLD
       elsif msg[:reason] == "unverified"
         # D8: a freshly-caught wild mon whose battle is still being verified can't be
         # traded yet (usually clears within seconds). Player-friendly, not an accusation.
@@ -160,6 +164,12 @@ module PEMK
       @in_ui = true
       begin
         if @notice
+          # "Complete" waits for the checkpoint the trade armed (a few frames): shown
+          # at once, its box would hold that save until the player's key press, and
+          # a crash meanwhile would lose the traded Pokémon. Bounded.
+          return if @notice_hold_until && now < @notice_hold_until && (PEMK::Checkpoint.urgent_pending? rescue false)
+
+          @notice_hold_until = nil
           m = @notice
           @notice = nil
           pbMessage(m)
