@@ -55,7 +55,7 @@ bash bin/setup.sh        # one-time: installs Ruby+Postgres, creates the dev DB
 2. Double-click **`PlayMMO-debug.bat`** — at the load screen pick **Create
    account**, enter an **email + password**, then play the intro (it sets your
    character name).
-3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_GUEST=1`,
+3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_INSTANCE=guest`,
    reads `mmo_config_guest.txt`); create a **different** account so the two
    windows are two players.
 4. Meet on the same map and walk around. To fight: pause menu → **Battle Player**

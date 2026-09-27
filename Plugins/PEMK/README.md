@@ -49,9 +49,9 @@ never hosts: deploy the server once, point every client at it.
 2. Double-click **`PlayMMO-debug.bat`** — at the load screen pick **Create
    account**, enter an **email + password**, then play through the intro (that
    sets your character's name).
-3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_GUEST=1`) that
-   reads `mmo_config_guest.txt`; create a **different** account so the two windows
-   are two players.
+3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_INSTANCE=guest`)
+   that reads `mmo_config_guest.txt`; create a **different** account so the two
+   windows are two players.
 4. Get both onto the same map and walk around — each appears in the other's world.
 5. To battle: pause menu → **Battle Player** → pick the other → they accept → a
    synchronized battle runs on both screens.
@@ -75,11 +75,12 @@ port = 9998
 # password = your-password
 ```
 
-A guest instance (`PlayMMO-guest.bat`, `PEMK_GUEST=1`) reads `mmo_config_guest.txt`
-instead, so two windows on one PC can be two accounts. For more than two, or for
-automated tests, name each window with `PEMK_INSTANCE=<name>` (letters, digits, `-`,
-`_`): it then uses `mmo_config_<name>.txt`, its own account and session files,
-`mmo_<name>.log`, and its own local save file, so instances never share anything.
+Name each extra window with `PEMK_INSTANCE=<name>` (letters, digits, `-`, `_`): it
+then uses `mmo_config_<name>.txt`, its own account and session files,
+`mmo_<name>.log` and its own local save file, so two windows on one PC are two
+accounts that never share anything. `PlayMMO-guest.bat` is the instance `guest`.
+The older `PEMK_GUEST=1` still works but shares the local save file with the main
+window; prefer an instance name.
 Compile-time defaults live in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`);
 `ENABLED`/`ROLE = :off` disables the plugin (pure vanilla).
 
