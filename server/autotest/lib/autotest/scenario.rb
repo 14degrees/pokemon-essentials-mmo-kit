@@ -27,6 +27,7 @@ module Autotest
       @checks      = []
       @transcript  = []
       @players     = {}
+      @rogues      = {}
       @diagnostics = {}
     end
 
@@ -41,15 +42,18 @@ module Autotest
         main.raise(BudgetExceeded, "over the #{@budget}s budget")
       end
       @body.call(self)
+      watchdog.kill   # a write-up is not part of the budget
       @status = @checks.all?(&:ok) ? :passed : :failed
       @diagnostics = diagnose if @status == :failed
-    rescue StandardError => e
+    rescue StandardError, BudgetExceeded => e
+      watchdog&.kill
       @status = :error
       @error  = "#{e.class}: #{e.message}"
       @diagnostics = diagnose
     ensure
       watchdog&.kill
       @players.each_value { |p| p.hard_kill rescue nil }
+      @rogues.each_value(&:close)
       @server&.stop
       @duration = Autotest.mono - started
     end
@@ -59,6 +63,12 @@ module Autotest
       @players[key] ||= Player.new(self, key.to_s, instance: "at#{@index}#{key}",
                                    email: "#{@run_ctx.run_id}-#{@index}-#{key}@autotest.local")
                               .launch(fresh: true)
+    end
+
+    # A hand-driven client on a fresh account of its own: an attacker, or a player
+    # whose game was modified (see Rogue).
+    def rogue(key)
+      @rogues[key] ||= Rogue.new(@server.port, email: "#{@run_ctx.run_id}-#{@index}-#{key}@rogue.local").connect
     end
 
     # Runs the blocks side by side, one window each (two intros at once), and hands
