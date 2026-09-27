@@ -32,6 +32,7 @@ module PEMK
     @last_change = nil
     @blob_at     = -1.0e18
     @blob_hash   = nil
+    @blob_fseq   = 0        # flags seq the on-disk blob was serialized at
 
     module_function
 
@@ -60,6 +61,7 @@ module PEMK
       @last_change = nil
       @blob_at = -1.0e18
       @blob_hash = nil
+      @blob_fseq = 0
     end
 
     # Adopt the server's canonical next-seq authority on (re)connect (from the
@@ -73,6 +75,16 @@ module PEMK
     # Twin of adopt_econ_seq for the independent :inv channel (bag snapshots).
     def adopt_inv_seq(n)
       @seq[:inv] = n if n.is_a?(Integer) && n > @seq[:inv]
+    end
+
+    # Checkpoint calls this right after a successful serialize: the bytes on disk now
+    # contain every flag frame sent so far, so this seq is the blob's durability
+    # watermark. It has to be stamped HERE and not at push time - the exit backstop
+    # re-pushes the last good file, which can be older than the current flag state,
+    # and claiming that seq would let the server hand back a switch the save lacks.
+    # Starts at 0, so before any checkpoint the server promotes nothing.
+    def mark_blob_watermark
+      @blob_fseq = @seq[:flags]
     end
 
     # Twin for the :flags channel. Without it, reset zeroes the seq on a new socket
@@ -181,6 +193,7 @@ module PEMK
           if snap.hash != @flag_last
             c.send_message({ :type => :flags, :switches => snap[:switches],
                              :variables => snap[:variables], :self_switches => snap[:self_switches],
+                             :event_times => snap[:event_times],
                              :seq => (@seq[:flags] += 1) })
             @flag_last = snap.hash
           end
@@ -248,7 +261,10 @@ module PEMK
       h = raw.hash
       return :unchanged if h == @blob_hash   # unchanged since the last push -> skip
 
-      c.send_message({ :type => :save, :seq => (@seq[:save] += 1) }, raw)
+      # The blob's durability watermark rides along (stamped at serialize time, see
+      # mark_blob_watermark): the server promotes progression facts up to it and holds
+      # anything newer until the next save.
+      c.send_message({ :type => :save, :seq => (@seq[:save] += 1), :flags_seq => @blob_fseq }, raw)
       @blob_hash = h
       @blob_at = now
       PEMK.log("sync: pushed save blob (#{raw.bytesize}B, seq #{@seq[:save]})")

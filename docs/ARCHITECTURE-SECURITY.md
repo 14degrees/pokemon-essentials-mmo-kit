@@ -40,7 +40,8 @@ is Milestone 4.
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
 | **Overworld movement / position** | client → **server-audited** | ✅ enforceable (M4-B) | no-clip / illegal-warp snapped back to last-good tile (opt-in flag; audit-only by default) |
 | **Item pickup (distance, existence)** | client → **server-granted** | ✅ enforceable (M4-C) | remote / duplicate pickups denied — distance gate + one-shot + server grant (opt-in flag) |
-| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C) | item balls are distance-gated + one-shot; NPC **gift** events are not gated (a rewound self-switch re-farms them) |
+| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C, `PEMK_FLAG_STATE`) | item balls are distance-gated + one-shot; NPC **gift** events are not gated: a re-farm is recorded, and with `PEMK_FLAG_STATE=on` a rewound self-switch comes back at the next login, but within one session the gift can still be claimed again |
+| **Story progression (switches, variables, self-switches)** | client → **server-shadowed** | ⚠️ partial (`PEMK_FLAG_STATE`) | a rollback of saved one-shot progression is detected (`shadow`) and undone at login (`on`); variable values and writes made during a session are still client-authored |
 | **Wild encounters / which Pokémon appears** | **server** | ✅ enforceable (M4-D2, `PEMK_BATTLE_ENFORCE_ENCOUNTERS=on`) | the server mints species/level/PID/IVs/shiny; the client builds what it is given |
 | **Catching** | **server** | ✅ enforceable (M4-D3, `PEMK_BATTLE_ENFORCE_CATCHES=on`) | the server runs the capture formula and rolls the shakes with SecureRandom, clamping every client input |
 | **Battle rewards (vs NPC)** | client → **server-bounded** | ✅ detection (M4-D4, `PEMK_BATTLE_ENFORCE_REWARDS`) | EXP/money beyond the closed-form envelope is flagged to the review queue |
@@ -67,12 +68,51 @@ The honest counterweight to the ✅ column — these are the real remaining gaps
 
 | Surface | Status | Consequence |
 |---|---|---|
-| `$game_variables` / `$game_switches` / `$game_self_switches` | **client-only** — no table, no channel | quest/story state is fully client-authored; rewinding a self-switch re-farms every NPC gift, TM, HM and key item, with **no detection** |
-| Per-mon stat block (IVs/EVs/moves/ability/nature) | **client-only** | no server row contradicts a counterfeit; this is why ranked PvP (D9) needs it first |
+| `$game_variables` / `$game_switches` / `$game_self_switches` | **server-shadowed** (`PEMK_FLAG_STATE`) | saved one-shot progression is restored at login in `on`; variable values and writes made during a session are still client-authored, so an NPC gift can be re-farmed within one session (detected, not prevented) |
+| Per-mon stat block (IVs/EVs/moves/ability/nature) | **server first-sight lock** (detection, with `PEMK_BATTLE_ENFORCE_TEAMS`) | IVs, shiny and gender are locked the first time the server sees a mon, and a divergence is flagged (D5 `mon_counterfeit`); moves, EVs, ability and nature change in normal play, so they are recorded but not judged |
 | PC boxes, Pokédex, roamers, daycare, PC item store | **client-only** | not projected at all — "park it in a box" evades the party shadow |
 | Party composition | **server-shadowed** | detection-only; the save blob remains authoritative |
 | Money / badges | **server-persisted, client-authored** | capped and audited, not earned server-side |
 | Overworld position | **enforceable, but** | the no-clip verdict is suppressed whenever the CLIENT declares `:surf`/`:dive` |
+
+### Story state: switches, variables, self-switches (`PEMK_FLAG_STATE`)
+
+Off by default. The server learns the story state from the client and, in `on`,
+gives back the progression it has seen saved.
+
+- **`shadow`** — the client sends its switches, variables and self-switches as an
+  absolute snapshot, plus each write to an id the manifest tracks. The server
+  stores both and logs any disagreement between them (`DELTA DRIFT`). A batch of
+  one-shot self-switches going OFF is logged as a rollback (`SUSPECT rewind`), and
+  every NPC gift (`pbReceiveItem`) is recorded so a re-farmed event shows up
+  (`SUSPECT re-farm`). With `PEMK_ANOMALY_DETECTION=on` both feed the D5 review
+  queue. Nothing is restored.
+- **`on`** — everything above, plus a login payload: the progression facts this
+  account has saved (fact-tier switches and one-shot self-switches) and the
+  cooldown timestamps of repeatable events. The client adds them to the loaded save
+  and never removes anything. Badges are also merged instead of overwritten.
+
+Which ids count as progression is worked out at build time from the project's own
+events, in the manifest inside `world.json`. A named switch the events turn ON and
+never OFF is a fact. A self-switch the events clear somewhere is a latch and is never banked.
+An event that uses a cooldown helper (`pbSetEventTime`, `expired?`...) is
+repeatable: only its timestamp is kept, and only moved forward. There is nothing
+to declare in RPG Maker.
+
+A fact is banked only once a save that contains it reaches the server, so a crash
+between an event and the next save never restores a switch without its payout.
+Banked progression belongs to the account, like pickups and badges: a fresh
+playthrough is a new account.
+
+**After updating the kit**, regenerate the export: delete `server/data/world.json`
+and do a debug launch, or use F9 → *PEMK: Export World*. The automatic export only
+reruns when your maps change, and an older manifest lacks the latch list, so `on`
+would restore self-switches the game clears on purpose. Migrations run on their own
+when the server starts.
+
+Not covered yet: variable values stay client-authored, and a write made during a
+session is not checked against the server. Re-farming an NPC gift inside one
+session is detected, not prevented.
 
 ### The precise list of currently **unsecured** interactions
 

@@ -51,6 +51,14 @@ class FakeMap
 end
 $game_map = FakeMap.new
 
+# $PokemonGlobal.eventvars: pbSetEventTime parks a harvest timestamp here keyed
+# [map_id, event_id], paired with the event's self-switch A.
+class FakePokemonGlobal
+  attr_accessor :eventvars
+  def initialize; @eventvars = {}; end
+end
+$PokemonGlobal = FakePokemonGlobal.new
+
 PLUGINS = File.expand_path("../../../Plugins/PEMK", __dir__)
 load File.join(PLUGINS, "004_Persist/009_Flags.rb")
 load File.join(PLUGINS, "004_Persist/010_FlagDelta.rb")
@@ -212,6 +220,76 @@ check(results, "reconcile_is_inert_without_facts") do
   PEMK::Flags.note_facts(switches: [4], self_switches: [])
   PEMK::Flags.reconcile
   $game_switches[4] == true   # unchanged from the previous check, not re-applied while off
+end
+
+# === repeatable events: the cooldown pair ===================================
+# The timestamp and self-switch A only ever move together. Restoring one without
+# the other leaves either a plantable spot on a future timer or a locked spot with
+# no timer, so the client applies them as a unit - and only when it is BEHIND.
+
+check(results, "cooldown_restores_the_pair") do
+  PEMK::Flags.adopt_mode("shadow")
+  PEMK::Flags.adopt_policy("switches" => {})
+  $game_switches = Game_Switches.new
+  $game_self_switches = Game_SelfSwitches.new
+  $PokemonGlobal.eventvars = {}
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  $PokemonGlobal.eventvars[[13, 17]] == 5_000 && $game_self_switches[[13, 17, "A"]] == true
+end
+
+# THE safety invariant: an event that legitimately expired reports the timestamp it
+# still holds and has cleared A itself. Equal is not greater, so it is left alone -
+# re-locking it would break the respawn the 020 fix exists to protect.
+check(results, "cooldown_never_relocks_an_expired_event") do
+  $game_self_switches = Game_SelfSwitches.new
+  $PokemonGlobal.eventvars = { [13, 17] => 5_000 }
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  $game_self_switches[[13, 17, "A"]] == false
+end
+
+# A client ahead of the server (harvested offline) is never dragged backwards.
+check(results, "cooldown_never_moves_backwards") do
+  $PokemonGlobal.eventvars = { [13, 17] => 9_000 }
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  $PokemonGlobal.eventvars[[13, 17]] == 9_000
+end
+
+# The restore is server state: echoing it back would be noise the trust gate must explain.
+check(results, "cooldown_restore_does_not_echo") do
+  $game_self_switches = Game_SelfSwitches.new
+  $PokemonGlobal.eventvars = {}
+  PEMK::Flags::Delta.reset
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  PEMK::Flags::Delta.drain.nil?
+end
+
+# The projection ships only the Integer entries - setVariable can park anything here.
+check(results, "event_times_projects_integers_only") do
+  $PokemonGlobal.eventvars = { [13, 17] => 5_000, [4, 9] => "planted", [6, 2] => 7 }
+  t = PEMK::Flags.event_times
+  t == { "13:17" => 5_000, "6:2" => 7 }
+end
+
+# No eventvars at all (a fresh game, or an older save) must not raise.
+check(results, "event_times_tolerates_a_missing_namespace") do
+  $PokemonGlobal.eventvars = nil
+  PEMK::Flags.event_times == {}
+end
+
+# A non-Integer in the eventvars slot means "not ours" - leave it alone. setVariable
+# parks arbitrary objects in this same namespace (berry plants keep a growth record
+# there), and treating one as absent would clobber it and force self-switch A on.
+check(results, "cooldown_leaves_a_non_integer_slot_alone") do
+  $game_self_switches = Game_SelfSwitches.new
+  record = { :stage => 2, :planted => 1234 }
+  $PokemonGlobal.eventvars = { [13, 17] => record }
+  PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
+  PEMK::Flags.reconcile
+  $PokemonGlobal.eventvars[[13, 17]].equal?(record) && $game_self_switches[[13, 17, "A"]] == false
 end
 
 puts JSON.generate(results)

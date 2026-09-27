@@ -56,11 +56,21 @@ module PEMK
         :manifest_version => MANIFEST_VERSION,
         :switches         => sw,
         :variables        => var,
-        # Self-switches need no per-id table: they are per-(map,event,letter) one-shot
-        # markers by construction, so the whole namespace is FACT-tier. The exceptions
-        # are the repeatable ones, listed here by the cooldown helpers their event text
-        # mentions — those must NOT become monotonic facts or they would fight the game.
-        :self_switches    => { :policy => "fact", :repeatable => ev.repeatable_events.sort },
+        # Self-switches need no per-id table: they are per-(map,event,letter) markers,
+        # so the namespace is FACT-tier with two exclusions.
+        #   repeatable — "map:event" whose text reaches for a cooldown helper. Inferred
+        #     from event TEXT, and it covers every letter of the event because
+        #     pbSetEventTime drives them together.
+        #   latched — "map:event:letter" this project ever writes OFF. Inferred from
+        #     what the events DO, and it is the same rule the switch tiering above has
+        #     always used: a flag that gets cleared is not monotonic, so it is not a
+        #     fact. Only the self-switch namespace had been exempted from it.
+        # The cost is asymmetric, which is why both err towards excluding: excluding a
+        # genuine one-shot only forfeits anti-rollback protection (the pre-sovereignty
+        # behaviour), while banking a latch replays a completed event at every login -
+        # and one of the two cases found here crashes the client when it does.
+        :self_switches    => { :policy => "fact", :repeatable => ev.repeatable_events.sort,
+                               :latched => ev.cleared_self_switches },
         :unjudgeable      => ev.unjudgeable.sort
       }
       section[:manifest_hash] = hash_of(section)
@@ -81,6 +91,37 @@ module PEMK
         @cleared_switches = {}         # id => true (ever written OFF)
         @unjudgeable   = []            # human-readable notes
         @repeatable_events = []        # "map:event" whose text implies a cooldown
+        @cleared_self = {}             # "map:event:A" => true (ever written OFF)
+      end
+
+      # THE SAME RULE the switch tiering already uses (see wrote_switch above): a flag
+      # this project ever writes OFF is not monotonic, so it is not a fact. Only the
+      # self-switch namespace had been exempted from it, on the assumption that a
+      # self-switch is always a one-shot "this happened" marker. It is not: the two
+      # Pokemon Institute fossil NPCs drive A in both directions (page 1 sets it when
+      # you hand a fossil over, page 2 clears it when you collect the result), and
+      # banking that replays the collection page at every login.
+      #
+      # Deliberately keyed on the CLEAR alone, not on seeing both directions. Where the
+      # ON comes from does not matter - a pbSetSelfSwitch in a script is invisible here -
+      # while the clear is the disqualifying evidence on its own.
+      def wrote_self_switch(origin, letter, on)
+        return if letter.to_s.empty? || on
+        # A common event does not know which map event it runs for, so its key could
+        # never match a client's "map:event:letter". Note the blind spot instead of
+        # exporting an unmatchable entry.
+        unless origin.to_s =~ /\A\d+:\d+\z/
+          return note("self-switch cleared inside #{origin} — cannot be attributed to an event")
+        end
+
+        @cleared_self["#{origin}:#{letter}"] = true
+      end
+
+      # "map:event:letter" of every self-switch this project clears. Letter-precise:
+      # excluding a latch letter must not unprotect a genuine one-shot letter on the
+      # same event.
+      def cleared_self_switches
+        @cleared_self.keys.sort
       end
 
       def wrote_switch(id, on)
@@ -174,8 +215,8 @@ module PEMK
         when 122   # Control Variables: range p[0]..p[1]
           range_each(p[0], p[1]) { |id| ev.wrote_var(id) }
           ev.note("var operand kind #{p[3]} at #{origin} is not statically derivable") if p[3].to_i > 1
-        when 123   # Control Self Switch
-          nil      # the whole self-switch namespace is FACT-tier; nothing per-id to learn
+        when 123   # Control Self Switch: p[0] = letter, p[1] == 0 means ON
+          ev.wrote_self_switch(origin, p[0].to_s, p[1].to_i.zero?)
         when 111   # Conditional Branch
           case p[0].to_i
           when 0 then ev.read_switch(p[1])
@@ -198,6 +239,11 @@ module PEMK
       txt.scan(/\$game_switches\[\s*(\d+)\s*\]\s*=/) { |m| ev.wrote_switch(m[0].to_i, true) }
       txt.scan(/\$game_variables\[\s*(\d+)\s*\]\s*=/) { |m| ev.wrote_var(m[0].to_i) }
       txt.scan(/pbSet\(\s*(\d+)\s*,/) { |m| ev.wrote_var(m[0].to_i) }
+      # A self-switch cleared from Ruby counts too: the clear is what disqualifies it,
+      # and the event id is explicit in this form.
+      txt.scan(/pbSetSelfSwitch\(\s*(\d+)\s*,\s*["']([A-D])["']\s*,\s*(?:false|nil)/) do |m|
+        ev.wrote_self_switch("#{origin.split(':').first}:#{m[0]}", m[1], false)
+      end
       if txt =~ /\$game_(?:switches|variables)\[\s*[^\d\s\]]/
         ev.note("computed switch/variable index at #{origin} — those ids stay local")
       end
@@ -302,6 +348,7 @@ module PEMK
         end
       end
       parts << "self/#{section[:self_switches][:repeatable].join(',')}"
+      parts << "latched/#{section[:self_switches][:latched].join(',')}"
       parts.join("|")
     end
   end

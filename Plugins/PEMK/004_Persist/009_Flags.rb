@@ -76,10 +76,30 @@ module PEMK
 
       { :switches      => on_switches,
         :variables     => set_variables,
-        :self_switches => on_self_switches }
+        :self_switches => on_self_switches,
+        :event_times   => event_times }
     rescue => e
       PEMK.log("flags: projection error: #{e.class}: #{e.message}")
       nil
+    end
+
+    # $PokemonGlobal.eventvars: per-event state keyed [map_id, event_id]. pbSetEventTime
+    # parks a unix timestamp there and sets the event's self-switch A - the berry plant /
+    # daily respawn pair. Only the Integer entries are projected; setVariable can park
+    # anything at all in here, and the server keeps only the events its manifest already
+    # classified as repeatable.
+    def event_times
+      vars = ($PokemonGlobal && $PokemonGlobal.eventvars) rescue nil
+      return {} unless vars.is_a?(Hash)
+
+      out = {}
+      vars.each do |k, v|
+        next unless v.is_a?(Integer) && k.is_a?(Array) && k.length >= 2
+
+        out["#{k[0]}:#{k[1]}"] = v
+        break if out.size >= MAX_ENTRIES
+      end
+      out
     end
 
     def on_switches
@@ -163,12 +183,54 @@ module PEMK
           applied += 1
         end
       end
+      applied += restore_cooldowns(f[:event_times])
       return if applied.zero?
 
       $game_map.need_refresh = true if $game_map   # event pages must re-evaluate
       PEMK.log("flags: restored #{applied} progression fact(s) from the server")
     rescue => e
       PEMK.log("flags: reconcile error #{e.class}: #{e.message}")
+    end
+
+    # Repeatable events (berry plants, daily respawns): put back the harvest timestamp
+    # AND the self-switch A that pbSetEventTime sets with it. The two only ever move
+    # together, so restoring one without the other would either leave a plantable spot
+    # on a future timer or lock a spot with no timer at all.
+    #
+    # STRICTLY GREATER is the whole safety argument. An event that legitimately expired
+    # keeps its timestamp and clears A on its own; it reports the same value we hold,
+    # does not match "greater", and is left alone. Only a client that is genuinely
+    # BEHIND - a rollback, a lost save - gets written to, and never downward.
+    def restore_cooldowns(times)
+      return 0 unless times.is_a?(Hash) && $PokemonGlobal && $game_self_switches
+
+      applied = 0
+      PEMK::Flags::Delta.suppress do
+        $PokemonGlobal.eventvars = {} unless $PokemonGlobal.eventvars.is_a?(Hash)
+        times.each do |key, at|
+          next unless at.is_a?(Integer) && at.positive?
+
+          parts = key.to_s.split(":")
+          next unless parts.length == 2
+
+          k = [parts[0].to_i, parts[1].to_i]
+          # Only ever raise a MISSING or LOWER Integer. setVariable parks arbitrary
+          # objects in this same namespace (berry plants keep a growth record here), so
+          # "not an Integer" must mean leave it alone, not treat it as absent and
+          # clobber it. The manifest filter makes that unreachable today; this makes it
+          # a local invariant instead of one that depends on the export.
+          cur = $PokemonGlobal.eventvars[k]
+          next unless cur.nil? || (cur.is_a?(Integer) && cur < at)
+
+          $PokemonGlobal.eventvars[k] = at
+          $game_self_switches[[k[0], k[1], "A"]] = true
+          applied += 1
+        end
+      end
+      applied
+    rescue => e
+      PEMK.log("flags: cooldown restore error #{e.class}: #{e.message}")
+      0
     end
   end
 end

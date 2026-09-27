@@ -84,7 +84,9 @@ module PEMK
       end
       # Audit item 4: switches/variables/self-switches detection shadow.
       if @config.flag_state != :off
-        @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys, logger: @log)
+        @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys,
+                                    repeatable: manifest_repeatable, latched: manifest_latched,
+                                    logger: @log)
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
@@ -386,8 +388,14 @@ module PEMK
       # Persist the SERVER-tracked position (captured on the reactor thread when the
       # frame arrived, not client-claimed) alongside the blob, so the next login seeds
       # the position audit. nil (no presence yet) leaves the stored position untouched.
+      fseq = env[:flags_seq]
       @mailbox.submit(account_id) do
         @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv, position: last_pos)
+        # The blob is the client's durability boundary: progression facts granted up
+        # to the flags seq it carries are now on the player's disk, so promote them
+        # out of pending. Anything granted after it waits for the next save, or a
+        # crash here would restore a switch onto a save that lacks its payout.
+        @flag_state&.commit_facts(account_id, fseq)
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
     end
@@ -813,7 +821,8 @@ module PEMK
       return unless @flag_state
 
       seq = env[:seq]
-      payload = { switches: env[:switches], variables: env[:variables], self_switches: env[:self_switches] }
+      payload = { switches: env[:switches], variables: env[:variables],
+                  self_switches: env[:self_switches], event_times: env[:event_times] }
       # A dropped job (queue full) must NOT leave the client believing its snapshot
       # landed — it would advance its seq and the server would then reject every
       # later one as stale. Nack so the client can resend.
@@ -1148,6 +1157,24 @@ module PEMK
         out[id.to_i] = e["key"] if e.is_a?(Hash) && e["tier"] == "fact" && e["key"]
       end
       out
+    end
+
+    # "map:event" of the events the manifest found to be on a cooldown. Their
+    # self-switch is cleared on purpose when the timer elapses, so it must never be
+    # banked as a monotonic fact.
+    def manifest_repeatable
+      m = @world.flag_manifest
+      sec = m.is_a?(Hash) ? m["self_switches"] : nil
+      sec.is_a?(Hash) ? Array(sec["repeatable"]) : []
+    end
+
+    # "map:event:letter" the project writes both ON and OFF - a latch rather than a
+    # one-shot marker, so never the server's to bank. Absent from an older export just
+    # means the list is empty (the pre-fix behaviour), never a boot error.
+    def manifest_latched
+      m = @world.flag_manifest
+      sec = m.is_a?(Hash) ? m["self_switches"] : nil
+      sec.is_a?(Hash) ? Array(sec["latched"]) : []
     end
 
     # The build-time tier table, pushed so BOTH sides provably agree on the policy.

@@ -95,7 +95,10 @@ module PEMK
       return :no_object if obj.nil?
       # Only compare when both sides name an item; a tile-less/item-less object
       # (a future warp/heal tile) is a positional match, not an item claim.
-      return :item_mismatch if item && obj["item"] && obj["item"].to_s != item.to_s
+      # A PRIZE event picks its reward at runtime (the Game Corner lottery has five
+      # tiers), so the export ships every branch and any of them is a legitimate claim.
+      allowed = obj["items"].is_a?(Array) && obj["items"].any? ? obj["items"] : [obj["item"]].compact
+      return :item_mismatch if item && allowed.any? && !allowed.map(&:to_s).include?(item.to_s)
 
       :match
     end
