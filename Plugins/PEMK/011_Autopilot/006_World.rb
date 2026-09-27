@@ -71,6 +71,8 @@ module PEMK
         return "transfer" if $game_temp.player_transferring
         return "message"  if Observe.current_message
         return "menu"     unless Observe.menus.empty?
+        return "screen"   unless Observe.screens.empty?
+        return "text"     if TextEntry.awaiting
         return "event"    if (pbMapInterpreterRunning? rescue false)
 
         nil

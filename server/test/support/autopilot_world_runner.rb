@@ -61,6 +61,12 @@ def pbMessageFreeText(_m, _c, _p, _max, _w = 240); :ui; end
 
 class Scene_Map; end
 
+# A full-screen UI in Essentials' shape: pbStartScene / pbEndScene.
+class FakeParty_Scene
+  def pbStartScene(*_args); end
+  def pbEndScene; end
+end
+
 class FakeTemp
   attr_accessor :in_battle, :in_menu, :message_window_showing, :player_transferring
 end
@@ -286,6 +292,28 @@ check(results, "text_can_be_queued_before_the_prompt") do
   got = pbMessageFreeText("Enter your password:", "", true, 64)
   logged = OBS.log.map { |e| e["text"] }
   r["queued"] && got == "hunter2" && logged.include?("Enter your password:") && !logged.include?("hunter2")
+end
+
+check(results, "screens_are_tracked") do
+  s = FakeParty_Scene.new
+  s.pbStartScene([], "Choose a Pokémon.")
+  open = command("9 state")["screens"]
+  s.pbEndScene
+  closed = command("10 state")["screens"]
+  open == ["FakeParty_Scene"] && closed == []
+end
+
+# dismiss must hand over at anything taps cannot or must not answer.
+check(results, "what_stops_a_dismiss") do
+  acts = PEMK::Autopilot::Actions
+  before = acts.needs_the_agent
+  PEMK::Autopilot::Observe.screen_open("FakeParty_Scene")
+  screen = acts.needs_the_agent
+  PEMK::Autopilot::Observe.screen_closed("FakeParty_Scene")
+  PEMK::Autopilot::TextEntry.instance_variable_set(:@awaiting, { "prompt" => "Your name?" })
+  text = acts.needs_the_agent
+  PEMK::Autopilot::TextEntry.instance_variable_set(:@awaiting, nil)
+  before.nil? && screen == "screen" && text == "text"
 end
 
 check(results, "setters_refuse_before_a_game_is_loaded") do

@@ -17,11 +17,30 @@ module PEMK
       MAX_LOG      = 40
       FRESH_FRAMES = 3   # a menu not updated for longer is in the background
 
+      MAX_SCREENS  = 8
+
       @messages = []   # texts on screen, innermost last (a choice can open over a message)
       @windows  = []   # command windows, newest last; disposed ones are pruned
       @log      = []   # recent messages, overworld and battle, oldest first
+      @screens  = []   # full-screen UIs open over the map (party, bag, help...), innermost last
 
       module_function
+
+      # $scene stays Scene_Map under the party screen, the bag, the controls help...;
+      # these say which one is up.
+      def screen_open(name)
+        @screens.push(name)
+        @screens.shift while @screens.size > MAX_SCREENS
+      end
+
+      def screen_closed(name)
+        i = @screens.rindex(name)
+        @screens.delete_at(i) if i
+      end
+
+      def screens
+        @screens
+      end
 
       def push_message(text)
         t = clean(text)
@@ -54,8 +73,9 @@ module PEMK
 
       def snapshot
         s = { "frame" => PEMK::Autopilot.frame, "scene" => ($scene ? $scene.class.name : nil),
-              "instance" => PEMK.instance, "online" => online, "flags" => temp_flags,
-              "message" => @messages.last, "menus" => menus, "held" => VInput.held_names }
+              "screens" => @screens.dup, "instance" => PEMK.instance, "online" => online,
+              "flags" => temp_flags, "message" => @messages.last, "menus" => menus,
+              "held" => VInput.held_names }
         s["map"]     = map_info if $game_map
         s["player"]  = player_info if $game_player
         s["trainer"] = trainer_info if $player
@@ -191,6 +211,45 @@ if PEMK::Autopilot.active?
           pemk_ap_orig_update(*args, &block)
           @pemk_ap_seen = PEMK::Autopilot.frame
         end
+      end
+    end
+  end
+
+  # The full-screen UIs. Essentials' own convention is a *Scene class opened with
+  # pbStartScene and closed with pbEndScene (party, bag, summary, Pokédex, storage,
+  # marts...); the scripted ones (the controls help) are EventScenes run by main.
+  # Wrapped where each method is defined, so subclasses are covered once.
+  ObjectSpace.each_object(Class).select { |k| k.name.to_s.end_with?("Scene") }.each do |klass|
+    next unless klass.method_defined?(:pbStartScene) && klass.method_defined?(:pbEndScene)
+    next unless klass.instance_method(:pbStartScene).owner == klass
+    next if klass.method_defined?(:pemk_ap_orig_pbStartScene)
+
+    klass.class_eval do
+      alias_method :pemk_ap_orig_pbStartScene, :pbStartScene
+      alias_method :pemk_ap_orig_pbEndScene, :pbEndScene
+
+      def pbStartScene(*args, &block)
+        PEMK::Autopilot::Observe.screen_open(self.class.name)
+        pemk_ap_orig_pbStartScene(*args, &block)
+      end
+
+      def pbEndScene(*args, &block)
+        pemk_ap_orig_pbEndScene(*args, &block)
+      ensure
+        PEMK::Autopilot::Observe.screen_closed(self.class.name)
+      end
+    end
+  end
+
+  if defined?(EventScene) && !EventScene.method_defined?(:pemk_ap_orig_main)
+    class EventScene
+      alias_method :pemk_ap_orig_main, :main
+
+      def main(*args, &block)
+        PEMK::Autopilot::Observe.screen_open(self.class.name)
+        pemk_ap_orig_main(*args, &block)
+      ensure
+        PEMK::Autopilot::Observe.screen_closed(self.class.name)
       end
     end
   end

@@ -43,7 +43,8 @@ module PEMK
         return false unless $scene.is_a?(Scene_Map) && gt && $game_player
 
         !(gt.in_menu || gt.in_battle || gt.message_window_showing || gt.player_transferring ||
-          $game_player.moving? || (pbMapInterpreterRunning? rescue false) || !Observe.menus.empty?)
+          $game_player.moving? || (pbMapInterpreterRunning? rescue false) || !Observe.menus.empty? ||
+          !Observe.screens.empty? || TextEntry.awaiting)
       end
 
       def condition(name, arg)
@@ -136,8 +137,10 @@ module PEMK
         Autopilot.start_job(id) do
           next false if VInput.down?(use)
 
-          unless Observe.menus.empty?
-            next Autopilot.respond(id, "ok" => true, "presses" => presses, "stopped" => "menu",
+          # Anything the agent has to act on ends the run of taps: tapping on would
+          # answer for it (a menu) or wait on something taps cannot give (text).
+          if (stop = needs_the_agent)
+            next Autopilot.respond(id, "ok" => true, "presses" => presses, "stopped" => stop,
                                        "message" => Observe.current_message, "menus" => Observe.menus)
           end
           if Observe.current_message.nil?
@@ -163,6 +166,16 @@ module PEMK
           last_tap = Autopilot.now
           false
         end
+      end
+
+      # -> what the agent must handle next, or nil when taps can carry on.
+      def needs_the_agent
+        return "menu"   unless Observe.menus.empty?
+        return "text"   if TextEntry.awaiting
+        return "battle" if BattleControl.attached?
+        return "screen" unless Observe.screens.empty?
+
+        nil
       end
 
       def cmd_advance(id, rest)
