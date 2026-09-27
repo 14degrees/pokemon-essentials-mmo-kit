@@ -202,8 +202,11 @@ if PEMK::Autopilot.active?
         alias_method :pemk_ap_orig_initialize, :initialize
         alias_method :pemk_ap_orig_update, :update
 
+        # Fresh from birth: a choice list that has not been updated yet is already
+        # waiting for an answer, and a tap in that frame would answer for the agent.
         def initialize(*args, &block)
           pemk_ap_orig_initialize(*args, &block)
+          @pemk_ap_seen = PEMK::Autopilot.frame
           PEMK::Autopilot::Observe.track_window(self)
         end
 

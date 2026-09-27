@@ -504,11 +504,22 @@ check(results, "wait_until_a_menu_with_an_entry") do
   r && r["ok"] && r["matched"] == "menu_with"
 end
 
+# A choice list is waiting for an answer from the moment it exists, before its loop
+# has updated it once: a dismiss tapping in that frame answered "Yes" for the agent.
+check(results, "a_brand_new_menu_is_already_listed") do
+  menu = Window_CommandPokemon.new(%w[Yes No])
+  menu.idle = true   # created, not updated yet
+  listed = PEMK::Autopilot::Observe.menus.map { |m| m["commands"] }
+  menu.dispose
+  listed == [%w[Yes No]]
+end
+
 # The debug menu stays open behind the prompt its command opened; only the menu
 # still being updated takes the keys, so only it is listed (seen in a real run).
 check(results, "a_menu_left_in_the_background_is_not_listed") do
   back = Window_CommandPokemon.new(%w[Fight Run])
   back.idle = true
+  5.times { frame! }   # the prompt opens later; the menu behind stopped being updated
   front = Window_CommandPokemon.new(%w[Yes No])
   r = command("31 state")
   back.dispose

@@ -94,10 +94,23 @@ module Autotest
       @pid = nil
     end
 
-    # Close and start again on the same account (the session token logs it back in).
+    # Close and start again on the same account; hands back once the saved game is
+    # loaded and idle (the login bypasses the load screen when the server has a save).
     def relaunch
       hard_kill
       launch(fresh: false)
+      wait_in_game
+    end
+
+    def wait_in_game(seconds = 60)
+      deadline = Autotest.mono + seconds
+      loop do
+        st = state
+        return st if st["map"] && st.dig("online", "logged_in") && idle?(1)
+        raise Failure, "#{@name}: not back in the game after #{seconds}s" if Autotest.mono > deadline
+
+        sleep 0.5
+      end
     end
 
     def log_tail(count = 40)
@@ -118,7 +131,8 @@ module Autotest
           type!(player_name)
         elsif (menu = Array(st["menus"]).last)
           commands = Array(menu["commands"])
-          pick = (["No info needed", "Boy"] & commands).first
+          # Skip the help, pick a character, confirm the name ("So you're Ash?").
+          pick = (["No info needed", "Boy", "Yes"] & commands).first
           raise Failure, "#{@name}: an unexpected menu in the intro: #{commands.inspect}" unless pick
 
           choose!(pick)

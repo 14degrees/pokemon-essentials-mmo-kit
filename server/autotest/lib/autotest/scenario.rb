@@ -72,6 +72,18 @@ module Autotest
       ok
     end
 
+    # Polls until the block holds (server writes land asynchronously). Bounded.
+    def wait_for(what, seconds: 10)
+      deadline = Autotest.mono + seconds
+      loop do
+        value = yield
+        return value if value
+        raise Failure, "#{what}: not after #{seconds}s" if Autotest.mono > deadline
+
+        sleep 0.25
+      end
+    end
+
     # Server-side truth, straight from the autotest database.
     def db
       @db ||= PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
