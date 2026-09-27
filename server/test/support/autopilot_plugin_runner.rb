@@ -149,6 +149,42 @@ check(results, "unknown_verb_is_an_error_not_a_crash") do
   r && r["ok"] == false && r["error"].include?("fly")
 end
 
+# A writer caught between creating the file and writing it: nothing raises, and the
+# command is read once it is there.
+check(results, "an_empty_command_file_waits_for_its_line") do
+  errors = PEMK.logs.size
+  send_cmd("")
+  3.times { frame! }
+  waited = File.file?(File.join(CHANNEL, "cmd.txt")) && reply.nil?
+  send_cmd("9e ping")
+  r = await
+  waited && r && r["id"] == "9e" && r["ok"] == true && PEMK.logs.size == errors
+end
+
+# From WSL the driver's rename can land as the game deletes the file, and the
+# delete is refused: the command runs once, not again on the following frames.
+$refuse_cmd_delete = false
+class << File
+  alias_method :runner_orig_delete, :delete
+  def delete(*paths)
+    raise Errno::EACCES, paths.first.to_s if $refuse_cmd_delete && paths.first.to_s.end_with?("cmd.txt")
+
+    runner_orig_delete(*paths)
+  end
+end
+
+check(results, "a_command_whose_file_will_not_go_runs_once") do
+  $refuse_cmd_delete = true
+  send_cmd("9f ping")
+  first = await
+  again = nil
+  5.times { frame!; again ||= reply }
+  $refuse_cmd_delete = false
+  send_cmd("9g ping")
+  nxt = await
+  first && first["id"] == "9f" && again.nil? && nxt && nxt["id"] == "9g"
+end
+
 check(results, "unknown_key_is_refused") do
   send_cmd("9 press JUMP")
   r = await

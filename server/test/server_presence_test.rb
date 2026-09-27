@@ -81,6 +81,42 @@ class ServerPresenceTest < Minitest::Test
     b.close
   end
 
+  # Peers draw a player from its sprite, pace and name: those pass; anything else
+  # the client attaches does not (the fan-out is not an amplifier).
+  def test_presence_carries_what_peers_draw_and_nothing_else
+    a, = open_authed("Adraw", "passwordA1")
+    b, = open_authed("Bdraw", "passwordB1")
+    send_env(a, { type: :pos, map: 5, x: 1, y: 1 })
+    send_env(b, { type: :pos, map: 5, x: 2, y: 2, dir: 4, speed: 4, mode: :walk,
+                  char: "trainer_POKEMONTRAINER_Red", name: "Bob", junk: "x" * 1000 })
+
+    got = recv_env(a)
+    assert_equal "Bob", got[:name]
+    assert_equal "trainer_POKEMONTRAINER_Red", got[:char]
+    assert_equal 4, got[:speed]
+    assert_equal :walk, got[:mode]
+    refute got.key?(:junk)
+    a.close
+    b.close
+  end
+
+  # Every peer on the map shows these: the name loses its message codes, a path is
+  # no sprite, and an impossible pace is dropped.
+  def test_presence_fields_are_checked
+    a, = open_authed("Acheck", "passwordA1")
+    b, = open_authed("Bcheck", "passwordB1")
+    send_env(a, { type: :pos, map: 5, x: 1, y: 1 })
+    send_env(b, { type: :pos, map: 5, x: 2, y: 2, speed: 99, char: "../../Titles/title",
+                  name: "\\ch[51,0,Yes]Eve<b>" })
+
+    got = recv_env(a)
+    assert_equal "ch[51,0,Yes]Eveb", got[:name]
+    refute got.key?(:char)
+    refute got.key?(:speed)
+    a.close
+    b.close
+  end
+
   def test_different_maps_do_not_cross
     a, = open_authed("Amap", "passwordA1")
     send_env(a, { type: :pos, map: 5, x: 1, y: 1 })

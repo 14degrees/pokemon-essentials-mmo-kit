@@ -20,7 +20,9 @@ module Autotest
   class Error < StandardError; end
   class Failure < Error; end
   class ChannelTimeout < Error; end
-  class BudgetExceeded < Error; end
+  # Raised into the scenario by its watchdog. Not a StandardError, so that no
+  # `rescue` on the way (a check, a retried ping) can swallow it and run on.
+  class BudgetExceeded < Exception; end # rubocop:disable Lint/InheritException
 
   SERVER_DIR = File.expand_path("../..", __dir__)
   GAME_DIR   = File.expand_path("..", SERVER_DIR)
@@ -35,6 +37,7 @@ require_relative "autotest/channel"
 require_relative "autotest/windows"
 require_relative "autotest/test_server"
 require_relative "autotest/player"
+require_relative "autotest/rogue"
 require_relative "autotest/scenario"
 require_relative "autotest/run"
 require_relative "autotest/report"

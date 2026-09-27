@@ -1229,10 +1229,15 @@ module PEMK
       broadcast_zone(map, conn, Wire.encode_split(presence_frame(env, account_id, map)))
     end
 
-    # The only fields a presence frame may carry to peers.
+    # The only fields a presence frame may carry to peers. Peers draw the player from
+    # its sprite, pace and name, so those pass too, each checked: every client on
+    # the map shows them.
     def presence_frame(env, account_id, map)
       out = { type: env[:type], id: account_id, map: map }
       %i[x y dir mode].each { |k| out[k] = env[k] if env[k].is_a?(Integer) || env[k].is_a?(Symbol) }
+      out[:speed] = env[:speed] if env[:speed].is_a?(Integer) && env[:speed].between?(1, 6)
+      (char = PlainText.charset(env[:char])) && out[:char] = char
+      (name = PlainText.name(env[:name])) && out[:name] = name
       out
     end
 
@@ -1273,7 +1278,18 @@ module PEMK
       end
 
       note_peer_session(env[:type], from_account, env[:to])
-      @reactor.send_frame(target, Wire.encode_split(env.merge(from: from_account), body))
+      @reactor.send_frame(target, Wire.encode_split(relayed_envelope(env, from_account), body))
+    end
+
+    # The envelope as the target receives it: the trusted sender, and a :name (the
+    # inviter's, or the offered Pokemon's) it can print without running codes.
+    def relayed_envelope(env, from_account)
+      out = env.merge(from: from_account)
+      if out.key?(:name)
+        name = PlainText.name(out[:name])
+        name ? out[:name] = name : out.delete(:name)
+      end
+      out
     end
 
     # Frames a stranger may legitimately send: the handshake itself, plus the

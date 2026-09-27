@@ -67,6 +67,13 @@ end
   prompt in turn.
 - `a.hard_kill` closes a window like a crash; `a.relaunch` starts it again on the same
   account.
+- Two players: `s.together(-> { a.new_game("Alice") }, -> { b.new_game("Bob") })` runs
+  both at once; `a.pause_menu("Trade Player")` opens the pause menu and picks an entry;
+  `b.answer_when_asked("Yes", "Yes", "Eevee")` waits for the other player's question,
+  then answers it; `a.remote_names` lists the players a window draws.
+- `s.rogue(:r)` is a client on its own account that sends raw frames
+  (`rogue.send_env({ type: :trade_invite, ... })`), like a modified game would:
+  `scenarios/030_rogue_names.rb` uses one against a real window.
 - `s.check(name) { ... }` records a check; `s.wait_for(what) { ... }` polls until a
   server write lands; `s.db` is the test database.
 

@@ -134,6 +134,9 @@ module Autotest
 
           next
         end
+        # A battle starting ends it (an accepted challenge), once nothing is left to say.
+        return r if stop == "battle" && queue.empty?
+
         answer = queue.shift
         unless answer
           raise Failure, "#{@name}: a #{stop} came with no answer left (#{r['message'].inspect} #{r['menus'].inspect})"
@@ -150,6 +153,28 @@ module Autotest
 
     def party_species
       Array(state["party"]).map { |p| p["species"] }
+    end
+
+    # The other players this window draws on its map, by name.
+    def remote_names
+      Array(state["remotes"]).map { |r| r["name"] }
+    end
+
+    # Opens the pause menu and picks an entry. The engine opens it only for a player
+    # standing still, so this waits for that first.
+    def pause_menu(entry, seconds: 15)
+      raise Failure, "#{@name}: not idle, the pause menu cannot open" unless idle?(seconds)
+
+      press!("ACTION")
+      ap!("wait_until menu_with #{entry} within #{seconds}", timeout: seconds + 10)
+      choose!(entry)
+    end
+
+    # Waits for a question whose answers include +entry+ (a prompt raised by the
+    # other player, say), then goes through the conversation with +answers+.
+    def answer_when_asked(entry, *answers, seconds: 30)
+      ap!("wait_until menu_with #{entry} within #{seconds}", timeout: seconds + 10)
+      converse(*answers)
     end
 
     # A new account starts the intro at once: skip the help, choose, type the name,
