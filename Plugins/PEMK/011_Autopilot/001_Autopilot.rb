@@ -46,6 +46,7 @@ module PEMK
     # deadline at once.
     @frames   = 0
     @frame_at = nil
+    @undeleted = nil   # a command whose file would not go: it ran, never twice
 
     module_function
 
@@ -96,15 +97,35 @@ module PEMK
       path = File.join(@dir, CMD_FILE)
       return unless File.file?(path)
 
-      line = File.binread(path, MAX_LINE).to_s.force_encoding(Encoding::UTF_8)
+      raw = read_command(path)
+      # A writer that does not rename its file in (echo > cmd.txt) can be caught
+      # between creating it and writing it: read it again on a later frame.
+      return if raw.nil? || raw.empty?
+
+      line = raw.force_encoding(Encoding::UTF_8)
       # While a command runs, only the ones that just look (or abort it) cut in; the
       # rest waits its turn in the file.
       return if @job && !IMMEDIATE.include?(line.split(/\s+/, 3)[1].to_s)
+      # Its file could not be deleted: it already ran. The next command replaces it.
+      return if line == @undeleted
 
-      File.delete(path)
+      begin
+        File.delete(path)
+        @undeleted = nil
+      rescue SystemCallError
+        @undeleted = line
+      end
       run(line)
     rescue StandardError => e
       PEMK.log("autopilot: tick error #{e.class}: #{e.message}")
+    end
+
+    # The driver renames its file in; from WSL, the game can open it at the moment
+    # the rename lands and be refused. Read it again on a later frame.
+    def read_command(path)
+      File.binread(path, MAX_LINE)
+    rescue Errno::EACCES, Errno::ENOENT
+      nil
     end
 
     # Verbs register themselves here (this file, 004_Battle, 005_World...), so each

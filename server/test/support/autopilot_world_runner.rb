@@ -339,10 +339,12 @@ check(results, "pick_answers_an_item_choice") do
     send_cmd("12 pick POTION")   # not a fossil: refused, the choice stays open
   end
   cancel_sent = false
+  # The choice's own loop runs the frames, as it does in the game; this thread only
+  # reads the replies (two threads running frames would race on the channel).
   waiting = Thread.new { screen.pbChooseItemScreen(fossil) }
   deadline = Time.now + 5
   until !waiting.alive? || Time.now > deadline
-    Graphics.update
+    sleep 0.001
     r = reply
     if r && r["id"] == "12"
       refused = r
