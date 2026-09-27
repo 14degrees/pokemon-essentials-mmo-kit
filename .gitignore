@@ -21,8 +21,10 @@ RGSS*.dll
 # PEMK SDK runtime artifacts (logs + throwaway diagnostic reports)
 mmo.log
 mmo_*.log
-# Autopilot command channels (PEMK_AUTOPILOT), one directory per test window
+# Autopilot command channels (PEMK_AUTOPILOT), one directory per test window,
+# and the autotest reports (server/bin/autotest.sh)
 /autopilot/
+/autotest-reports/
 mmo_*.txt
 mmo_*.json
 # per-machine connection config (each deployment sets its own; documented in README)

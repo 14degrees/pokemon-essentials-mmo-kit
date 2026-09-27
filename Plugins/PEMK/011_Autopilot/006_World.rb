@@ -16,6 +16,7 @@
 # setters, so the PEMK sync and interception see them like any other change:
 #   set_switch ID on|off   set_var ID VALUE   set_selfswitch MAP EVENT LETTER on|off
 #   add_item ITEM [QTY]    add_pokemon SPECIES LEVEL    heal    money AMOUNT
+# Readers: get_switch ID, get_var ID, get_selfswitch MAP EVENT LETTER. And save.
 #===============================================================================
 module PEMK
   module Autopilot
@@ -335,6 +336,13 @@ module PEMK
           when "money"
             $player.money = a[0].to_i
             { "money" => $player.money }
+          when "get_switch"
+            { "switch" => a[0].to_i, "value" => $game_switches[a[0].to_i] ? true : false }
+          when "get_var"
+            { "variable" => a[0].to_i, "value" => $game_variables[a[0].to_i] }
+          when "get_selfswitch"
+            key = [a[0].to_i, a[1].to_i, a[2].to_s.upcase]
+            { "self_switch" => key.join(":"), "value" => $game_self_switches[key] ? true : false }
           end
         Autopilot.respond(id, { "ok" => true }.merge(result))
       end
@@ -346,13 +354,25 @@ module PEMK
       Autopilot.verb("enter")    { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("events")   { |id, _| cmd_events(id) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
-      %w[set_switch set_var set_selfswitch add_item add_pokemon heal money].each do |name|
+      %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
+         get_switch get_var get_selfswitch].each do |name|
         Autopilot.verb(name) do |id, rest|
           next Autopilot.respond(id, "ok" => false, "error" => "no game loaded yet") unless $player
 
           cmd_setter(id, name, rest)
         end
       end
+
+      # save - a manual save (the pause menu's), so a test can put a known state on
+      # disk and on the server. Only from an idle overworld, like a player's save.
+      def cmd_save(id)
+        return Autopilot.respond(id, "ok" => false, "error" => "not idle") unless Actions.idle?
+
+        ok = Game.save
+        Autopilot.respond(id, "ok" => ok ? true : false)
+      end
+
+      Autopilot.verb("save") { |id, _| cmd_save(id) }
     end
   end
 end
