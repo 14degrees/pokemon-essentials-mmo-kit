@@ -83,6 +83,30 @@ automated tests, name each window with `PEMK_INSTANCE=<name>` (letters, digits, 
 Compile-time defaults live in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`);
 `ENABLED`/`ROLE = :off` disables the plugin (pure vanilla).
 
+### Autopilot (automated testing)
+
+A debug window can be driven by a script or an AI agent instead of a player, for
+automated in-game tests. It is off unless the game is a **debug launch** and
+`PEMK_AUTOPILOT=<directory>` is set, so a player build is never remote-controlled.
+The window does not need focus and keeps running minimized.
+
+```powershell
+$env:PEMK_INSTANCE  = "ap1"                 # own config/account/save (see above)
+$env:PEMK_AUTOPILOT = "autopilot\ap1"       # the command channel directory
+Start-Process Game.exe -ArgumentList debug
+```
+
+Commands go through two files in that directory; `tools/autopilot/ap.sh` wraps
+them (`ap.sh autopilot/ap1 <verb> [args]`):
+
+| Verb | Effect |
+|---|---|
+| `state` | JSON snapshot: scene, map, position, message on screen, open menus (choices + highlighted index), party, online status |
+| `press KEY [steps]` | tap a key (`USE`, `BACK`, `ACTION`, `SPECIAL`, arrows, `F9`...) through the engine's own Input module |
+| `hold KEY` / `release KEY\|all` | keep a key down, e.g. to walk |
+| `wait FRAMES` | let frames pass (60 = one second) |
+| `screenshot [PATH]` | PNG of the current frame, in the channel directory by default |
+
 ### Playing with friends (LAN / internet)
 
 1. **Host the server** on one machine: run it with `PEMK_BIND=0.0.0.0` (the
