@@ -49,9 +49,9 @@ never hosts: deploy the server once, point every client at it.
 2. Double-click **`PlayMMO-debug.bat`** — at the load screen pick **Create
    account**, enter an **email + password**, then play through the intro (that
    sets your character's name).
-3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_GUEST=1`) that
-   reads `mmo_config_guest.txt`; create a **different** account so the two windows
-   are two players.
+3. Double-click **`PlayMMO-guest.bat`** — a second window (`PEMK_INSTANCE=guest`)
+   that reads `mmo_config_guest.txt`; create a **different** account so the two
+   windows are two players.
 4. Get both onto the same map and walk around — each appears in the other's world.
 5. To battle: pause menu → **Battle Player** → pick the other → they accept → a
    synchronized battle runs on both screens.
@@ -75,10 +75,38 @@ port = 9998
 # password = your-password
 ```
 
-A guest instance (`PlayMMO-guest.bat`, `PEMK_GUEST=1`) reads `mmo_config_guest.txt`
-instead, so two windows on one PC can be two accounts. Compile-time defaults live
-in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`); `ENABLED`/`ROLE = :off` disables
-the plugin (pure vanilla).
+Name each extra window with `PEMK_INSTANCE=<name>` (letters, digits, `-`, `_`): it
+then uses `mmo_config_<name>.txt`, its own account and session files,
+`mmo_<name>.log` and its own local save file, so two windows on one PC are two
+accounts that never share anything. `PlayMMO-guest.bat` is the instance `guest`.
+The older `PEMK_GUEST=1` still works but shares the local save file with the main
+window; prefer an instance name.
+Compile-time defaults live in `001_Net/001_NetConfig.rb` (`HOST`, `PORT`);
+`ENABLED`/`ROLE = :off` disables the plugin (pure vanilla).
+
+### Autopilot (automated testing)
+
+A debug window can be driven by a script or an AI agent instead of a player, for
+automated in-game tests. It is off unless the game is a **debug launch** and
+`PEMK_AUTOPILOT=<directory>` is set, so a player build is never remote-controlled.
+The window does not need focus and keeps running minimized.
+
+```powershell
+$env:PEMK_INSTANCE  = "ap1"                 # own config/account/save (see above)
+$env:PEMK_AUTOPILOT = "autopilot\ap1"       # the command channel directory
+Start-Process Game.exe -ArgumentList debug
+```
+
+Commands go through two files in that directory; `tools/autopilot/ap.sh` wraps
+them (`ap.sh autopilot/ap1 <verb> [args]`):
+
+| Verb | Effect |
+|---|---|
+| `state` | JSON snapshot: scene, map, position, message on screen, open menus (choices + highlighted index), party, online status |
+| `press KEY [steps]` | tap a key (`USE`, `BACK`, `ACTION`, `SPECIAL`, arrows, `F9`...) through the engine's own Input module |
+| `hold KEY` / `release KEY\|all` | keep a key down, e.g. to walk |
+| `wait FRAMES` | let frames pass (60 = one second) |
+| `screenshot [PATH]` | PNG of the current frame, in the channel directory by default |
 
 ### Playing with friends (LAN / internet)
 
