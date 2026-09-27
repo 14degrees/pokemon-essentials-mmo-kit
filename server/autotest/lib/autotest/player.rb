@@ -7,7 +7,7 @@ module Autotest
   class Player
     PASSWORD = "autotest-password"
     VERBS = %w[press hold release wait wait_until choose type pick dismiss walk_to talk_to enter
-               face interact warp events event_pages battle decide fast advance screenshot save
+               face interact warp events event_pages grass battle decide fast advance screenshot save
                set_switch get_switch set_var get_var set_selfswitch get_selfswitch
                add_item get_item add_pokemon heal money abort].freeze
 
@@ -153,6 +153,56 @@ module Autotest
 
     def party_species
       Array(state["party"]).map { |p| p["species"] }
+    end
+
+    def in_battle?(within = 1)
+      ap("wait_until battle within #{within}", timeout: within + 10)["ok"]
+    end
+
+    # Walks back and forth over two neighbouring grass tiles (the nearest pair it can
+    # reach) until a wild battle starts. Bounded.
+    def find_wild_battle(seconds: 120)
+      deadline = Autotest.mono + seconds
+      grass_pairs.first(10).each do |pair|
+        loop do
+          walks = pair.map { |x, y| walk_to(x, y, timeout: 30) }
+          return true if in_battle?
+          break unless walks.all? { |r| r["ok"] }            # out of reach: the next pair
+          raise Failure, "#{@name}: no wild battle after #{seconds}s" if Autotest.mono > deadline
+        end
+      end
+      raise Failure, "#{@name}: no reachable grass for a wild battle"
+    end
+
+    # Neighbouring grass tiles of this map, the nearest first.
+    def grass_pairs
+      tiles = Array(grass!["tiles"])
+      known = tiles.to_h { |t| [t, true] }
+      me = state["player"] || {}
+      pairs = tiles.flat_map { |x, y| [[x + 1, y], [x, y + 1]].select { |n| known[n] }.map { |n| [[x, y], n] } }
+      pairs.sort_by { |(x, y), _| (x - me["x"].to_i).abs + (y - me["y"].to_i).abs }
+    end
+
+    # Plays the wild battle by throwing +ball+ at every turn until it ends (caught),
+    # answering anything else with its first choice. Bounded.
+    def catch_with(ball, seconds: 150)
+      battle!("mode", "agent")
+      deadline = Autotest.mono + seconds
+      loop do
+        r = ap!("wait_until decision|no_battle within 30", timeout: 40)
+        return true if r["matched"] == "no_battle"
+        raise Failure, "#{@name}: the battle is still on after #{seconds}s" if Autotest.mono > deadline
+
+        case state.dig("battle", "awaiting", "kind")
+        when "command" then decide!("bag")
+        when "item"    then decide!(ball)
+        when "party"   then decide!("cancel")
+        when "name"    then decide!("")                    # no nickname
+        else                decide!("0")
+        end
+      end
+    ensure
+      (battle("mode", "keys", timeout: 5) rescue nil)
     end
 
     # Holds an arrow over a map edge until the next map is loaded.

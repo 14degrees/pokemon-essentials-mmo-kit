@@ -11,6 +11,7 @@
 #   talk_to EVENT     walks next to the event (or across a counter from it), faces it
 #                     and taps USE; answers with the message that opened, if any
 #   events            the current map's events: id, name, position, trigger
+#   grass             the tiles where a step can start a wild battle
 #   warp MAP X Y      the debug menu's warp
 # Debug setters, for arranging a test quickly. They go through the engine's normal
 # setters, so the PEMK sync and interception see them like any other change:
@@ -286,6 +287,21 @@ module PEMK
         Autopilot.respond(id, "ok" => true, "map" => $game_map.map_id, "events" => list)
       end
 
+      # grass - the tiles of this map where a step can start a wild battle (tall
+      # grass and the like, by terrain tag), so a test knows where to walk.
+      def cmd_grass(id)
+        return Autopilot.respond(id, "ok" => false, "error" => "not on a map") unless on_map?
+
+        tiles = []
+        $game_map.width.times do |x|
+          $game_map.height.times do |y|
+            tag = ($game_map.terrain_tag(x, y) rescue nil)
+            tiles << [x, y] if tag && tag.land_wild_encounters
+          end
+        end
+        Autopilot.respond(id, "ok" => true, "map" => $game_map.map_id, "tiles" => tiles.first(500))
+      end
+
       # event_pages EVENT - an event's pages as the editor stores them: the conditions
       # that pick the live page and the command list (code, indent, parameters), so
       # the agent can read what an NPC waits for instead of guessing.
@@ -390,6 +406,7 @@ module PEMK
       Autopilot.verb("talk_to")  { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("enter")    { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("events")   { |id, _| cmd_events(id) }
+      Autopilot.verb("grass")    { |id, _| cmd_grass(id) }
       Autopilot.verb("event_pages") { |id, rest| cmd_event_pages(id, rest) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
       %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
