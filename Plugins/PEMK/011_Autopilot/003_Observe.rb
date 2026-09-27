@@ -80,6 +80,7 @@ module PEMK
         s["player"]  = player_info if $game_player
         s["trainer"] = trainer_info if $player
         s["party"]   = party_info if $player
+        s["remotes"] = remotes_info
         s["battle"]  = BattleControl.snapshot if defined?(BattleControl) && BattleControl.attached?
         s["text_entry"] = TextEntry.awaiting if defined?(TextEntry) && TextEntry.awaiting
         s["item_choice"] = ItemChoice.awaiting if defined?(ItemChoice) && ItemChoice.awaiting
@@ -146,8 +147,20 @@ module PEMK
 
       def party_info
         $player.party.map do |p|
-          { "species" => p.species.to_s, "level" => p.level, "hp" => p.hp,
-            "total_hp" => p.totalhp, "fainted" => p.fainted? ? true : false }
+          { "species" => p.species.to_s, "name" => p.name, "level" => p.level, "hp" => p.hp,
+            "total_hp" => p.totalhp, "fainted" => p.fainted? ? true : false,
+            "uid" => (p.respond_to?(:pemk_uid) ? p.pemk_uid : nil) }
+        end
+      rescue StandardError
+        []
+      end
+
+      # The other players this window draws on its map.
+      def remotes_info
+        return [] unless defined?(PEMK::Remotes) && PEMK::Remotes.players
+
+        PEMK::Remotes.players.values.map do |rp|
+          { "id" => rp.player_id, "name" => rp.player_name, "x" => rp.x, "y" => rp.y }
         end
       rescue StandardError
         []

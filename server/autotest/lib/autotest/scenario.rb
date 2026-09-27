@@ -61,6 +61,27 @@ module Autotest
                               .launch(fresh: true)
     end
 
+    # Runs the blocks side by side, one window each (two intros at once), and hands
+    # back their results. The first failure is raised once none is left running; the
+    # budget still cuts in, since the jobs keep their errors to themselves.
+    def together(*jobs)
+      results = Array.new(jobs.size)
+      errors  = Array.new(jobs.size)
+      threads = jobs.each_with_index.map do |job, i|
+        Thread.new do
+          results[i] = job.call
+        rescue StandardError => e
+          errors[i] = e
+        end
+      end
+      threads.each(&:join)
+      raise errors.compact.first if errors.any?
+
+      results
+    ensure
+      threads&.each { |t| t.kill if t.alive? }
+    end
+
     def check(name, detail = nil)
       ok = begin
         yield ? true : false

@@ -316,11 +316,41 @@ check(results, "what_stops_a_dismiss") do
   before = acts.needs_the_agent
   PEMK::Autopilot::Observe.screen_open("FakeParty_Scene")
   screen = acts.needs_the_agent
+  PEMK::Autopilot::Observe.push_message("Trade request sent to Bob...")
+  line_over_it = acts.needs_the_agent
+  PEMK::Autopilot::Observe.pop_message
   PEMK::Autopilot::Observe.screen_closed("FakeParty_Scene")
   PEMK::Autopilot::TextEntry.instance_variable_set(:@awaiting, { "prompt" => "Your name?" })
   text = acts.needs_the_agent
   PEMK::Autopilot::TextEntry.instance_variable_set(:@awaiting, nil)
-  before.nil? && screen == "screen" && text == "text"
+  before.nil? && screen == "screen" && line_over_it.nil? && text == "text"
+end
+
+# The pause menu stays open under the line it shows and closes once it is read:
+# dismiss reads the line and does not stop at the menu's screen on the way out.
+check(results, "dismiss_reads_a_line_shown_over_a_screen") do
+  place(0, 5)
+  obs = PEMK::Autopilot::Observe
+  obs.screen_open("PokemonPauseMenu_Scene")
+  obs.push_message("Trade request sent to Bob...")
+  read_at = nil
+  $world_hook = lambda do
+    read_at ||= Graphics.frame_count if obs.current_message.nil?
+    obs.screen_closed("PokemonPauseMenu_Scene") if read_at && Graphics.frame_count > read_at + 2
+  end
+  r = command("20 dismiss")
+  $world_hook = nil
+  r && r["ok"] && r["stopped"].nil? && r["presses"] == 1 && obs.screens.empty?
+end
+
+# A screen left open with nothing on it still hands over, after the quiet moment.
+check(results, "dismiss_stops_at_a_screen_that_stays") do
+  place(0, 5)
+  obs = PEMK::Autopilot::Observe
+  obs.screen_open("FakeParty_Scene")
+  r = command("21 dismiss")
+  obs.screen_closed("FakeParty_Scene")
+  r && r["ok"] && r["stopped"] == "screen" && r["presses"].zero?
 end
 
 # The fossil reviver asks for a fossil from the bag: pick answers, filtered like the
