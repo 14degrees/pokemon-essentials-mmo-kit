@@ -222,6 +222,39 @@ module Autotest
       (battle("mode", "keys", timeout: 5) rescue nil)
     end
 
+    # Plays a battle to its end with the strongest move. +swap_to+ (a party index)
+    # sends that Pokemon in on the first turn instead, so the lead only takes part.
+    # A fainted Pokemon is replaced by the first able one; no new move is learnt;
+    # anything else takes its first choice. Bounded.
+    def fight_battle(swap_to: nil, seconds: 180)
+      battle!("mode", "agent")
+      deadline = Autotest.mono + seconds
+      swapped = swap_to.nil?
+      loop do
+        r = ap!("wait_until decision|no_battle within 30", timeout: 40)
+        return true if r["matched"] == "no_battle"
+        raise Failure, "#{@name}: the battle is still on after #{seconds}s" if Autotest.mono > deadline
+
+        awaiting = state.dig("battle", "awaiting") || {}
+        options = Array(awaiting["options"])
+        case awaiting["kind"]
+        when "command" then decide!(swapped ? "fight" : "pokemon")
+        when "fight"
+          best = options.select { |o| o["usable"] }.max_by { |o| [o["power"].to_i, -o["index"].to_i] }
+          decide!(best ? best["index"].to_s : "0")
+        when "party"
+          pick = swapped ? options.find { |o| o["able"] && !o["active"] } : options.find { |o| o["index"] == swap_to }
+          swapped = true
+          decide!(pick ? pick["index"].to_s : "cancel")
+        when "forget" then decide!("cancel")
+        when "name"   then decide!("")
+        else               decide!("0")
+        end
+      end
+    ensure
+      (battle("mode", "keys", timeout: 5) rescue nil)
+    end
+
     # Holds an arrow over a map edge until the next map is loaded.
     def cross(key, map)
       hold!(key)
