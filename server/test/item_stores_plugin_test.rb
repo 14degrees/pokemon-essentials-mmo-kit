@@ -59,6 +59,10 @@ class ItemStoresPluginTest < Minitest::Test
     $owned = [pika, eevee, egg]
     $PokemonGlobal = Global.new(PCItemStorage.new, [MailObj.new(:GRASSMAIL)], nil)
     out[:stores] = I.stores
+    Temp = Struct.new(:in_battle)
+    $game_temp = Temp.new(true)
+    out[:in_battle] = I.stores          # held items change only for a battle's length: the bag alone
+    $game_temp = Temp.new(false)
 
     $marks = 0
     pika.item = :LEFTOVERS            # unchanged: no mark
@@ -101,6 +105,7 @@ class ItemStoresPluginTest < Minitest::Test
     assert_equal({ :pc => { :POTION => 1 }, :mail => { :GRASSMAIL => 1 },
                    :held => { :LEFTOVERS => 1, :ORANBERRY => 1 }, :holders => { 1 => :LEFTOVERS, 2 => nil } },
                  o[:stores], "a Pokemon still without a uid is counted, not named")
+    assert_nil o[:in_battle], "during a battle only the bag goes out"
     assert_equal 2, o[:marks], "a real held-item change and a PC change mark the channel"
     assert_equal [[:POTION, 2]], o[:pc], "exactly the record: no start item, the unknown one carried"
     assert_equal [nil, :LEFTOVERS], o[:held], "the Leftovers the record says was taken comes off"

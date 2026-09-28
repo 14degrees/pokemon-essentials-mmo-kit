@@ -125,13 +125,14 @@ module PEMK
     # A sale the server makes: +qty+ of +item+ leave the record's bag (and the ledger's
     # judged totals) in the same transaction as the money, so a client that keeps them
     # cannot sell the same record twice. -> false when the bag record lacks them.
-    # +owed+ (E4): the item's open debts, units the server does not recognize - a sale
-    # needs recognized ones.
-    def take_sold(account_id, item, qty, owed: 0, now: Time.now)
+    # +owed+ (E4, nil when not enforcing): the item's open debts, units the server does not
+    # recognize - a sale then needs recognized ones, judged totals minus debts: a bag the
+    # ledger never judged (bag-only snapshots) sells nothing it has not seen.
+    def take_sold(account_id, item, qty, owed: nil, now: Time.now)
       row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
       bag = (row && row[:bag]).to_h
       return false unless bag[item.to_s].to_i >= qty
-      return false if owed.positive? && row[:judged] && row[:judged].to_h[item.to_s].to_i - owed < qty
+      return false if owed && (row[:judged].nil? || row[:judged].to_h[item.to_s].to_i - owed < qty)
 
       bag[item.to_s] -= qty
       bag.delete(item.to_s) if bag[item.to_s] <= 0

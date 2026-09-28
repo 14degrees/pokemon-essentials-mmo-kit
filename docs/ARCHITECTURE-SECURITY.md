@@ -469,9 +469,11 @@ is logged `UNEXPLAINED +n ITEM` and counted for the review queue (D5 `item_unexp
 A fresh login drops the credits still waiting: the record it loads never held their items.
 
 Only a snapshot that carries every store is judged, and always against the totals of the
-last one judged: a stretch of bag-only snapshots (the Bug Contest, a collection too big to
-send, an older client) is recorded, never judged, so it neither reads a store move as an
-increase nor lets one slip in. The server's own moves (a sale, a Pokemon traded away)
+last one judged: a stretch of bag-only snapshots (a battle - held items change there only
+for its length, Knock Off or a Trick against a trainer being undone at its end -, the Bug
+Contest, a collection too big to send, an older client) is recorded, never judged, so it
+neither reads a store move as an increase nor lets one slip in. Under `on`, what only such
+a snapshot shows cannot be sold before a judged one recognizes it. The server's own moves (a sale, a Pokemon traded away)
 lower those totals too. An item id that no item can have is left out (and flags the
 snapshot), a Pokemon may be named as holding an item only if the held counts include it,
 and an item the engine swaps for its twin (the DNA Splicers and their used form, the
