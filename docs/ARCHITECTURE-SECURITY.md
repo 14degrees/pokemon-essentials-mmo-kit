@@ -425,8 +425,18 @@ money off itself, and a sale turned any item in the bag - made up or not - into 
 
 - **`shadow`** — each purchase and sale is asked first. The server checks the clerk (a
   Mart the world export knows), the item (in that clerk's stock, never free from a computed
-  one), the price (the catalogue's, or the one the event sets), and for a sale the item in
-  its bag record, and logs `WOULD-DENY`; the client still moves the money.
+  one), the price, and for a sale the item in its bag record, and logs `WOULD-DENY`; the
+  client still moves the money.
+
+  The price is the catalogue's, or one the clerk's event can set on that visit. The engine
+  keeps a `setPrice` until the next Mart call, and an event may set it on one branch only
+  (a sale day), so the world export follows each Mart call through the event the way the
+  interpreter runs it (branches, choices, loops, labels, exits, common events). A price set
+  on one branch and the catalogue's both pass; a Key Item the event always prices never
+  passes at its catalogue $0. A sale is paid the catalogue's sell price, or the clerk's own
+  (the engine's rule: `setPrice(item, buy)` buys back at `buy` too), and a clerk whose Mart
+  offers no sale (`cantsell`) buys nothing back. A price the event computes cannot be
+  checked: the export names the call and the server warns about that clerk at boot.
 - **`on`** — the server refuses what fails (`DENY`) and moves the money itself, in its
   ledger (`shop:buy:ITEMxN`); the client adopts the balance it answers with. Nothing is
   bought or sold without an answer. A sale takes the items out of the server's record in
@@ -439,8 +449,8 @@ running unasked. Item balls under `PEMK_PICKUP_ENFORCE` behave the same way (a d
 link leaves the ball for later).
 
 The Battle Point exchange (`pbBattlePointShop`) is gated the same way under the same
-setting: its clerk, the item in its stock and the BP price (the catalogue's or the one the
-event sets) are checked, and in `on` the server takes the BP from its ledger
+setting: its clerk, the item in its stock and the BP price (the catalogue's or one the
+event can set) are checked, and in `on` the server takes the BP from its ledger
 (`bpshop:buy:ITEMxN`). The exchange buys nothing back. The server says so at login
 (`bp_shop_gate`), so a newer client never sends a BP purchase to a server that would take
 it for a Mart one. A purchase the server made or approved also explains its items (and the

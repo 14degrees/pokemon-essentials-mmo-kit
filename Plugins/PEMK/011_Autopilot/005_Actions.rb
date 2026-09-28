@@ -360,6 +360,20 @@ if PEMK::Autopilot.active? && defined?(PokemonBagScreen) &&
   end
 end
 
+# A Mart's sell screen chooses from the bag scene itself, not the bag screen above.
+if PEMK::Autopilot.active? && defined?(PokemonMart_Scene) &&
+   !PokemonMart_Scene.method_defined?(:pemk_ap_orig_pbChooseSellItem)
+  class PokemonMart_Scene
+    alias_method :pemk_ap_orig_pbChooseSellItem, :pbChooseSellItem
+
+    def pbChooseSellItem
+      return pemk_ap_orig_pbChooseSellItem unless @subscene && $bag
+
+      PEMK::Autopilot::ItemChoice.ask($bag, nil)
+    end
+  end
+end
+
 if PEMK::Autopilot.active?
   if defined?(pbEnterText) && !defined?(pemk_ap_orig_pbEnterText)
     alias pemk_ap_orig_pbEnterText pbEnterText

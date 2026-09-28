@@ -24,11 +24,25 @@ class ServerShopTest < Minitest::Test
   WORLD = Tempfile.new(["pemk_world", ".json"])
   WORLD.write(JSON.generate(
     "schema_version" => 3,
-    "maps" => { "15" => { "name" => "Mart", "width" => 10, "height" => 10, "objects" => [
-      { "kind" => "mart", "items" => %w[POTION POKEBALL], "prices" => { "POKEBALL" => 150 }, "dynamic" => false,
-        "x" => 2, "y" => 2, "event_id" => 5 },
-      { "kind" => "mart", "items" => [], "prices" => {}, "dynamic" => true, "x" => 4, "y" => 2, "event_id" => 6 },
-      { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "dynamic" => false, "x" => 6, "y" => 2, "event_id" => 7 }
+    "maps" => { "15" => { "name" => "Mart", "width" => 20, "height" => 10, "objects" => [
+      { "kind" => "mart", "items" => %w[POTION POKEBALL], "prices" => { "POKEBALL" => 150 },
+        "price_options" => { "POKEBALL" => [150] }, "sell_options" => { "POKEBALL" => [150] },
+        "dynamic" => false, "x" => 2, "y" => 2, "event_id" => 5 },
+      { "kind" => "mart", "items" => [], "prices" => {}, "price_options" => {}, "sell_options" => {},
+        "dynamic" => true, "x" => 4, "y" => 2, "event_id" => 6 },
+      { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "price_options" => {}, "dynamic" => false,
+        "x" => 6, "y" => 2, "event_id" => 7 },
+      # a sale on some days; a key item always at the clerk's own price
+      { "kind" => "mart", "items" => %w[POTION SILPHSCOPE], "prices" => { "POTION" => 250, "SILPHSCOPE" => 5000 },
+        "price_options" => { "POTION" => [nil, 250], "SILPHSCOPE" => [5000] },
+        "sell_options" => { "POTION" => [nil, 250], "SILPHSCOPE" => [5000] },
+        "dynamic" => false, "x" => 8, "y" => 2, "event_id" => 8 },
+      # an export from before the price options
+      { "kind" => "mart", "items" => %w[POKEBALL], "prices" => { "POKEBALL" => 150 }, "dynamic" => false,
+        "x" => 10, "y" => 2, "event_id" => 9 },
+      # a clerk that buys nothing back
+      { "kind" => "mart", "items" => %w[POTION], "prices" => {}, "price_options" => {}, "sell_options" => {},
+        "sells" => false, "dynamic" => false, "x" => 12, "y" => 2, "event_id" => 10 }
     ] } }
   ))
   WORLD.flush
@@ -42,7 +56,8 @@ class ServerShopTest < Minitest::Test
   # The real export, with the prices this test relies on (an older export has none).
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["items"].merge!("POTION" => item(300, 150), "POKEBALL" => item(200, 100), "MASTERBALL" => item(0, 0),
-                      "BICYCLE" => item(0, 0, important: true), "PROTEIN" => item(10_000, 5_000, bp: 16))
+                      "BICYCLE" => item(0, 0, important: true), "PROTEIN" => item(10_000, 5_000, bp: 16),
+                      "SILPHSCOPE" => item(0, 0, important: true))
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
 
@@ -157,6 +172,54 @@ class ServerShopTest < Minitest::Test
     assert_equal "not_held", ask(s, :sell, "POTION", 3, 150, seq: 2)[:reason]
     assert_equal "not_sellable", ask(s, :sell, "BICYCLE", 1, 0, seq: 3)[:reason]
     assert_equal 1300, money(lo)
+  end
+
+  # An event's setPrice(item, buy) makes its clerk buy that item back at +buy+ too (the
+  # engine's rule): a sale there is paid that, elsewhere the catalogue's sell price.
+  def test_a_clerk_that_sets_a_price_buys_back_at_it
+    start_server
+    s, lo = player(bag: { POKEBALL: 3 })
+    assert_equal "price", ask(s, :sell, "POKEBALL", 1, 100)[:reason], "not the catalogue's, at this clerk"
+    assert_equal [:shop_grant, 1150], ask(s, :sell, "POKEBALL", 1, 150, seq: 2).values_at(:type, :balance)
+    assert_equal :shop_grant, ask(s, :sell, "POKEBALL", 1, 100, event: 6, seq: 3)[:type], "another clerk: the catalogue's"
+    assert_equal 1250, money(lo)
+  end
+
+  # A price set on one branch only (a sale day): the clerk charges it on some visits and
+  # the catalogue's on others, and the server takes either - but never a price no visit
+  # can see, like a key item at its catalogue $0.
+  def test_a_price_set_on_some_visits_only
+    start_server
+    s, lo = player(money: 6000, bag: { POTION: 2 })
+    assert_equal :shop_grant, ask(s, :buy, "POTION", 1, 250, event: 8)[:type], "the sale"
+    assert_equal :shop_grant, ask(s, :buy, "POTION", 1, 300, event: 8, seq: 2)[:type], "another day"
+    assert_equal "price", ask(s, :buy, "POTION", 1, 150, event: 8, seq: 3)[:reason]
+    assert_equal "price", ask(s, :buy, "SILPHSCOPE", 1, 0, event: 8, seq: 4)[:reason], "never at the catalogue's"
+    assert_equal :shop_grant, ask(s, :buy, "SILPHSCOPE", 1, 5000, event: 8, seq: 5)[:type]
+    assert_equal 450, money(lo)
+    assert_equal :shop_grant, ask(s, :sell, "POTION", 1, 250, event: 8, seq: 6)[:type]
+    assert_equal :shop_grant, ask(s, :sell, "POTION", 1, 150, event: 8, seq: 7)[:type]
+    assert_equal 850, money(lo)
+  end
+
+  # An export from before the options: the one price the event sets, and the
+  # catalogue's sell price.
+  def test_an_older_export_keeps_its_rules
+    start_server
+    s, lo = player(bag: { POKEBALL: 1 })
+    assert_equal "price", ask(s, :buy, "POKEBALL", 1, 200, event: 9)[:reason]
+    assert_equal :shop_grant, ask(s, :buy, "POKEBALL", 1, 150, event: 9, seq: 2)[:type]
+    assert_equal :shop_grant, ask(s, :sell, "POKEBALL", 1, 100, event: 9, seq: 3)[:type]
+    assert_equal 950, money(lo)
+  end
+
+  # pbPokemonMart(stock, speech, true) offers no "I'm here to sell".
+  def test_a_clerk_that_buys_nothing_back
+    start_server
+    s, lo = player(bag: { POTION: 1 })
+    assert_equal "not_sellable", ask(s, :sell, "POTION", 1, 150, event: 10)[:reason]
+    assert_equal :shop_grant, ask(s, :buy, "POTION", 1, 300, event: 10, seq: 2)[:type]
+    assert_equal 700, money(lo)
   end
 
   # A client that sells and keeps the items (no new snapshot) cannot sell the same

@@ -1348,18 +1348,40 @@ module PEMK
       return "not_sold" unless data
       return nil unless data.key?("price")   # an export from before item authority: nothing to check
 
+      shop = map.is_a?(Integer) && event.is_a?(Integer) ? @world.shop_object(map, event) : nil
       if op == :buy
-        shop = map.is_a?(Integer) && event.is_a?(Integer) ? @world.shop_object(map, event) : nil
         return "not_a_shop" unless shop && shop["kind"] == (bp ? "bp_shop" : "mart")
 
-        price = (shop["prices"] || {})[item] || data[bp ? "bp_price" : "price"]
-        return "not_sold" if shop["dynamic"] ? price.to_i <= 0 : !Array(shop["items"]).include?(item)
-        return "price" unless unit == price
+        prices = clerk_prices(shop, "price_options", item, data[bp ? "bp_price" : "price"])
+        prices = prices.select { |p| p > 0 } if shop["dynamic"]   # never free from a computed stock
+        return "not_sold" if shop["dynamic"] ? prices.empty? : !Array(shop["items"]).include?(item)
+        return "price" unless prices.include?(unit)
       else
-        return "not_sellable" if data["important"] || data["sell_price"].to_i <= 0
-        return "price" unless unit == data["sell_price"]
+        # Any Mart buys back at the catalogue's price; a clerk whose event sets prices may
+        # pay its own. One that never offers to buy anything back pays nothing.
+        return "not_sellable" if shop && shop["sells"] == false
+
+        prices = clerk_prices(shop, "sell_options", item, data["sell_price"]).select { |p| p > 0 }
+        return "not_sellable" if data["important"] || prices.empty?
+        return "price" unless prices.include?(unit)
       end
       nil
+    end
+
+    # -> every price +shop+ may charge ("price_options") or pay back ("sell_options") for
+    # +item+: the world export follows each of its event's Mart calls, and names the
+    # catalogue's +base+ as nil. An export from before those options knew one price an
+    # event set, and no sell price.
+    def clerk_prices(shop, key, item, base)
+      base = base.to_i
+      if shop && shop[key].is_a?(Hash)
+        options = shop[key][item]
+        return [base] unless options.is_a?(Array)
+
+        return options.map { |p| p.is_a?(Integer) ? p : base }.uniq
+      end
+      legacy = key == "price_options" && shop ? (shop["prices"] || {})[item] : nil
+      [legacy.is_a?(Integer) ? legacy : base]
     end
 
     GIFT_LEFT_MAP_SEC = 120   # an event may move the player, then pay: the map just left still counts

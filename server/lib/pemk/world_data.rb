@@ -306,7 +306,13 @@ module PEMK
         @by_tile[key] = obj.freeze
         ev = obj["event_id"]
         @gifts[[map_id, ev]] = obj if %w[gift prize].include?(obj["kind"]) && ev.is_a?(Integer)
-        @shops[[map_id, ev]] = obj if %w[mart bp_shop].include?(obj["kind"]) && ev.is_a?(Integer)
+        next unless %w[mart bp_shop].include?(obj["kind"]) && ev.is_a?(Integer)
+
+        @shops[[map_id, ev]] = obj
+        if obj["prices_unread"]
+          @log.call("world: the clerk on map #{map_id} (event #{ev}) computes a price the export cannot read " \
+                    "- the server holds it to the catalogue's and its literal prices")
+        end
       end
     end
 

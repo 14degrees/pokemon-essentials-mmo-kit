@@ -33,6 +33,7 @@ module PEMK
                  :trainers => 0 }
 
       all_events = []   # [map_id, event] for the item sources (item authority E1b)
+      @common_events = nil   # read again: the dev may have edited them since the last export
       mapinfos.keys.sort.each do |map_id|
         map = (load_data(sprintf("Data/Map%03d.rxdata", map_id)) rescue nil)
         next unless map && map.respond_to?(:events) && map.events
@@ -42,7 +43,7 @@ module PEMK
         trainers = []
         map.events.each_value do |event|
           all_events << [map_id, event]
-          o = classify_event(event); objects << o if o
+          o = classify_event(event); objects << unread_prices(map_id, o) if o
           collect_warps(event).each { |w| warps << w }
           collect_trainers(event).each do |type, name, version|
             trainers << { :event_id => event.id, :x => event.x, :y => event.y,
@@ -126,7 +127,7 @@ module PEMK
               script.match(/pbItemBall\(\s*:([A-Za-z0-9_]+)/))
         { :kind => "item", :item => m[1], :quantity => (m[2] || 1).to_i,
           :x => event.x, :y => event.y, :event_id => event.id }
-      elsif (shop = shop_facts(script))
+      elsif (shop = shop_facts(event, script))
         shop.merge(:x => event.x, :y => event.y, :event_id => event.id)
       elsif (items = script.scan(/pbReceiveItem\(\s*:([A-Za-z0-9_]+)/).flatten).any?
         # More than one branch means the event picks a reward, so it is a PRIZE, not a
@@ -143,9 +144,10 @@ module PEMK
 
     # Item authority: a clerk's stock. Every literal list its Mart or Battle Point shop
     # call is given, merged (badge branches each hand the Mart a longer list), and the
-    # prices the event sets itself (setPrice). A computed list makes the stock unknown.
-    # -> { :kind => "mart" | "bp_shop", :items =>, :prices =>, :dynamic => } | nil
-    def shop_facts(script)
+    # prices its calls may use (clerk_prices). A computed list makes the stock unknown.
+    # -> { :kind => "mart" | "bp_shop", :items =>, :prices =>, :price_options =>,
+    #      :sell_options =>, :dynamic => } | nil
+    def shop_facts(event, script)
       kind = if script.include?("pbPokemonMart(") then "mart"
              elsif script.include?("pbBattlePointShop(") then "bp_shop"
              end
@@ -161,11 +163,298 @@ module PEMK
           dynamic = true
         end
       end
-      prices = {}
-      script.scan(/setPrice\(\s*:([A-Za-z0-9_]+)\s*,\s*(\d+)/) { |item, price| prices[item] = price.to_i }
-      { :kind => kind, :items => items.uniq, :prices => prices, :dynamic => dynamic }
+      prices = clerk_prices(event, kind)
+      facts = { :kind => kind, :items => items.uniq, :prices => literal_prices(script),
+                :price_options => prices[:buy], :dynamic => dynamic }
+      if kind == "mart"
+        facts[:sell_options] = prices[:sell]
+        facts[:sells] = false unless prices[:sells]
+      end
+      facts[:unread] = prices[:unread] unless prices[:unread].empty?
+      facts
     rescue
       nil
+    end
+
+    # A clerk whose event computes a price: the server cannot check that price, so the log
+    # names the call and the export flags the clerk for the server's own warning.
+    def unread_prices(map_id, obj)
+      calls = obj.delete(:unread)
+      return obj if calls.nil? || calls.empty?
+
+      calls.each { |c| PEMK.log("world: map #{map_id} event #{obj[:event_id]} sets a price the export cannot read: #{c}") }
+      obj.merge(:prices_unread => true)
+    end
+
+    # The last literal buy price the event sets for each item: what a server from before
+    # :price_options checks against.
+    def literal_prices(script)
+      prices = {}
+      script.scan(/setPrice\(\s*:([A-Za-z0-9_]+)\s*,\s*(\d+)/) do |item, price|
+        prices[item] = price.to_i if price.to_i > 0
+      end
+      prices
+    end
+
+    # === a clerk's prices — item authority E3 ==================================
+
+    # The engine keeps what setPrice / setSellPrice set until the next pbPokemonMart or
+    # pbBattlePointShop, which uses it and forgets it. An event may set a price on one
+    # branch only (the Lerucean stall's Saturday sale), so one clerk charges its own price
+    # on one visit and the catalogue's on the next. This follows each page the way the
+    # interpreter runs it (branches, choices, loops, labels, exits, common events) and
+    # notes every price a Mart call may see; a script with Ruby control flow of its own may
+    # run each of its calls, or not, or again.
+    # -> { :buy => { item => [price | nil, ...] }, :sell => { item => [...] },
+    #      :sells => whether a Mart call can buy anything back (its cantsell argument),
+    #      :unread => the calls whose price the export cannot read (computed arguments) }
+    # nil stands for the catalogue's price. Only the items some call sets a price for are
+    # listed: every other item is at the catalogue's.
+    def clerk_prices(event, kind)
+      found  = {}
+      unread = []
+      event.pages.each { |page| flow_prices(page.list, {}, found, unread, 0) if page && page.list }
+      marts = found.values.select { |_, k, _| k == kind }
+      buys  = {}
+      sells = {}
+      marts.flat_map { |state, _, _| state.keys }.uniq.each do |item|
+        marts.each do |state, _, can_sell|
+          (state[item] || [[-1, -1]]).each do |buy, sell|
+            (buys[item] ||= []) << (buy > 0 ? buy : nil)
+            (sells[item] ||= []) << (sell >= 0 ? sell : nil) if can_sell
+          end
+        end
+      end
+      { :buy => price_options(buys), :sell => price_options(sells),
+        :sells => marts.empty? || marts.any? { |_, _, can_sell| can_sell }, :unread => unread.uniq }
+    end
+
+    # item => its distinct prices, nil (the catalogue's) first; an item only ever at the
+    # catalogue's is left out.
+    def price_options(options)
+      out = {}
+      options.keys.sort.each do |item|
+        list = options[item].uniq.sort_by { |p| p || -1 }
+        out[item] = list unless list == [nil]
+      end
+      out
+    end
+
+    PRICE_CALL  = /(?<![A-Za-z0-9_])(setPrice|setSellPrice|pbPokemonMart|pbBattlePointShop)\s*\(/.freeze
+    # Ruby that may skip or repeat a call: a script with any of it may run each call or not.
+    SCRIPT_FLOW = /\b(?:if|unless|case|while|until|for|loop|rescue|return|next|break|redo|retry|and|or|not|begin|do|yield|each|times|upto|downto|step|map|select|reject|proc|lambda|def)\b|[?{]|&&|\|\||->/.freeze
+    PRICE_DEPTH = 4        # common events calling common events, followed this deep
+    PRICE_STEPS = 20_000   # an event's walk, bounded
+
+    # Follows +list+ (a page, a common event) from +state+ (item => [[buy, sell], ...],
+    # -1: not set, the engine's own marks) and joins the state at each Mart call it
+    # reaches into +found+. -> the state the list ends with (nil: it never ends).
+    def flow_prices(list, state, found, unread, depth)
+      ins   = { 0 => state }
+      out   = nil
+      work  = [0]
+      steps = 0
+      until work.empty?
+        if (steps += 1) > PRICE_STEPS
+          unread << "an event too long to follow"
+          return join_prices(out, {})
+        end
+        i = work.shift
+        st = ins[i]
+        if i >= list.size - 1   # the end of the list: the interpreter stops
+          out = join_prices(out, st)
+          next
+        end
+        succ, st = flow_step(list, i, st, found, unread, depth)
+        if succ == :exit
+          out = join_prices(out, st)
+          next
+        end
+        succ.each do |j|
+          nxt = join_prices(ins[j], st)
+          next if nxt == ins[j]
+
+          ins[j] = nxt
+          work << j unless work.include?(j)
+        end
+      end
+      out
+    end
+
+    # One command, as the interpreter runs it (004_Interpreter_Commands).
+    # -> [the commands that may run next | :exit, the state after it]
+    def flow_step(list, i, st, found, unread, depth)
+      cmd = list[i]
+      params = cmd.parameters || []
+      case cmd.code
+      when 111, 402, 403, 601, 602, 603   # a branch: into its body, or on to the next at its level
+        [[i + 1, same_level(list, i)].compact, st]
+      when 411                            # else: only reached when the branch was not taken
+        [[i + 1], st]
+      when 413                            # repeat above: back to the top of the loop
+        j = (i - 1).downto(0).find { |k| list[k].indent == cmd.indent }
+        [[j ? j + 1 : i + 1], st]
+      when 113                            # break loop: past the end of the loop
+        j = ((i + 1)...(list.size - 1)).find { |k| list[k].code == 413 && list[k].indent < cmd.indent }
+        [[j ? j + 1 : i + 1], st]
+      when 115                            # exit event processing
+        [:exit, st]
+      when 119                            # jump to label
+        j = (0...(list.size - 1)).find { |k| list[k].code == 118 && list[k].parameters[0] == params[0] }
+        [[j || i + 1], st]
+      when 117                            # call common event: it runs, then this list goes on
+        ce = common_event(params[0])
+        if ce && ce.list && depth < PRICE_DEPTH
+          st = flow_prices(ce.list, st, found, unread, depth + 1)
+          return [[], st] if st.nil?
+        elsif ce && ce.list
+          unread << "common event #{params[0]}, called too deep to follow"
+        end
+        [[fall_through(list, i)], st]
+      when 355                            # a script, with the script commands right after it
+        last = i
+        last += 1 while list[last + 1] && [355, 655].include?(list[last + 1].code)
+        text = (i..last).map { |k| list[k].parameters[0].to_s }.join("\n")
+        [[fall_through(list, last)], script_prices(text, st, found, unread, [list.object_id, i])]
+      else
+        [[fall_through(list, i)], st]
+      end
+    end
+
+    # The next command at +i+'s own level (a branch's else or end, the next choice).
+    def same_level(list, i)
+      ((i + 1)...list.size).find { |k| list[k].indent == list[i].indent }
+    end
+
+    # The command after +i+ when it simply runs on. The end of a branch's body skips its
+    # else; the end of a choice's body skips the other choices.
+    def fall_through(list, i)
+      nxt = list[i + 1]
+      return i + 1 unless nxt && nxt.indent < list[i].indent
+
+      ends = { 411 => 412, 402 => 404, 403 => 404, 602 => 604, 603 => 604 }[nxt.code]
+      return i + 1 unless ends
+
+      ((i + 1)...list.size).find { |k| list[k].code == ends && list[k].indent == nxt.indent } || i + 1
+    end
+
+    # One script's price calls, in order. A script with Ruby control flow of its own may
+    # run each call or not, and again: followed until nothing changes.
+    def script_prices(text, st, found, unread, key)
+      calls = price_calls(text)
+      return st if calls.empty?
+
+      calls.each { |c| unread << c[1] if c[0] == :unread }
+      may = text.match?(SCRIPT_FLOW)
+      cur = st
+      loop do
+        after = cur
+        calls.each_with_index do |c, k|
+          case c[0]
+          when :set
+            nxt = set_price(after, c[1], c[2], c[3])
+            after = may ? join_prices(after, nxt) : nxt
+          when :mart
+            slot = (found[key + [k]] ||= [nil, c[1], false])
+            slot[0] = join_prices(slot[0], after)
+            slot[2] ||= c[2]
+            after = may ? join_prices(after, {}) : {}
+          end
+        end
+        return after unless may
+
+        nxt = join_prices(cur, after)
+        return nxt if nxt == cur
+
+        cur = nxt
+      end
+    end
+
+    # -> the price calls of one script, in order: [:set, item, buy, sell],
+    # [:mart, kind, can_sell] or [:unread, the call's text].
+    def price_calls(text)
+      calls = []
+      pos = 0
+      while (m = PRICE_CALL.match(text, pos))
+        args, pos = call_args(text, m.end(0))
+        name = m[1]
+        if name == "pbPokemonMart" || name == "pbBattlePointShop"
+          kind = name == "pbPokemonMart" ? "mart" : "bp_shop"
+          calls << [:mart, kind, kind == "mart" && args[2].to_s.strip != "true"]
+          next
+        end
+        item = args[0].to_s.strip[/\A:([A-Za-z0-9_]+)\z/, 1]
+        nums = name == "setSellPrice" ? ["-1", args[1]] : [args[1] || "-1", args[2] || "-1"]
+        nums = nums.map { |n| n.to_s.strip }
+        if item && nums.all? { |n| n.match?(/\A-?\d+\z/) }
+          calls << [:set, item, nums[0].to_i, nums[1].to_i]
+        else
+          calls << [:unread, text[m.begin(0)...pos].strip]
+        end
+      end
+      calls
+    end
+
+    # A call's arguments, split at its top-level commas, from just inside its "(" to the
+    # matching ")". -> [[argument text, ...], the index past the ")"]
+    def call_args(text, start)
+      args  = []
+      depth = 0
+      quote = nil
+      from  = start
+      i     = start
+      while i < text.length
+        c = text[i]
+        if quote
+          if c == "\\"
+            i += 1
+          elsif c == quote
+            quote = nil
+          end
+        elsif c == '"' || c == "'"
+          quote = c
+        elsif "([{".include?(c)
+          depth += 1
+        elsif ")]}".include?(c)
+          if depth.zero?
+            last = text[from...i]
+            args << last unless args.empty? && last.strip.empty?
+            return [args, i + 1]
+          end
+          depth -= 1
+        elsif c == "," && depth.zero?
+          args << text[from...i]
+          from = i + 1
+        end
+        i += 1
+      end
+      [args << text[from..-1], text.length]
+    end
+
+    # Interpreter#setPrice, on each state an item's prices may be in: a buy price above 0
+    # replaces the buy price; a sell price of 0 or more sells at twice it, else a new buy
+    # price sells at itself.
+    def set_price(st, item, buy, sell)
+      pairs = (st[item] || [[-1, -1]]).map do |b, s|
+        [buy > 0 ? buy : b, if sell >= 0 then sell * 2 elsif buy > 0 then buy else s end]
+      end
+      st.merge(item => pairs.uniq.sort)
+    end
+
+    # Either state (nil: no path leads here).
+    def join_prices(a, b)
+      return b if a.nil? || a == b
+      return a if b.nil?
+
+      out = {}
+      (a.keys | b.keys).each { |item| out[item] = ((a[item] || [[-1, -1]]) | (b[item] || [[-1, -1]])).sort }
+      out
+    end
+
+    # The game's common events, read once per export (none outside the engine).
+    def common_event(id)
+      @common_events ||= (load_data("Data/CommonEvents.rxdata") rescue nil) || []
+      id.is_a?(Integer) ? @common_events[id] : nil
     end
 
     # Step 6 (the payout gate): what the server needs to judge a gift request.
