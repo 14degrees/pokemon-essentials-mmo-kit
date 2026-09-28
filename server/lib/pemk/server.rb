@@ -893,7 +893,7 @@ module PEMK
       level   = env[:level]
       mints   = conn.data[:enc_mints]
       mint    = mints.is_a?(Array) &&
-                mints.find { |m| m["species"] == species && m["level"] == level }
+                mints.find { |m| !m["caught"] && m["species"] == species && m["level"] == level }
       unless mint
         @log.call("catch: account #{account_id} req #{species}@#{level.inspect} has NO stashed mint -> local")
         return reply(conn, type: :catch_deny, seq: seq, reason: "no_encounter")
@@ -915,7 +915,11 @@ module PEMK
       return reply(conn, type: :catch_deny, seq: seq, reason: "unknown_species") unless verdict
 
       if verdict[:caught]
-        mints.delete_at(mints.index(mint))   # one successful catch per mint
+        # One successful catch per mint. The mint stays stashed, marked, because the
+        # battle's end report still has to prove this foe: it opens the reward window
+        # the catch's EXP is judged against (dropping it made every level-up from a
+        # catch a SUSPECT level jump).
+        mint["caught"] = true
         # D3.2: stamp the persisted roll as caught (mailbox FIFO -> after its record).
         pid = mint["pid"]
         lvl = mint["level"]

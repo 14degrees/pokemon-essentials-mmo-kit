@@ -58,9 +58,10 @@ class ServerRewardTest < Minitest::Test
     @db&.disconnect
   end
 
-  def start_server(rewards: "shadow")
+  def start_server(rewards: "shadow", catches: "off")
     env = ENV.to_h.merge("PEMK_WORLD" => WORLD.path, "PEMK_BATTLE_DATA" => BATTLE.path,
-                         "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on", "PEMK_BATTLE_ENFORCE_REWARDS" => rewards)
+                         "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on", "PEMK_BATTLE_ENFORCE_REWARDS" => rewards,
+                         "PEMK_BATTLE_ENFORCE_CATCHES" => catches)
     @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(m) { @logs << m })
     @server.start
     @port = @server.port
@@ -133,6 +134,29 @@ class ServerRewardTest < Minitest::Test
     send_env(c, { type: :econ, field: :money, value: 3_000, seq: 1 })                # a shop sale
     assert_equal :econ_ack, recv(c)[:type]
     assert_equal "unattributed", last_reason(acct_id("rw4@t.co"))
+    c.close
+  end
+
+  # A server-rolled catch used to drop its mint, so the battle's end report proved
+  # no foe and the catch's EXP met an empty window: every level-up from a catch was
+  # a SUSPECT level jump (autotest 050_max_security).
+  def test_a_caught_foe_still_opens_the_window_at_the_battles_end
+    start_server(catches: "on")
+    c, = authed_conn("rw7@t.co")
+    g = mint(c)
+    send_env(c, { type: :catch_req, species: g[:species], level: g[:level], ball: :MASTERBALL,
+                  hp_current: 10, status: :NONE, claimed_rate: 255, dex_owned: 0, charm: false, seq: 2 })
+    assert_equal :catch_verdict, recv(c)[:type]
+    send_env(c, { type: :battle_end_report, outcome: 4, foes: [{ pid: g[:pid] }] })
+    sync(c)
+    assert(@logs.any? { |l| l.include?("outcome=4 foes=SPINARAK@12") }, @logs.grep(/reward:|catch:/).inspect)
+
+    # and the one catch per mint still holds
+    send_env(c, { type: :catch_req, species: g[:species], level: g[:level], ball: :MASTERBALL,
+                  hp_current: 10, status: :NONE, claimed_rate: 255, dex_owned: 0, charm: false, seq: 3 })
+    r = recv(c)
+    assert_equal :catch_deny, r[:type]
+    assert_equal "no_encounter", r[:reason]
     c.close
   end
 
