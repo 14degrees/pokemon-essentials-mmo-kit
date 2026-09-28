@@ -162,6 +162,7 @@ module PEMK
       @log.call("server: flag enforcement = #{@config.flag_enforce} (owned values repaired to the mirror when on)")
       @log.call("server: gift enforcement = #{@config.gift_enforce} (one-shot gifts paid once when on)")
       @log.call("server: peer body check = #{@config.peer_check} (relayed Pokemon may name #{@config.peer_classes.join(', ')})")
+      @log.call("server: shop enforcement = #{@config.shop_enforce} (Mart purchases and sales made server-side when on)")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -238,7 +239,7 @@ module PEMK
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
       flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4], gift_req: [10, 1.0], gift_applied: [10, 1.0],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
-      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2],
+      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2], shop_req: [10, 2],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
     }.freeze
     FRAME_BUDGET_DEFAULT = [30, 10].freeze
@@ -284,6 +285,7 @@ module PEMK
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :trade_applied then handle_trade_applied(env, authed)
       when :trade_owed then handle_trade_owed(conn, authed)
+      when :shop_req then handle_shop_req(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, body, authed)
       else
@@ -993,6 +995,65 @@ module PEMK
       end
     end
 
+    # Item authority E3: a Mart purchase or sale, asked before it is applied. The clerk's
+    # stock and the price come from the exports, the money from the ledger and, for a
+    # sale, the item from the bag record. With the gate on, the server moves the money
+    # itself and answers with the balance the client adopts; in shadow it only judges.
+    def handle_shop_req(conn, env, account_id)
+      seq = env[:seq]; op = env[:op]; item = env[:item]; qty = env[:quantity]; unit = env[:unit_price]
+      unless %i[buy sell].include?(op) && item.is_a?(String) && item.match?(GIFT_ITEM) &&
+             qty.is_a?(Integer) && qty.between?(1, 999) && unit.is_a?(Integer) && unit >= 0
+        return reply(conn, type: :shop_deny, seq: seq, reason: "bad")
+      end
+      return reply(conn, type: :shop_grant, seq: seq) if @config.shop_enforce == :off
+
+      why = shop_refusal(op, env[:map], env[:event], item, unit)
+      on  = @config.shop_enforce == :on
+      @mailbox.submit(account_id) do
+        balance = nil
+        why ||= "not_held" if op == :sell && !@inventory.holds?(account_id, item, qty)
+        if why.nil? && on
+          delta = op == :buy ? -(unit * qty) : unit * qty
+          st, value, = @ledger.adjust(account_id, :money, delta, reason: "shop:#{op}:#{item}x#{qty}")
+          if st == :ack
+            balance = value
+          else
+            why = "money"
+          end
+        end
+        if why
+          @log.call("shop: account #{account_id} #{on ? 'DENY' : 'WOULD-DENY'} #{op} #{item} x#{qty} at #{unit} (#{why})")
+        end
+        out = why && on ? { type: :shop_deny, reason: why } : { type: :shop_grant, balance: balance }
+        @reactor.post { reply(conn, seq: seq, **out) if @reactor.alive?(conn) }
+      rescue StandardError => e
+        @log.call("shop: request failed #{e.class}: #{e.message}")
+      end
+    end
+
+    # -> nil when the export allows it, else why not. A purchase needs a clerk the world
+    # export knows, an item in its stock (any item for a computed stock, never a free one)
+    # and the catalogue price, or the one the event sets; a sale needs a sellable item
+    # at its catalogue sell price.
+    def shop_refusal(op, map, event, item, unit)
+      data = @battle.item(item)
+      return "not_sold" unless data
+      return nil unless data.key?("price")   # an export from before item authority: nothing to check
+
+      if op == :buy
+        shop = map.is_a?(Integer) && event.is_a?(Integer) ? @world.shop_object(map, event) : nil
+        return "not_a_shop" unless shop && shop["kind"] == "mart"
+
+        price = (shop["prices"] || {})[item] || data["price"]
+        return "not_sold" if shop["dynamic"] ? price.to_i <= 0 : !Array(shop["items"]).include?(item)
+        return "price" unless unit == price
+      else
+        return "not_sellable" if data["important"] || data["sell_price"].to_i <= 0
+        return "price" unless unit == data["sell_price"]
+      end
+      nil
+    end
+
     # :gift_applied - the item of request +nonce+ is in the client's bag.
     def handle_gift_applied(env, account_id)
       return unless @gift_grants
@@ -1390,6 +1451,7 @@ module PEMK
         gift_gate: @config.gift_enforce != :off,                             # step 6: ask before a gift
         peer_check: @config.peer_check.to_s,                                 # a peer's Pokemon checked before loading
         trade_redelivery: !@trade_deliveries.nil?,                           # ask for traded Pokemon a save lacks
+        shop_gate: @config.shop_enforce != :off,                             # E3: Mart purchases asked first
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }

@@ -59,6 +59,10 @@ module PEMK
     # is owed and added once the grant comes (nothing is lost, nothing given unasked).
     GIFT_GRANT_TIMEOUT = 3.0
 
+    # Item authority E3: seconds a Mart purchase or sale waits for the server. Past it
+    # nothing is bought or sold, and the player may try again.
+    SHOP_TIMEOUT = 5.0
+
     # The classes a Pokemon from another player may contain (a trade's escrow, a PvP
     # team). With the server's PEMK_PEER_CHECK on, bytes naming anything else are
     # refused before they are loaded. A game whose plugins keep their own objects in

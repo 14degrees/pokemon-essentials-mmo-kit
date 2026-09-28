@@ -80,7 +80,13 @@ module PEMK
         "is_berry"   => !!it.is_berry?,
         "is_machine" => !!it.is_machine?,             # TM/HM/TR
         "can_hold"   => !!it.can_hold?,               # held-item legality (= !important)
-        "move"       => (it.move ? it.move.to_s : nil) # taught move for a machine, else null
+        "move"       => (it.move ? it.move.to_s : nil), # taught move for a machine, else null
+        # Item authority: what a shop charges and pays, and which items stay one of a kind.
+        "price"      => it.price,
+        "sell_price" => it.sell_price,
+        "bp_price"   => it.bp_price,
+        "important"  => !!it.is_important?,           # key items, TMs, HMs
+        "consumable" => !!it.consumed_after_use?
       }
     end
 

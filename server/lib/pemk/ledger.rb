@@ -67,6 +67,36 @@ module PEMK
       result
     end
 
+    # A change the server makes itself (a Mart purchase or sale): +delta+ on +field+,
+    # within 0..cap. Its ledger row takes a negative seq, which no client frame uses, and
+    # the balance's last_seq is left alone, so the client's next seq still follows its
+    # own. -> [:ack, balance] | [:rej, balance, :funds | :cap | :bad_field]
+    def adjust(account_id, field, delta, reason:, now: Time.now)
+      key = field.to_s.to_sym
+      cap = @caps[key]
+      return [:rej, current(account_id, field), :bad_field] unless cap && delta.is_a?(Integer)
+
+      result = nil
+      @db.transaction do
+        cur = current(account_id, field)
+        value = cur + delta
+        if value.negative?
+          result = [:rej, cur, :funds]
+        elsif value > cap
+          result = [:rej, cur, :cap]
+        else
+          low = @db[:economy_ledger].where(account_id: account_id, field: field.to_s).min(:seq) || 0
+          @db[:economy_balances]
+            .insert_conflict(target: %i[account_id field], update: { balance: value })
+            .insert(account_id: account_id, field: field.to_s, balance: value, last_seq: 0)
+          @db[:economy_ledger].insert(account_id: account_id, field: field.to_s, delta: delta, reason: reason.to_s,
+                                      seq: [low, 0].min - 1, balance_after: value, created_at: now)
+          result = [:ack, value]
+        end
+      end
+      result
+    end
+
     def current(account_id, field)
       @db[:economy_balances].where(account_id: account_id, field: field.to_s).get(:balance) || 0
     end

@@ -48,6 +48,7 @@ module PEMK
       @encounters   = {}    # map_id => raw encounters hash
       @trainers_by_map = {} # map_id => frozen Array of [type, name, version]
       @gifts        = {}    # [map,event_id] => frozen gift/prize object (step 6 payout gate)
+      @shops        = {}    # [map,event_id] => frozen mart / bp_shop object (item authority)
       @loaded       = false
       load!(path, expected_version)
     end
@@ -180,6 +181,13 @@ module PEMK
       @gifts[[map_id, event_id]]
     end
 
+    # The export's record of a shop clerk: kind "mart" or "bp_shop", the items any of its
+    # stock lists names, the prices the event sets, and "dynamic" when a list is computed.
+    # -> frozen Hash | nil.
+    def shop_object(map_id, event_id)
+      @shops[[map_id, event_id]]
+    end
+
     # --- trainers (Layer D D4 rewards) --------------------------------------------
     # Does this export say where trainer battles start? A pre-D4 export does not.
     def trainers_known?
@@ -283,6 +291,7 @@ module PEMK
         @by_tile[key] = obj.freeze
         ev = obj["event_id"]
         @gifts[[map_id, ev]] = obj if %w[gift prize].include?(obj["kind"]) && ev.is_a?(Integer)
+        @shops[[map_id, ev]] = obj if %w[mart bp_shop].include?(obj["kind"]) && ev.is_a?(Integer)
       end
     end
 
@@ -369,6 +378,7 @@ module PEMK
       @encounters.freeze
       @trainers_by_map.freeze
       @gifts.freeze
+      @shops.freeze
     end
   end
 end

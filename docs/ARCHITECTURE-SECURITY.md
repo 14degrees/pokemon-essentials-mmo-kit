@@ -404,6 +404,23 @@ adds those classes to `PEMK_PEER_CLASSES` (server, comma-separated) and
 `PEMK::Config::PEER_CLASSES` (client). Whatever the setting, the texts another player
 wrote (nickname, original trainer, mail) reach this game without message codes.
 
+### Mart purchases and sales (`PEMK_SHOP_ENFORCE`)
+
+Off by default. A Mart used to be the client's alone: it added what it bought, took the
+money off itself, and a sale turned any item in the bag - made up or not - into money.
+
+- **`shadow`** — each purchase and sale is asked first. The server checks the clerk (a
+  Mart the world export knows), the item (in that clerk's stock, never free from a computed
+  one), the price (the catalogue's, or the one the event sets), and for a sale the item in
+  its bag record, and logs `WOULD-DENY`; the client still moves the money.
+- **`on`** — the server refuses what fails (`DENY`) and moves the money itself, in its
+  ledger (`shop:buy:ITEMxN`); the client adopts the balance it answers with. Nothing is
+  bought or sold without an answer.
+
+Items bought are not yet judged against the bag: that is the ledger step of the item
+authority design ([`ITEM-AUTHORITY-DESIGN.md`](ITEM-AUTHORITY-DESIGN.md)). The Battle
+Point shop is not gated yet.
+
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
 On by default (`off` turns it off). The swap is the server's, but the Pokemon itself

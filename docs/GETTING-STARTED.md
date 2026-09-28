@@ -191,6 +191,9 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
 4. `PEMK_GIFT_ENFORCE=shadow`, then `on` — events ask the server before they give an
    item, and a one-shot gift (a gym leader's TM) is paid once per account. In
    `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
+5. `PEMK_SHOP_ENFORCE=shadow`, then `on` — Mart purchases and sales are made by the
+   server: it checks the clerk's stock and the price, and takes or pays the money
+   itself. In `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
 
 A separate setting protects players from each other: `PEMK_PEER_CHECK=shadow`, then
 `on`, checks a Pokemon another player sends (a trade, a PvP team) before it is
