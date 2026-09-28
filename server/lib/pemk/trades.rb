@@ -59,6 +59,7 @@ module PEMK
         end
 
         @db[:monster_transfers].multi_insert(rows)                # UNIQUE(trade_id, uid) dedup
+        yield if block_given?                                     # the caller's rows, in the same commit
         result = [:ok, { a_recv: b_gives, b_recv: a_gives }]
       end
       result

@@ -140,7 +140,11 @@ module PEMK
         gave = Array(msg[:gave])
         obj  = @session[:their_obj]
         gave.each { |uid| PEMK::Monsters.remove_by_uid(uid) }
-        PEMK::Monsters.materialize(obj) if obj && recv.include?(obj.pemk_uid)
+        if obj && recv.include?(obj.pemk_uid) && PEMK::Monsters.materialize(obj)
+          # Before the checkpoint below: the server keeps the escrow until a save
+          # that follows this report lands.
+          (PEMK::TradeRedeliver.applied(msg[:trade_id]) rescue nil)
+        end
         name = @session[:partner_name]
         finish(_INTL("The trade with {1} is complete!", name))
         (PEMK::Sync.mark_mon rescue nil)

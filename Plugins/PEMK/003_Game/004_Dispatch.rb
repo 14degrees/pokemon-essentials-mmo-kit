@@ -57,6 +57,8 @@ module PEMK
         # tile it sends. Applied on the next safe overworld frame. Only arrives when
         # server enforcement is :on.
         PosCorrect.request(msg[:map], msg[:x], msg[:y])
+      when :trade_redeliver
+        TradeRedeliver.on_redeliver(msg)   # a traded Pokemon the save never got
       when :gift_grant, :gift_deny
         GiftClaim.on_reply(msg)          # step 6: the answer to a :gift_req (keyed by nonce)
       when :pickup_grant, :pickup_deny, :pickups_reset_ok, :pickups_reset_deny

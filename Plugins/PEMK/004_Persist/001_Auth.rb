@@ -16,7 +16,7 @@ module PEMK
   module Auth
     # What this client can apply, told to the server at login: it only sends what a
     # client says it can take (an older one never gets a :flag_repair).
-    CAPS = ["flag_repair"].freeze
+    CAPS = %w[flag_repair trade_redeliver].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 
@@ -173,6 +173,7 @@ module PEMK
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset
       (PEMK::GiftClaim.adopt_gate(reply[:gift_gate]) rescue nil)  # step 6: ask before a gift
       (PEMK::PeerPokemon.adopt_mode(reply[:peer_check]) rescue nil)  # a peer's Pokemon checked first
+      (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
@@ -212,6 +213,7 @@ module PEMK
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset
       (PEMK::GiftClaim.adopt_gate(reply[:gift_gate]) rescue nil)  # step 6: ask before a gift
       (PEMK::PeerPokemon.adopt_mode(reply[:peer_check]) rescue nil)  # a peer's Pokemon checked first
+      (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
@@ -220,6 +222,8 @@ module PEMK
       (PEMK::Flags.adopt_mode(reply[:flag_state]) rescue nil)                     # audit item 4: flag shadow
       (PEMK::Flags.adopt_policy(reply[:flag_policy]) rescue nil)   # build-time tier table (absent == local)
       (PEMK::Flags.note_facts(reply[:flag_facts]) rescue nil)      # applied after the save loads
+      (PEMK::TradeRedeliver.note_evict(reply[:mon_evict]) rescue nil)  # traded away while the link was down
+      (PEMK::TradeRedeliver.ask_owed rescue nil)
       :ok
     end
 

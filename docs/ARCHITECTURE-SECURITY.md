@@ -36,12 +36,12 @@ is Milestone 4.
 | **Badges** | client → **server ledger** | ⚠️ capped, not authored | the client computes the bitmask and pushes it on the `:econ` channel; the server enforces the cap, not the earning |
 | **Bag contents** | server snapshot | ✅ shape/caps only | can't hold impossible amounts, but see below |
 | **Pokémon identity & ownership** | server (UIDs) | ✅ yes | can't dupe — UID registry + ownership |
-| **Trades** | server | ✅ yes | can't dupe/steal — atomic CAS swap, rollback |
+| **Trades** | server | ✅ yes | can't dupe/steal — atomic CAS swap, rollback; a Pokémon the receiver never saved (a crash, a lost result) is sent again |
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
 | **Overworld movement / position** | client → **server-audited** | ✅ enforceable (M4-B) | no-clip / illegal-warp snapped back to last-good tile (opt-in flag; audit-only by default) |
 | **Item pickup (distance, existence)** | client → **server-granted** | ✅ enforceable (M4-C) | remote / duplicate pickups denied — distance gate + one-shot + server grant (opt-in flag) |
-| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C, `PEMK_FLAG_STATE`) | item balls are distance-gated + one-shot; NPC **gift** events are not gated: a re-farm is recorded, and with `PEMK_FLAG_STATE=on` a rewound self-switch comes back at the next login, but within one session the gift can still be claimed again |
-| **Story progression (switches, variables, self-switches)** | client → **server-shadowed** | ⚠️ partial (`PEMK_FLAG_STATE`) | a rollback of saved one-shot progression is detected (`shadow`) and undone at login (`on`); variable values and writes made during a session are still client-authored |
+| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C, `PEMK_GIFT_ENFORCE`) | item balls are distance-gated + one-shot; a one-shot NPC **gift** is paid once per account (`PEMK_GIFT_ENFORCE=on`), other gifts are recorded; the event's own conditions (a battle won, a switch on) still run on the client |
+| **Story progression (switches, variables, self-switches)** | client → **server-shadowed** | ⚠️ partial (`PEMK_FLAG_STATE`, `PEMK_FLAG_ENFORCE`) | a rollback of saved one-shot progression is detected (`shadow`) and undone at login (`on`); a tracked value edited in session is repaired (`PEMK_FLAG_ENFORCE=on`); writes through the game's own setters are trusted |
 | **Wild encounters / which Pokémon appears** | **server** | ✅ enforceable (M4-D2, `PEMK_BATTLE_ENFORCE_ENCOUNTERS=on`) | the server mints species/level/PID/IVs/shiny; the client builds what it is given |
 | **Catching** | **server** | ✅ enforceable (M4-D3, `PEMK_BATTLE_ENFORCE_CATCHES=on`) | the server runs the capture formula and rolls the shakes with SecureRandom, clamping every client input |
 | **Battle rewards (vs NPC)** | client → **server-bounded** | ✅ detection (M4-D4, `PEMK_BATTLE_ENFORCE_REWARDS`) | EXP/money beyond the closed-form envelope is flagged to the review queue |
@@ -403,6 +403,19 @@ The allow list is the party's own classes: `Pokemon`, `Pokemon::Move`,
 adds those classes to `PEMK_PEER_CLASSES` (server, comma-separated) and
 `PEMK::Config::PEER_CLASSES` (client). Whatever the setting, the texts another player
 wrote (nickname, original trainer, mail) reach this game without message codes.
+
+### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
+
+On by default (`off` turns it off). The swap is the server's, but the Pokemon itself
+comes from the partner's client and reaches the receiver's disk only with its next
+save: a crash in that second, or a result lost with the connection, used to lose it.
+The server now keeps the escrow the partner locked until a save that follows the
+receiver's report lands. After a login (once the save is loaded) and after a
+reconnect, the client asks what it is still owed; a Pokemon missing from its party
+and boxes is added back, with a message, and one it already holds is only
+acknowledged, so nothing is ever held twice. A reconnect also drops the Pokemon the
+account traded away. Only clients that say they can take one are sent one; each
+escrow is checked like any peer's Pokemon (above).
 
 Transport hardening is independent of the A–D gameplay ladder; both are needed for
 a real public deployment.
