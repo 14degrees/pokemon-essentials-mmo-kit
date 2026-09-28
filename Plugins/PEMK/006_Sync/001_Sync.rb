@@ -160,6 +160,10 @@ module PEMK
     # --- per-frame tick (from Pump): debounce + staleness cap ------------------
     def tick
       return unless dirty?
+      # Nothing leaves mid-battle: the EXP a battle (or a catch) gives must reach the
+      # server after the battle's end report, which opens the reward window it is
+      # judged against. The post-battle checkpoint flushes it all.
+      return if ($game_temp && $game_temp.in_battle rescue false)
 
       fc = frame
       quiescent = @last_change && (fc - @last_change) >= DEBOUNCE_FRAMES

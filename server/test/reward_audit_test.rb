@@ -128,6 +128,56 @@ class RewardAuditTest < Minitest::Test
     assert_nil detail
   end
 
+  # --- level items used outside battles ----------------------------------------------
+  # Curve n*100: min exp for old -> new is curve(new) - curve(old + 1) + 1.
+  def bag(candies, xs = 0); { RARECANDY: candies, EXPCANDYXS: xs }; end
+
+  def used(credit, before, after)
+    @ra.note_items(credit, before, now: @t)
+    @ra.note_items(credit, after, now: @t)
+  end
+
+  def test_a_used_rare_candy_pays_for_its_level
+    credit = PEMK::RewardAudit.new_credit
+    used(credit, bag(3), bag(2))
+    suspect, = @ra.check_levels(1, [["HOOTHOOT", 5, 6]], credit: credit, now: @t)
+    refute suspect
+    assert_equal 0, credit[:levels]
+  end
+
+  def test_a_candy_pays_for_one_level_only
+    credit = PEMK::RewardAudit.new_credit
+    used(credit, bag(3), bag(2))
+    suspect, = @ra.check_levels(1, [["HOOTHOOT", 5, 20]], credit: credit, now: @t)
+    assert suspect   # 6 -> 20 still needs EXP no window holds
+  end
+
+  def test_candies_that_appear_pay_for_nothing
+    credit = PEMK::RewardAudit.new_credit
+    used(credit, bag(0), bag(5))   # picked up or bought, not used
+    suspect, = @ra.check_levels(1, [["HOOTHOOT", 5, 6]], credit: credit, now: @t)
+    assert suspect
+  end
+
+  def test_exp_candies_pay_in_exp
+    credit = PEMK::RewardAudit.new_credit
+    used(credit, bag(0, 2), bag(0, 0))                                                 # 200 EXP
+    refute @ra.check_levels(1, [["HOOTHOOT", 5, 7]], credit: credit, now: @t).first   # needs 101
+    assert @ra.check_levels(1, [["HOOTHOOT", 7, 9]], credit: credit, now: @t).first   # 99 left, needs 101
+  end
+
+  def test_a_used_item_stays_credited_for_half_an_hour
+    credit = PEMK::RewardAudit.new_credit
+    used(credit, bag(1), bag(0))
+    assert @ra.check_levels(1, [["HOOTHOOT", 5, 6]], credit: credit, now: @t + 1_801).first
+  end
+
+  def test_the_first_bag_is_only_a_baseline
+    credit = PEMK::RewardAudit.new_credit
+    @ra.note_items(credit, bag(0), now: @t)   # the session's first snapshot
+    assert_equal 0, credit[:levels]
+  end
+
   def test_unjudgeable_jump_is_skipped_not_suspect
     # unknown species -> that jump is skipped; with no other need, not suspect
     suspect, = @ra.check_levels(1, [["MISSINGNO", 1, 50]], now: @t)

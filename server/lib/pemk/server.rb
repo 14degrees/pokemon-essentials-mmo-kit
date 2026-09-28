@@ -438,6 +438,11 @@ module PEMK
     def handle_inv(conn, env, account_id)
       bag = env[:bag]
       seq = env[:seq]
+      # D4: level items this snapshot shows used credit the next level jumps (inline,
+      # reactor thread, before the party projection of the same flush arrives).
+      if @reward_audit
+        @reward_audit.note_items((conn.data[:item_credit] ||= RewardAudit.new_credit), bag)
+      end
       @mailbox.submit(account_id) do
         status = @inventory.apply_inv(account_id, bag, seq)
         @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
@@ -587,7 +592,7 @@ module PEMK
 
       return if changes.empty?
 
-      suspect, detail = @reward_audit.check_levels(account_id, changes)
+      suspect, detail = @reward_audit.check_levels(account_id, changes, credit: conn.data[:item_credit])
       if suspect
         @log.call("reward: account #{account_id} SUSPECT level jump — #{detail}")
         flag_anomaly(account_id, :reward_level)
@@ -893,7 +898,7 @@ module PEMK
       level   = env[:level]
       mints   = conn.data[:enc_mints]
       mint    = mints.is_a?(Array) &&
-                mints.find { |m| m["species"] == species && m["level"] == level }
+                mints.find { |m| !m["caught"] && m["species"] == species && m["level"] == level }
       unless mint
         @log.call("catch: account #{account_id} req #{species}@#{level.inspect} has NO stashed mint -> local")
         return reply(conn, type: :catch_deny, seq: seq, reason: "no_encounter")
@@ -915,7 +920,11 @@ module PEMK
       return reply(conn, type: :catch_deny, seq: seq, reason: "unknown_species") unless verdict
 
       if verdict[:caught]
-        mints.delete_at(mints.index(mint))   # one successful catch per mint
+        # One successful catch per mint. The mint stays stashed, marked, because the
+        # battle's end report still has to prove this foe: it opens the reward window
+        # the catch's EXP is judged against (dropping it made every level-up from a
+        # catch a SUSPECT level jump).
+        mint["caught"] = true
         # D3.2: stamp the persisted roll as caught (mailbox FIFO -> after its record).
         pid = mint["pid"]
         lvl = mint["level"]
