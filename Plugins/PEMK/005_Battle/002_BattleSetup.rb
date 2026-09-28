@@ -52,9 +52,10 @@ module PEMK
         PEMK.log("battle: unsolicited team from #{msg[:from].inspect} -> ignored")
         return
       end
-      # Reconstruct the opponent party from the opaque body (our own decode, on the
-      # addressed frame). Legacy :party kept as a fallback during migration.
-      party = (msg[:_body] ? (Marshal.load(msg[:_body]) rescue nil) : msg[:party])
+      # Reconstruct the opponent party from the opaque body, checked first (PeerPokemon):
+      # another client built it. (An envelope cannot carry Pokemon, so the old :party
+      # fallback could only ever hand the battle primitives; it is gone.)
+      party = PEMK::PeerPokemon.load(msg[:_body], "battle team")
       return unless party.is_a?(Array) && !party.empty?
       remote = { :name => msg[:name] || "?", :party => party, :id => msg[:from],
                  :trainer_type => msg[:trainer_type] }

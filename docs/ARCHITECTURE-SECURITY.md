@@ -381,5 +381,28 @@ All of the above assumes the bytes on the wire are the client's. They're sent ov
   client `Marshal.load`s its own save and a peer's battle team, so a MITM that can
   rewrite those bytes is a client-side remote-code-execution risk. TLS closes that.
 
+### A Pokemon another player built (`PEMK_PEER_CHECK`)
+
+A trade's escrow and a PvP team travel from one client to another as Marshal, and
+the receiver loads them. Loading attacker-made Marshal can build any class the game
+has loaded, and even a real `Pokemon` can carry anything in its instance variables.
+Off by default.
+
+- **`shadow`** — the server reads every relayed body without loading it
+  (`MarshalScan`: it walks the bytes, checks their lengths and nesting, and names the
+  classes they refer to) and logs `WOULD-REFUSE` for one that names a class outside
+  the allow list. Clients run the same checks and log them.
+- **`on`** — such a body is dropped by the server (`REFUSED`, and a D5 `peer_body`
+  report), and refused again by the receiving client before anything is built. The
+  client then checks the shape of every Pokemon it loaded (species, moves, stats,
+  owner, mail... of the types the game relies on) and refuses one that does not fit:
+  the trade is cancelled, the battle does not start.
+
+The allow list is the party's own classes: `Pokemon`, `Pokemon::Move`,
+`Pokemon::Owner`, `Mail`. A game whose plugins keep their own objects in a Pokemon
+adds those classes to `PEMK_PEER_CLASSES` (server, comma-separated) and
+`PEMK::Config::PEER_CLASSES` (client). Whatever the setting, the texts another player
+wrote (nickname, original trainer, mail) reach this game without message codes.
+
 Transport hardening is independent of the A–D gameplay ladder; both are needed for
 a real public deployment.

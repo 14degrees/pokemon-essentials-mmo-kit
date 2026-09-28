@@ -110,7 +110,7 @@ module PEMK
         @session[:phase] = :confirming if @session[:my_uid] && @session[:phase] == :waiting_offer
       when :trade_lock
         return unless mine?(msg)
-        obj = msg[:_body] ? (Marshal.load(msg[:_body]) rescue nil) : nil
+        obj = PEMK::PeerPokemon.load(msg[:_body], "trade escrow")
         obj = obj[0] if obj.is_a?(Array)
         # Cross-check the escrow object against the announced offer: same uid AND
         # species -> a scammer can't lock a different/fabricated mon than offered.

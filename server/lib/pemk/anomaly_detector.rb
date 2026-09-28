@@ -31,6 +31,8 @@ module PEMK
                                      # (a lone no-fault crash-restore is 1 and won't surface)
       "mon_counterfeit"     => 2,    # a mon's locked traits (IVs/shiny/gender) changed
       "gift_refarm"         => 2,    # the same one-shot event granting the same item again
+      "peer_body"           => 1,    # a body for another player naming a class no party holds:
+                                     # an honest client never sends one
       "flag_rewind"         => 2,    # self-switches cleared en masse = a save rollback that
                                      # re-arms every one-shot event (NPC gifts, TMs, key items)
       "rng_desync"          => 3     # an `on` battle record's draws refuted by the seed walk

@@ -59,6 +59,12 @@ module PEMK
     # is owed and added once the grant comes (nothing is lost, nothing given unasked).
     GIFT_GRANT_TIMEOUT = 3.0
 
+    # The classes a Pokemon from another player may contain (a trade's escrow, a PvP
+    # team). With the server's PEMK_PEER_CHECK on, bytes naming anything else are
+    # refused before they are loaded. A game whose plugins keep their own objects in
+    # a Pokemon adds those classes here (and to the server's PEMK_PEER_CLASSES).
+    PEER_CLASSES = %w[Pokemon Pokemon::Move Pokemon::Owner Mail].freeze
+
     # M4 Layer D D2: max seconds to block for a server wild-encounter mint before falling
     # back to a local roll (encounters must keep happening on a laggy/dropped link). Short —
     # this stalls entering every wild battle in `on` mode, so keep it tight.

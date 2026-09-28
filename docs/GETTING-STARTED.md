@@ -192,6 +192,11 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    item, and a one-shot gift (a gym leader's TM) is paid once per account. In
    `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
 
+A separate setting protects players from each other: `PEMK_PEER_CHECK=shadow`, then
+`on`, checks a Pokemon another player sends (a trade, a PvP team) before it is
+loaded. If your plugins store their own objects inside a Pokemon, add those classes
+to `PEMK_PEER_CLASSES` first, or `shadow` will name them in `WOULD-REFUSE` lines.
+
 There is nothing to declare in RPG Maker: which switches count as progression is
 worked out from your own events. After updating the kit, do one debug launch
 before restarting the server: the export picks up the new format on its own.
