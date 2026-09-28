@@ -139,7 +139,10 @@ module PEMK
         recv = Array(msg[:recv])
         gave = Array(msg[:gave])
         obj  = @session[:their_obj]
-        gave.each { |uid| PEMK::Monsters.remove_by_uid(uid) }
+        gave.each do |uid|
+          settle_given(uid) if uid == @session[:my_uid]
+          PEMK::Monsters.remove_by_uid(uid)
+        end
         if obj && recv.include?(obj.pemk_uid) && PEMK::Monsters.materialize(obj)
           # Before the checkpoint below: the server keeps the escrow until a save
           # that follows this report lands.
@@ -233,6 +236,7 @@ module PEMK
           PEMK.send_message({ :type => :trade_lock, :from => PEMK.self_id, :to => @session[:partner],
                               :trade_id => @session[:trade_id], :uid => @session[:my_uid] }, body)
           @session[:my_locked] = true
+          @session[:my_item] = @session[:my_pkmn].item_id   # the escrow holds this
           @session[:phase] = :locked_waiting
           @session[:since] = now
           maybe_commit
@@ -257,11 +261,53 @@ module PEMK
       return unless @session && @session[:my_locked] && @session[:their_obj]
       return if @session[:phase] == :committing
 
+      unless offer_unchanged?
+        relay(:trade_cancel)
+        finish_local(_INTL("Your Pokémon changed after the trade was locked. Trade cancelled."))
+        return
+      end
+
       PEMK.send_message({ :type => :trade_commit, :trade_id => @session[:trade_id],
                           :partner => @session[:partner], :give => [@session[:my_uid]],
                           :recv => [@session[:their_uid]] })
       @session[:phase] = :committing
       @session[:since] = now
+    end
+
+    # The partner receives the escrow: the Pokemon as it was when it was locked. Until
+    # the commit it must still be in the party or a box, holding the same item, or an
+    # item taken off it meanwhile would exist twice.
+    def offer_unchanged?
+      where, pkmn = PEMK::Monsters.locate(@session[:my_uid])
+      %i[party box].include?(where) && pkmn.item_id == @session[:my_item]
+    rescue StandardError
+      false
+    end
+
+    # The swap is done. If the Pokemon given away changed its item after the commit
+    # (while the partner decided), the item it holds now comes back to the bag and the
+    # locked one leaves this game with the escrow.
+    def settle_given(uid)
+      pkmn = PEMK::Monsters.find_by_uid(uid)
+      sent = @session[:my_item]
+      return unless pkmn && pkmn.item_id != sent
+
+      now_held = pkmn.item_id
+      pkmn.item = nil
+      $bag.add(now_held) if now_held
+      PEMK.log("trade: the given Pokemon's item changed after the commit (#{sent.inspect} -> #{now_held.inspect})")
+      return if sent.nil? || take_one(sent)
+
+      PEMK.log("trade: #{sent} left with the escrow but is nowhere here")
+    rescue StandardError => e
+      PEMK.log("trade: settle error #{e.class}: #{e.message}")
+    end
+
+    def take_one(item)
+      return true if $bag && $bag.has?(item) && $bag.remove(item)
+
+      st = $PokemonGlobal && $PokemonGlobal.pcItemStorage
+      !!(st && st.quantity(item) > 0 && st.remove(item))
     end
 
     def choose_offer_mon
