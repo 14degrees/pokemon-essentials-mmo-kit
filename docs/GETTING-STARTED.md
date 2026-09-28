@@ -192,9 +192,10 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    item, and a one-shot gift (a gym leader's TM) is paid once per account, on its
    event's own map. In `shadow` the log shows `WOULD-DENY` lines; honest play should
    produce none.
-5. `PEMK_SHOP_ENFORCE=shadow`, then `on` — Mart purchases and sales are made by the
-   server: it checks the clerk's stock and the price, and takes or pays the money
-   itself. In `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
+5. `PEMK_SHOP_ENFORCE=shadow`, then `on` — Mart purchases and sales, and Battle Point
+   exchanges, are made by the server: it checks the clerk's stock and the price, and
+   takes or pays the money (or the BP) itself. In `shadow` the log shows `WOULD-DENY`
+   lines; honest play should produce none.
 6. `PEMK_ITEM_AUTHORITY=shadow` — every item the player gains must come from a source
    the server knows (a granted pickup, a paid gift, a purchase, a trade). The log shows
    `UNEXPLAINED` lines for the others. Turn steps 4 and 5 and `PEMK_PICKUP_ENFORCE` on

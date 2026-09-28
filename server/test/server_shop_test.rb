@@ -27,21 +27,22 @@ class ServerShopTest < Minitest::Test
     "maps" => { "15" => { "name" => "Mart", "width" => 10, "height" => 10, "objects" => [
       { "kind" => "mart", "items" => %w[POTION POKEBALL], "prices" => { "POKEBALL" => 150 }, "dynamic" => false,
         "x" => 2, "y" => 2, "event_id" => 5 },
-      { "kind" => "mart", "items" => [], "prices" => {}, "dynamic" => true, "x" => 4, "y" => 2, "event_id" => 6 }
+      { "kind" => "mart", "items" => [], "prices" => {}, "dynamic" => true, "x" => 4, "y" => 2, "event_id" => 6 },
+      { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "dynamic" => false, "x" => 6, "y" => 2, "event_id" => 7 }
     ] } }
   ))
   WORLD.flush
 
   BATTLE = Tempfile.new(["pemk_battle", ".json"])
-  def self.item(price, sell, important: false)
+  def self.item(price, sell, important: false, bp: 1)
     { "pocket" => 2, "is_ball" => false, "is_berry" => false, "is_machine" => false, "can_hold" => !important,
-      "move" => nil, "price" => price, "sell_price" => sell, "bp_price" => 1, "important" => important,
+      "move" => nil, "price" => price, "sell_price" => sell, "bp_price" => bp, "important" => important,
       "consumable" => true }
   end
   # The real export, with the prices this test relies on (an older export has none).
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["items"].merge!("POTION" => item(300, 150), "POKEBALL" => item(200, 100), "MASTERBALL" => item(0, 0),
-                      "BICYCLE" => item(0, 0, important: true))
+                      "BICYCLE" => item(0, 0, important: true), "PROTEIN" => item(10_000, 5_000, bp: 16))
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
 
@@ -106,6 +107,23 @@ class ServerShopTest < Minitest::Test
     recv_type(s, :shop_grant, :shop_deny)
   end
 
+def bp_player(points: 50)
+  s, lo = player
+  send_env(s, { type: :econ, field: :battle_points, value: points, seq: 1 })
+  recv_type(s, :econ_ack, :econ_rej)
+  [s, lo]
+end
+
+def bp_ask(s, item, qty, unit, event: 7, seq: 1)
+  send_env(s, { type: :shop_req, op: :buy, item: item, quantity: qty, unit_price: unit, bp: true, map: 15,
+                event: event, seq: seq })
+  recv_type(s, :shop_grant, :shop_deny)
+end
+
+def bp(lo)
+  @db[:economy_balances].where(account_id: lo[:account_id], field: "battle_points").get(:balance)
+end
+
   def money(lo)
     @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
   end
@@ -161,4 +179,27 @@ class ServerShopTest < Minitest::Test
     assert_equal [-1, 1, 2], @db[:economy_ledger].where(account_id: lo[:account_id]).order(:seq).select_map(:seq)
     assert_equal 2, @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:last_seq)
   end
+
+# The Battle Point exchange: the same, in BP.
+def test_a_bp_exchange_is_made_by_the_server
+  start_server
+  s, lo = bp_player
+  assert_equal true, lo[:bp_shop_gate]
+  r = bp_ask(s, "PROTEIN", 2, 16)
+  assert_equal [:shop_grant, 18], [r[:type], r[:balance]]
+  assert_equal [18, 1000], [bp(lo), money(lo)], "BP moved, no money"
+  assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], reason: "bpshop:buy:PROTEINx2").count
+  assert_equal "bp", bp_ask(s, "PROTEIN", 2, 16, seq: 2)[:reason], "18 BP buy one, not two"
+end
+
+def test_the_exchange_clerk_and_price_are_checked
+  start_server
+  s, = bp_player
+  assert_equal "not_a_shop", bp_ask(s, "POTION", 1, 300, event: 5)[:reason], "a Mart is not the exchange"
+  assert_equal "not_sold", bp_ask(s, "POTION", 1, 1, seq: 2)[:reason]
+  assert_equal "price", bp_ask(s, "PROTEIN", 1, 1, seq: 3)[:reason]
+  send_env(s, { type: :shop_req, op: :sell, item: "PROTEIN", quantity: 1, unit_price: 8, bp: true, map: 15,
+                event: 7, seq: 4 })
+  assert_equal "bad", recv_type(s, :shop_grant, :shop_deny)[:reason], "the exchange buys nothing back"
+end
 end

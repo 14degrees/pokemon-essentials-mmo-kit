@@ -141,7 +141,7 @@ module PEMK
       end
 
       def trainer_info
-        { "name" => $player.name, "money" => $player.money,
+        { "name" => $player.name, "money" => $player.money, "battle_points" => $player.battle_points,
           "badges" => ($player.badge_count rescue nil) }
       end
 

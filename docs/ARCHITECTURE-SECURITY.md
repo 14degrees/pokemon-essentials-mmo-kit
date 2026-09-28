@@ -428,8 +428,13 @@ money off itself, and a sale turned any item in the bag - made up or not - into 
   ledger (`shop:buy:ITEMxN`); the client adopts the balance it answers with. Nothing is
   bought or sold without an answer.
 
-A purchase the server made or approved also explains its items (and the Premier Balls the
-engine adds) to the item ledger below. The Battle Point shop is not gated yet.
+The Battle Point exchange (`pbBattlePointShop`) is gated the same way under the same
+setting: its clerk, the item in its stock and the BP price (the catalogue's or the one the
+event sets) are checked, and in `on` the server takes the BP from its ledger
+(`bpshop:buy:ITEMxN`). The exchange buys nothing back. The server says so at login
+(`bp_shop_gate`), so a newer client never sends a BP purchase to a server that would take
+it for a Mart one. A purchase the server made or approved also explains its items (and the
+Premier Balls a Mart adds) to the item ledger below.
 
 ### Where an item came from (`PEMK_ITEM_AUTHORITY`)
 
