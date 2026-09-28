@@ -14,7 +14,7 @@ module PEMK
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
-                :shop_enforce, :item_authority, :item_local
+                :shop_enforce, :item_authority, :item_local, :item_grace
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -190,6 +190,11 @@ module PEMK
       # Items the game produces in ways the exports cannot see (a plugin's own code, an
       # event whose item is computed): recorded, never judged. Comma-separated ids.
       @item_local = env.fetch("PEMK_ITEM_LOCAL", "").to_s.split(",").map { |i| i.strip.upcase }.reject(&:empty?).freeze
+      # How long an unexplained increase waits for its source before its verdict (seconds;
+      # 10 to 3600, default 120). Shorter only for tests: a pickup's report comes after its
+      # message closes.
+      raw = env.fetch("PEMK_ITEM_GRACE_SEC", "").to_s.strip
+      @item_grace = raw.match?(/\A\d+\z/) ? raw.to_i.clamp(10, 3600) : 120
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

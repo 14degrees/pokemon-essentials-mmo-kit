@@ -17,7 +17,8 @@ module PEMK
     # What this client can apply, told to the server at login: it only sends what a
     # client says it can take (an older one never gets a :flag_repair). gift_pos: it
     # sends where it stands before it asks for a gift, so it can be judged by place.
-    CAPS = %w[flag_repair trade_redeliver gift_pos].freeze
+    # inv_correct: it takes back the items the server could not account for (E4).
+    CAPS = %w[flag_repair trade_redeliver gift_pos inv_correct].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 
@@ -178,6 +179,7 @@ module PEMK
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
       (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
+      (PEMK::ItemCorrect.reset rescue nil)   # E4: a waiting correction is sent again, or the login restore did it
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
@@ -220,6 +222,7 @@ module PEMK
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
       (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
+      (PEMK::ItemCorrect.reset rescue nil)   # E4: a waiting correction is sent again, or the login restore did it
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode

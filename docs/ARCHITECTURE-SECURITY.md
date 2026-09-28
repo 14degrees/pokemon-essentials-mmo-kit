@@ -478,7 +478,22 @@ and an item the engine swaps for its twin (the DNA Splicers and their used form,
 Exp. All switched off) counts as one.
 
 - **`shadow`** — judges and reports; the record adopts every snapshot.
-- **`on`** — enforcement (step E4) is not built yet: `on` runs as `shadow`.
+- **`on`** — takes back what it cannot explain (E4). Honoured only with the pickup, gift
+  and shop gates `on`, trade redelivery, the full record and complete exports; otherwise
+  the boot log says what is missing and the server runs `shadow`. An unexplained increase
+  that outlives its grace is *owed*: the client (one recent enough to say `inv_correct`)
+  is sent the owed units, bound to the bag snapshot the server judged last, and takes
+  them off on a free overworld frame - bag, then PC, mailbox, held items - only while
+  that snapshot is still its latest and nothing changed since; after every snapshot it
+  judges, the server sends the correction again until a decrease settles it. A late
+  report never pays an owed item back. Nothing rides on owed units: a sale of them is
+  refused, and a trade whose Pokemon holds an item its sender's record does not
+  recognize is refused (`item`); with `PEMK_BATTLE_ENFORCE_CATCHES=on`, a judged ball the
+  server does not recognize (thrown while some of it was unexplained, or never shown in the
+  possession) breaks at once. A key item is never taken back, only reported. A
+  Pokemon that drops out of the snapshots while the registry still gives it to the
+  account keeps its item aside: its drop settles nothing, its return is no increase.
+  `PEMK_ITEM_GRACE_SEC` (default 120) sets the grace.
 
 Only **tracked** items are judged. An item is tracked when every way the game can produce
 it leaves a credit under the gates that are on; it is **local** - recorded, never judged -
