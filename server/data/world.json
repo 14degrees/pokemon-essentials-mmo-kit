@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-28T20:04:16",
+  "generated_at": "2026-09-28T20:21:30",
   "maps": {
     "1": {
       "name": "Intro",
@@ -3782,5 +3782,18 @@
     1,
     9,
     7
-  ]
+  ],
+  "item_sources": {
+    "events": [
+      {"map": 5, "event": 10, "calls": ["computed"], "items": ["REDAPRICORN", "YELLOWAPRICORN", "BLUEAPRICORN", "GREENAPRICORN", "PINKAPRICORN", "WHITEAPRICORN", "BLACKAPRICORN"], "unbounded": false},
+      {"map": 6, "event": 2, "calls": ["computed"], "items": ["REDAPRICORN", "LEVELBALL", "YELLOWAPRICORN", "MOONBALL", "BLUEAPRICORN", "LUREBALL", "GREENAPRICORN", "FRIENDBALL", "PINKAPRICORN", "LOVEBALL", "WHITEAPRICORN", "FASTBALL", "BLACKAPRICORN", "HEAVYBALL"], "unbounded": false},
+      {"map": 13, "event": 17, "calls": ["computed"], "items": ["MASTERBALL", "MAXREVIVE", "EXPSHARE", "PPUP", "ULTRABALL"], "unbounded": false},
+      {"map": 13, "event": 28, "calls": ["pbBuyPrize"], "items": ["SMOKEBALL", "MIRACLESEED", "CHARCOAL", "MYSTICWATER", "YELLOWFLUTE"], "unbounded": false},
+      {"map": 13, "event": 30, "calls": ["pbBuyPrize"], "items": ["TM13", "TM23", "TM24", "TM30", "TM35"], "unbounded": false},
+      {"map": 19, "event": 2, "calls": ["$bag.add"], "items": ["FRESHWATER", "SODAPOP", "LEMONADE"], "unbounded": false},
+      {"map": 30, "event": 2, "calls": ["computed"], "items": ["FIRESTONE", "THUNDERSTONE", "WATERSTONE", "LEAFSTONE", "MOONSTONE", "SUNSTONE", "DUSKSTONE", "DAWNSTONE", "SHINYSTONE", "OVALSTONE", "EVERSTONE", "SITRUSBERRY", "SHEDSHELL"], "unbounded": false}
+    ],
+    "berry_plants": true,
+    "mining": true
+  }
 }

@@ -54,7 +54,9 @@ module PEMK
         "egg_moves"        => sp.egg_moves.map(&:to_s),
         "prev_species"     => (prev && prev.to_s),    # immediate pre-evolution id (String), or null
         "minimum_level"    => sp.minimum_level,
-        "flags"            => sp.flags.map(&:to_s)    # species flags (UltraBeast, ... — D3 catch rules)
+        "flags"            => sp.flags.map(&:to_s),   # species flags (UltraBeast, ... — D3 catch rules)
+        # Item authority: what a wild one may hold (caught with it, or stolen from it).
+        "wild_items"       => (sp.wild_item_common + sp.wild_item_uncommon + sp.wild_item_rare).map(&:to_s).uniq
       }
     end
 
@@ -141,13 +143,20 @@ module PEMK
     end
 
     # Item authority: the engine rules that hand out items, so the server can tell them
-    # from items that came from nowhere - the PC item storage's start items, and the
-    # Premier Balls a Mart adds to a large ball purchase.
+    # from items that came from nowhere - the PC item storage's start items, the Premier
+    # Balls a Mart adds to a large ball purchase, and the tables items come from without
+    # any request: the Pickup ability, Honey Gather and the mining game.
     def item_rules
       meta = (GameData::Metadata.get rescue nil)
+      pickup = (defined?(PICKUP_COMMON_ITEMS) ? PICKUP_COMMON_ITEMS : []) +
+               (defined?(PICKUP_RARE_ITEMS) ? PICKUP_RARE_ITEMS : [])
+      mining = defined?(MiningGameScene::ITEMS) ? MiningGameScene::ITEMS.map { |e| e[0] } : []
       {
         "start_item_storage"       => (meta ? Array(meta.start_item_storage).map(&:to_s) : []),
-        "more_bonus_premier_balls" => !!Settings::MORE_BONUS_PREMIER_BALLS
+        "more_bonus_premier_balls" => !!Settings::MORE_BONUS_PREMIER_BALLS,
+        "pickup_items"             => pickup.map(&:to_s).uniq,
+        "honey_gather"             => (GameData::Ability.exists?(:HONEYGATHER) ? ["HONEY"] : []),
+        "mining_items"             => mining.map(&:to_s).uniq
       }
     end
 

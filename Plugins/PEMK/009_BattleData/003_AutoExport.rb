@@ -65,7 +65,8 @@ module PEMK
     # source name simply doesn't contribute (stale? checks File.exist?).
     def world_sources
       ["Data/MapInfos.rxdata", "Data/map_connections.dat", "Data/map_metadata.dat",
-       "Data/Tilesets.rxdata"] + (Dir.glob("Data/Map[0-9]*.rxdata") rescue []) + exporter_sources
+       "Data/Tilesets.rxdata", "Data/CommonEvents.rxdata"] + (Dir.glob("Data/Map[0-9]*.rxdata") rescue []) +
+        exporter_sources
     end
 
     # battle_data.json derives from the compiled GameData .dat files it walks.
