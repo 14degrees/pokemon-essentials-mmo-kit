@@ -59,9 +59,11 @@ module Autotest
     end
 
     # A window on a fresh account, launched on first use.
-    def player(key)
+    # +as+: another player's key, to log into that player's account from this window.
+    def player(key, as: nil)
+      account = as || key
       @players[key] ||= Player.new(self, key.to_s, instance: "at#{@index}#{key}",
-                                   email: "#{@run_ctx.run_id}-#{@index}-#{key}@autotest.local")
+                                   email: "#{@run_ctx.run_id}-#{@index}-#{account}@autotest.local")
                               .launch(fresh: true)
     end
 
