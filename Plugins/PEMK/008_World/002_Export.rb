@@ -118,8 +118,12 @@ module PEMK
       script = event_script(event)
       return nil unless script
 
-      if (m = script.match(/pbItemBall\(\s*:([A-Za-z0-9_]+)/))
-        { :kind => "item", :item => m[1], :x => event.x, :y => event.y, :event_id => event.id }
+      if (m = script.match(/pbItemBall\(\s*:([A-Za-z0-9_]+)\s*(?:,\s*(\d+)\s*)?\)/) ||
+              script.match(/pbItemBall\(\s*:([A-Za-z0-9_]+)/))
+        { :kind => "item", :item => m[1], :quantity => (m[2] || 1).to_i,
+          :x => event.x, :y => event.y, :event_id => event.id }
+      elsif (shop = shop_facts(script))
+        shop.merge(:x => event.x, :y => event.y, :event_id => event.id)
       elsif (items = script.scan(/pbReceiveItem\(\s*:([A-Za-z0-9_]+)/).flatten).any?
         # More than one branch means the event picks a reward, so it is a PRIZE, not a
         # one-shot gift. The Game Corner lottery is the case: five tiers, and taking the
@@ -129,6 +133,33 @@ module PEMK
         { :kind => kind, :item => items.first, :items => items.uniq,
           :x => event.x, :y => event.y, :event_id => event.id }.merge(gift_facts(event, script))
       end
+    rescue
+      nil
+    end
+
+    # Item authority: a clerk's stock. Every literal list its Mart or Battle Point shop
+    # call is given, merged (badge branches each hand the Mart a longer list), and the
+    # prices the event sets itself (setPrice). A computed list makes the stock unknown.
+    # -> { :kind => "mart" | "bp_shop", :items =>, :prices =>, :dynamic => } | nil
+    def shop_facts(script)
+      kind = if script.include?("pbPokemonMart(") then "mart"
+             elsif script.include?("pbBattlePointShop(") then "bp_shop"
+             end
+      return nil unless kind
+
+      call = kind == "mart" ? "pbPokemonMart" : "pbBattlePointShop"
+      items = []
+      dynamic = false
+      script.scan(/#{call}\(\s*(\[[^\]]*\]|[^,)\s]+)/m) do |(arg)|
+        if arg.start_with?("[")
+          items.concat(arg.scan(/:([A-Za-z0-9_]+)/).flatten)
+        else
+          dynamic = true
+        end
+      end
+      prices = {}
+      script.scan(/setPrice\(\s*:([A-Za-z0-9_]+)\s*,\s*(\d+)/) { |item, price| prices[item] = price.to_i }
+      { :kind => kind, :items => items.uniq, :prices => prices, :dynamic => dynamic }
     rescue
       nil
     end
