@@ -219,7 +219,9 @@ module PEMK
       # Step 6: the server settles gift grants with the bag snapshots that follow them,
       # so none leaves while a gift is between its request and its :gift_applied, and
       # the owed gifts reach a new connection first.
-      if @inv_dirty && !(PEMK::GiftClaim.holding? rescue false)
+      # Nor while an item moves between two stores in two steps (ItemTransit): the bag
+      # would show it while the Pokemon still holds it.
+      if @inv_dirty && !(PEMK::GiftClaim.holding? rescue false) && !(PEMK::Inventory.atomic? rescue false)
         (PEMK::GiftClaim.before_bag_flush rescue nil)
         bag = PEMK::Inventory.full_bag
         if bag

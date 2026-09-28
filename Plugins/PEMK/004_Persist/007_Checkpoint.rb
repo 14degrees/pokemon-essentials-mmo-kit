@@ -286,6 +286,9 @@ module PEMK
       return false if gt.in_battle || gt.player_transferring || gt.transition_processing || gt.in_mini_update
       return false if pbMapInterpreterRunning?
       return false if (PEMK::Trade.busy? rescue false)
+      # An item halfway between two stores, or a Pokemon in the box screen's hand: the
+      # last good save goes out instead of this half-moved state.
+      return false if (PEMK::Inventory.atomic? rescue false)
       return false if $game_system&.save_disabled || (pbInSafari? rescue false) || (pbInBugContest? rescue false)
       return false if ($PokemonGlobal&.challenge&.pbInChallenge? rescue false)
       true
