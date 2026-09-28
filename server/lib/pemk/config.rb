@@ -13,7 +13,8 @@ module PEMK
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
-                :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record
+                :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
+                :shop_enforce
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -170,6 +171,13 @@ module PEMK
       # channel let a crash duplicate a withdrawn or taken item). full by default (a dupe
       # fix, and only for clients that send those stores); bag = the bag alone, as before.
       @item_record = env.fetch("PEMK_ITEM_RECORD", "full").to_s.strip.downcase == "bag" ? :bag : :full
+
+      # Item authority E3: Mart purchases and sales. off = the client decides alone;
+      # shadow = it asks, the server judges the clerk's stock, the price and the money and
+      # logs what it WOULD refuse, granting everything; on = the server refuses and moves
+      # the money itself.
+      smode = env.fetch("PEMK_SHOP_ENFORCE", "off").to_s.strip.downcase
+      @shop_enforce = %w[off shadow on].include?(smode) ? smode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
