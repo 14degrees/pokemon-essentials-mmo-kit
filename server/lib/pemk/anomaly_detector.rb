@@ -40,9 +40,11 @@ module PEMK
       "rng_desync"          => 3,    # an `on` battle record's draws refuted by the seed walk
                                      # (D7) — fabricated rolls, or a fork drawing differently;
                                      # 3 tolerates version-drift accidents before surfacing
-      "item_unexplained"    => 3     # item increases no server-known source explained (E2);
+      "item_unexplained"    => 3,    # item increases no server-known source explained (E2);
                                      # one per account and sweep, so 3 tolerates a source the
                                      # server does not model yet
+      "item_correction_ignored" => 1 # a correction sent half an hour ago and still not applied
+                                     # (E4): an honest client applies it on its next free frame
     }.freeze
 
     FABRICATED_WILD_MIN = 5   # >= this many client-origin wild-table mons to report
