@@ -194,6 +194,11 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
 5. `PEMK_SHOP_ENFORCE=shadow`, then `on` — Mart purchases and sales are made by the
    server: it checks the clerk's stock and the price, and takes or pays the money
    itself. In `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
+6. `PEMK_ITEM_AUTHORITY=shadow` — every item the player gains must come from a source
+   the server knows (a granted pickup, a paid gift, a purchase, a trade). The log shows
+   `UNEXPLAINED` lines for the others. Turn steps 4 and 5 and `PEMK_PICKUP_ENFORCE` on
+   first: an item from a gate that is off cannot be explained. Berries and items won in
+   battle are not modelled yet and still show up.
 
 A separate setting protects players from each other: `PEMK_PEER_CHECK=shadow`, then
 `on`, checks a Pokemon another player sends (a trade, a PvP team) before it is

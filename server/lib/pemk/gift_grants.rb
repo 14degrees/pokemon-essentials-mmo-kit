@@ -31,8 +31,8 @@ module PEMK
       @log = logger || ->(_m) {}
     end
 
-    # -> [:grant, nil, 0] | [:deny, "already_claimed", times refused]. Serialized per
-    # account on the mailbox.
+    # -> [:grant, nil, 0] | [:grant, "again", 0] (the same request, its reply lost) |
+    # [:deny, "already_claimed", times refused]. Serialized per account on the mailbox.
     def request(account_id, map, event, item, quantity, nonce, conn:, now: Time.now)
       key = { account_id: account_id, map: map, event: event }
       row = @db[:gift_grants].where(key).first
@@ -57,7 +57,7 @@ module PEMK
       if row[:state] == "granted" && row[:nonce] == nonce
         # The same request again: its reply was lost with a socket. It rides this one now.
         @db[:gift_grants].where(key).update(conn: conn, updated_at: now)
-        return [:grant, nil, 0]
+        return [:grant, "again", 0]
       end
 
       denied = row[:denied] + 1

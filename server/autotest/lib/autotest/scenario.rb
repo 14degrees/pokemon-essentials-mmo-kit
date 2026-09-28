@@ -126,6 +126,27 @@ module Autotest
       db[:accounts].where(email: player.email).get(:id)
     end
 
+    # Item authority E2: the items a scenario hands out itself are credited, so only
+    # the game's own sources are judged.
+    def credit_setup(player, item, qty)
+      return unless item_authority?
+
+      PEMK::ItemLedger.new(db).credit(account_id(player), item.to_s.upcase, [qty.to_i, 1].max, source: "autotest")
+    end
+
+    def item_authority?
+      mode = @flags.transform_keys(&:to_s).fetch("PEMK_ITEM_AUTHORITY", ENV["PEMK_ITEM_AUTHORITY"])
+      %w[shadow on].include?(mode.to_s.strip.downcase)
+    end
+
+    # The increases the item ledger could not explain so far (E2 debts), as
+    # [[item, count], ...]. A debt is settled UNEXPLAINED once its grace is over.
+    def unexplained_items(player)
+      db[:item_credits].where(account_id: account_id(player)).where(Sequel[:qty] < 0)
+                       .group(:item).order(:item).select_map([:item, Sequel.function(:sum, :qty).as(:total)])
+                       .map { |item, total| [item, -total.to_i] }
+    end
+
     def dir
       @dir
     end

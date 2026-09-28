@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-28T17:37:35",
+  "generated_at": "2026-09-28T19:15:30",
   "caps": {
     "max_level": 100,
     "iv_stat_limit": 31,
@@ -10368,6 +10368,12 @@
       "important": true,
       "consumable": false
     }
+  },
+  "item_rules": {
+    "start_item_storage": [
+      "POTION"
+    ],
+    "more_bonus_premier_balls": true
   },
   "moves": {
     "MEGAHORN": {

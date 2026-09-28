@@ -69,6 +69,11 @@ module PEMK
     # a Pokemon adds those classes here (and to the server's PEMK_PEER_CLASSES).
     PEER_CLASSES = %w[Pokemon Pokemon::Move Pokemon::Owner Mail].freeze
 
+    # Fixes for the engine's own item dupes (005_Battle/010_ItemDupes.rb: an item moved
+    # onto a wild Pokemon by Trick or Bestow came back at the end of the battle). On;
+    # false puts the engine's behaviour back.
+    ENGINE_DUPE_FIXES = true
+
     # M4 Layer D D2: max seconds to block for a server wild-encounter mint before falling
     # back to a local roll (encounters must keep happening on a laggy/dropped link). Short —
     # this stalls entering every wild battle in `on` mode, so keep it tight.
