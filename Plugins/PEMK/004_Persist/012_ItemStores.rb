@@ -17,7 +17,9 @@
 #     or a trade's Pokemon that comes back later) is left out with its item.
 # During a Bug Contest or a Frontier challenge the party is not the player's own, so
 # only the bag goes out; the record then reads "bag only" and the next login keeps the
-# save's stores, as before this step.
+# save's stores, as before this step. The same during a battle: held items change there
+# only for its length (Knock Off, a Trick against a trainer, all given back at its end),
+# so the server judges the first full snapshot after it against the one before it.
 #===============================================================================
 module PEMK
   module Inventory
@@ -68,7 +70,8 @@ module PEMK
     end
 
     def self.away_from_own_party?
-      (pbInBugContest? rescue false) || ($PokemonGlobal&.challenge&.pbInChallenge? rescue false) ? true : false
+      (pbInBugContest? rescue false) || ($PokemonGlobal&.challenge&.pbInChallenge? rescue false) ||
+        ($game_temp && $game_temp.in_battle) ? true : false
     end
 
     # --- the login restore ---------------------------------------------------------

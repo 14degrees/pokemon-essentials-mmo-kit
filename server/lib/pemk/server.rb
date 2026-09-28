@@ -1307,7 +1307,7 @@ module PEMK
           # A sale the server makes takes the items out of its record with the money in,
           # so a client that keeps them cannot sell the same record again.
           if op == :sell && on && why.nil?
-            owed = @item_enforce ? @item_ledger.open_debts(account_id)[canon(item)].to_i : 0
+            owed = @item_enforce ? @item_ledger.open_debts(account_id)[canon(item)].to_i : nil
             why = "not_held" unless @inventory.take_sold(account_id, item, qty, owed: owed)
           end
           if why.nil? && on
