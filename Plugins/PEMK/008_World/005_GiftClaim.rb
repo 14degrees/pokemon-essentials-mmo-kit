@@ -207,6 +207,10 @@ module PEMK
 
     def request(entry)
       map, event, item, qty, n = entry
+      # The server judges a gift by where it last saw the player. After a transfer the
+      # position only goes out on the next idle frame, so a gift paid on arrival would
+      # find the server a map behind: where the player stands is sent first.
+      (PEMK::Presence.emit(:pos) rescue nil)
       PEMK.send_message(:type => :gift_req, :map => map, :event => event, :item => item,
                         :quantity => qty, :nonce => n, :seq => n)
       @sent[n] = [@gen, mono]
