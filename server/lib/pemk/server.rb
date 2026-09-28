@@ -438,6 +438,11 @@ module PEMK
     def handle_inv(conn, env, account_id)
       bag = env[:bag]
       seq = env[:seq]
+      # D4: level items this snapshot shows used credit the next level jumps (inline,
+      # reactor thread, before the party projection of the same flush arrives).
+      if @reward_audit
+        @reward_audit.note_items((conn.data[:item_credit] ||= RewardAudit.new_credit), bag)
+      end
       @mailbox.submit(account_id) do
         status = @inventory.apply_inv(account_id, bag, seq)
         @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
@@ -587,7 +592,7 @@ module PEMK
 
       return if changes.empty?
 
-      suspect, detail = @reward_audit.check_levels(account_id, changes)
+      suspect, detail = @reward_audit.check_levels(account_id, changes, credit: conn.data[:item_credit])
       if suspect
         @log.call("reward: account #{account_id} SUSPECT level jump — #{detail}")
         flag_anomaly(account_id, :reward_level)

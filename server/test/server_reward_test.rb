@@ -160,6 +160,23 @@ class ServerRewardTest < Minitest::Test
     c.close
   end
 
+  # A Rare Candy levels a Pokemon with no battle: the bag snapshot that shows it used
+  # pays for the level. Levels no candy pays for are still a SUSPECT jump.
+  def test_a_rare_candy_used_outside_a_battle_pays_for_its_level
+    start_server
+    c, = authed_conn("rw8@t.co")
+    party = ->(lvl) { { type: :mon_party, mons: [{ uid: 77, species: :SPINARAK, level: lvl }], seq: lvl } }
+    send_env(c, { type: :inv, bag: { RARECANDY: 3 }, seq: 1 }); recv(c)
+    send_env(c, party.call(5)); recv(c)
+    send_env(c, { type: :inv, bag: { RARECANDY: 2 }, seq: 2 }); recv(c)
+    send_env(c, party.call(6)); recv(c)
+    refute(@logs.any? { |l| l.include?("SUSPECT level jump") }, @logs.grep(/reward:/).inspect)
+
+    send_env(c, party.call(8)); recv(c)   # two more levels, no candy used
+    assert(@logs.any? { |l| l.include?("SUSPECT level jump") }, @logs.grep(/reward:/).inspect)
+    c.close
+  end
+
   def test_battle_end_with_a_fabricated_foe_opens_no_window
     start_server
     c, = authed_conn("rw5@t.co")
