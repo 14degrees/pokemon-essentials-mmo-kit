@@ -544,7 +544,7 @@ module PEMK
         @log.call("inv: account #{account_id} applied correction ##{env[:corrected]}") if env[:corrected].is_a?(Integer)
         @reactor.post do
           reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?)
-          send_correction(conn, seq, fix) if fix
+          send_correction(conn, account_id, seq, fix) if fix
         end
       end
     end
@@ -694,11 +694,18 @@ module PEMK
     end
 
     # Reactor thread: +items+ back from +conn+, bound to the snapshot seq the server judged.
-    def send_correction(conn, seq, items)
+    # The owed debts it covers remember that it went out, so a client that never applies
+    # it is reported (settle_items).
+    def send_correction(conn, account_id, seq, items)
       return unless conn && items && @reactor.alive?(conn) && Array(conn.data[:caps]).include?("inv_correct")
 
       id = (conn.data[:correction_id] = conn.data[:correction_id].to_i + 1)
       reply(conn, type: :inv_correct, id: id, seq: seq, items: items)
+      @pool.submit do
+        @item_ledger.mark_sent(account_id, items)
+      rescue StandardError => e
+        @log.call("inv: correction mark failed #{e.class}: #{e.message}")
+      end
     end
 
     def pc_start_items
@@ -1804,10 +1811,23 @@ module PEMK
 
         seq = @db[:inventory_snapshots].where(account_id: account_id).get(:last_seq)
         fix = correction_for(account_id)
-        @reactor.post { send_correction(@online[account_id], seq, fix) } if fix && seq
+        @reactor.post { send_correction(@online[account_id], account_id, seq, fix) } if fix && seq
       end
+      report_ignored_corrections if @item_enforce
     rescue StandardError => e
       @log.call("inv: item sweep failed #{e.class}: #{e.message}")
+    end
+
+    CORRECTION_IGNORED_AFTER = 30 * 60   # a client that applies them does so on its next free frame
+
+    # E4: a correction a client was sent and has not applied for half an hour: a client
+    # that refuses them. Reported once per owed debt.
+    def report_ignored_corrections
+      @item_ledger.ignored_since(Time.now - CORRECTION_IGNORED_AFTER).each do |account_id, items|
+        @log.call("inv: account #{account_id} has not applied the correction for #{items.join(', ')} " \
+                  "in #{CORRECTION_IGNORED_AFTER / 60} min")
+        flag_anomaly(account_id, :item_correction_ignored)
+      end
     end
 
     # D8: same non-overlapping worker-dispatch shape as the anomaly sweep. Consumes

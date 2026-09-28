@@ -485,7 +485,8 @@ Exp. All switched off) counts as one.
   is sent the owed units, bound to the bag snapshot the server judged last, and takes
   them off on a free overworld frame - bag, then PC, mailbox, held items - only while
   that snapshot is still its latest and nothing changed since; after every snapshot it
-  judges, the server sends the correction again until a decrease settles it. A late
+  judges, the server sends the correction again until a decrease settles it; one left
+  unapplied for half an hour is reported (D5 `item_correction_ignored`). A late
   report never pays an owed item back. Nothing rides on owed units: a sale of them is
   refused, and a trade whose Pokemon holds an item its sender's record does not
   recognize is refused (`item`); with `PEMK_BATTLE_ENFORCE_CATCHES=on`, a judged ball the
