@@ -89,6 +89,7 @@ module PEMK
                                     enforce: @config.flag_enforce, logger: @log)
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
+      @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -157,6 +158,7 @@ module PEMK
       @log.call("server: flag state = #{@config.flag_state} " \
                 "(switches/variables#{@config.flag_state == :on ? '; facts materialized at login, grant-only' : ' — detection only'})")
       @log.call("server: flag enforcement = #{@config.flag_enforce} (owned values repaired to the mirror when on)")
+      @log.call("server: gift enforcement = #{@config.gift_enforce} (one-shot gifts paid once when on)")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -170,6 +172,7 @@ module PEMK
       @reactor.stop
       @thread&.join(5)
       @pool.shutdown
+      @db.disconnect   # the workers are done: a stopped server holds no connection
       @log.call("server: stopped")
     end
 
@@ -178,6 +181,7 @@ module PEMK
       start
       @thread.join           # block until SIGTERM stops the reactor
       @pool.shutdown
+      @db.disconnect
       @log.call("server: stopped")
     end
 
@@ -229,7 +233,7 @@ module PEMK
       # burst must absorb several back-to-back pushes; sustained 1/s is still ~100x an
       # honest client and bounds a flood to the blob cap per second.
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
-      flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4],
+      flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4], gift_req: [10, 1.0], gift_applied: [10, 1.0],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
       team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
@@ -272,6 +276,8 @@ module PEMK
       when :flags then handle_flags(conn, env, authed)
       when :flag_delta then handle_flag_delta(env, authed)
       when :gift_claim then handle_gift_claim(env, authed)
+      when :gift_req then handle_gift_req(conn, env, authed)
+      when :gift_applied then handle_gift_applied(env, authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, body, authed)
@@ -466,8 +472,15 @@ module PEMK
       if @reward_audit
         @reward_audit.note_items((conn.data[:item_credit] ||= RewardAudit.new_credit), bag)
       end
+      gift_conn = gift_conn(conn) if @gift_grants
       @mailbox.submit(account_id) do
-        status = @inventory.apply_inv(account_id, bag, seq)
+        status = nil
+        @db.transaction do
+          status = @inventory.apply_inv(account_id, bag, seq)
+          # Step 6: a snapshot the record adopted holds every payout the client applied
+          # before it. One transaction, so a crash cannot keep the bag and lose the seal.
+          @gift_grants.seal(account_id, gift_conn) if gift_conn && status[0] == :ack
+        end
         @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
       end
     end
@@ -924,6 +937,83 @@ module PEMK
       manifest_repeatable.include?("#{map}:#{event}") || @world.prize_event?(map, event)
     end
 
+    GIFT_ITEM = /\A[A-Z0-9_]{1,64}\z/
+
+    # Step 6: the payout gate. The client asks before an event gives an item. A one-shot
+    # gift the world export knows is granted once per account (GiftGrants); an item the
+    # event never gives is refused; anything else is granted and goes to the detection
+    # ledger, like a :gift_claim report. Always answered, so an honest client never sits
+    # out its wait on a verdict the server reached.
+    def handle_gift_req(conn, env, account_id)
+      seq = env[:seq]; map = env[:map]; event = env[:event]
+      item = env[:item]; qty = env[:quantity]; nonce = env[:nonce]
+      unless map.is_a?(Integer) && event.is_a?(Integer) && item.is_a?(String) && item.match?(GIFT_ITEM) &&
+             qty.is_a?(Integer) && qty.between?(1, 999) && nonce.is_a?(Integer) && nonce.between?(1, 2**62)
+        return reply(conn, type: :gift_deny, seq: seq, reason: "bad")
+      end
+      # The gate is off (a restart turned it off under a live client): nothing to judge.
+      return reply(conn, type: :gift_grant, seq: seq) unless @gift_grants
+
+      obj = @world.gift_object(map, event)
+      if obj && obj["dynamic"] == false && !gift_item_ok?(obj, item, qty)
+        @log.call("gift: account #{account_id} #{gift_verdict_word} — map #{map} event #{event} " \
+                  "never gives #{item} x#{qty} (#{Array(obj['items']).join(',')})")
+        flag_anomaly(account_id, :gift_refarm)
+        return reply(conn, type: :gift_deny, seq: seq, reason: "not_this_gift") if @config.gift_enforce == :on
+
+        return reply(conn, type: :gift_grant, seq: seq)
+      end
+
+      unless obj && obj["once"] == true && !repeatable_gift?(map, event)
+        handle_gift_claim(env, account_id)   # not a one-shot: granted, and judged after the fact
+        return reply(conn, type: :gift_grant, seq: seq)
+      end
+
+      token = gift_conn(conn)
+      @mailbox.submit(account_id) do
+        verdict, reason, denied = @gift_grants.request(account_id, map, event, item, qty, nonce, conn: token)
+        if verdict == :deny
+          @log.call("gift: account #{account_id} #{gift_verdict_word} — map #{map} event #{event} " \
+                    "#{item} already paid (#{denied} refusal#{denied == 1 ? '' : 's'})")
+          flag_anomaly(account_id, :gift_refarm) if denied == GiftGrants::DENY_FLAG
+        end
+        out = verdict == :deny && @config.gift_enforce == :on ? { type: :gift_deny, reason: reason } : { type: :gift_grant }
+        @reactor.post { reply(conn, seq: seq, **out) if @reactor.alive?(conn) }
+      rescue StandardError => e
+        # No verdict: the client waits out its bound and keeps the gift pending.
+        @log.call("gift: request failed #{e.class}: #{e.message}")
+      end
+    end
+
+    # :gift_applied - the item of request +nonce+ is in the client's bag.
+    def handle_gift_applied(env, account_id)
+      return unless @gift_grants
+
+      map = env[:map]; event = env[:event]; nonce = env[:nonce]
+      return unless map.is_a?(Integer) && event.is_a?(Integer) && nonce.is_a?(Integer)
+
+      @mailbox.submit(account_id) { @gift_grants.applied(account_id, map, event, nonce) }
+    end
+
+    # Is +item+ x +qty+ something this event gives? Only asked of an export entry with
+    # no computed call (dynamic == false), whose literal list is then complete.
+    def gift_item_ok?(obj, item, qty)
+      return false unless Array(obj["items"]).include?(item)
+
+      max = obj["quantities"].is_a?(Hash) ? obj["quantities"][item] : nil
+      !max.is_a?(Integer) || qty <= max
+    end
+
+    def gift_verdict_word
+      @config.gift_enforce == :on ? "DENY" : "WOULD-DENY"
+    end
+
+    # A random id per connection: a grant remembers the one it went out on, so the
+    # first bag snapshot of a later connection knows which grants it settles.
+    def gift_conn(conn)
+      conn.data[:gift_conn] ||= SecureRandom.random_number(2**62 - 1) + 1
+    end
+
     # M4 Layer D D7 part 1: a finished wild battle's capture record (fire-and-forget,
     # no reply — instrumentation, never adjudicates). The opaque body is stored
     # verbatim for part 2's headless replay; ingest runs on the account mailbox so the
@@ -1184,6 +1274,8 @@ module PEMK
       # Step 5: a session that loads the stored blob is judged against the durable
       # mirror (or trusted for its first snapshot); a resumed one keeps its mirror.
       @flag_state&.rebase_for_login(account_id, @characters.flags_seq(account_id)) if fresh
+      # Step 6: the bag a fresh login loads holds no payout that was never sealed.
+      @gift_grants&.void_unsealed(account_id) if fresh
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       { econ: snap[:balances], econ_seq: snap[:last_seq],
@@ -1201,6 +1293,7 @@ module PEMK
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
         flag_enforce: @config.flag_enforce.to_s,                             # step 5: owned values repaired
+        gift_gate: @config.gift_enforce != :off,                             # step 6: ask before a gift
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }

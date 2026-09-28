@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-28T09:57:58",
+  "generated_at": "2026-09-28T13:15:22",
   "maps": {
     "1": {
       "name": "Intro",
@@ -423,7 +423,7 @@
       "width": 20,
       "height": 17,
       "objects": [
-        {"kind": "gift", "item": "TM80", "items": ["TM80"], "x": 6, "y": 5, "event_id": 3}
+        {"kind": "gift", "item": "TM80", "items": ["TM80"], "x": 6, "y": 5, "event_id": 3, "once": true, "dynamic": false, "quantities": {"TM80": 1}}
       ],
       "warps": [
         {"src_x": 6, "src_y": 15, "dest_map": 7, "dest_x": 11, "dest_y": 29, "dir": 0, "event_id": 1}
@@ -511,8 +511,8 @@
       "width": 20,
       "height": 32,
       "objects": [
-        {"kind": "prize", "item": "MASTERBALL", "items": ["MASTERBALL", "MAXREVIVE", "EXPSHARE", "PPUP", "ULTRABALL"], "x": 9, "y": 2, "event_id": 17},
-        {"kind": "gift", "item": "COINCASE", "items": ["COINCASE"], "x": 3, "y": 2, "event_id": 21}
+        {"kind": "prize", "item": "MASTERBALL", "items": ["MASTERBALL", "MAXREVIVE", "EXPSHARE", "PPUP", "ULTRABALL"], "x": 9, "y": 2, "event_id": 17, "once": false, "dynamic": true, "quantities": {"MASTERBALL": 1, "MAXREVIVE": 1, "EXPSHARE": 1, "PPUP": 1, "ULTRABALL": 1}},
+        {"kind": "gift", "item": "COINCASE", "items": ["COINCASE"], "x": 3, "y": 2, "event_id": 21, "once": false, "dynamic": false, "quantities": {"COINCASE": 1}}
       ],
       "warps": [
         {"src_x": 4, "src_y": 30, "dest_map": 7, "dest_x": 39, "dest_y": 19, "dir": 0, "event_id": 31},
@@ -929,7 +929,7 @@
       "width": 41,
       "height": 41,
       "objects": [
-        {"kind": "gift", "item": "BICYCLE", "items": ["BICYCLE"], "x": 13, "y": 27, "event_id": 9}
+        {"kind": "gift", "item": "BICYCLE", "items": ["BICYCLE"], "x": 13, "y": 27, "event_id": 9, "once": false, "dynamic": false, "quantities": {"BICYCLE": 1}}
       ],
       "warps": [
         {"src_x": 33, "src_y": 21, "dest_map": 29, "dest_x": 1, "dest_y": 5, "dir": 0, "event_id": 5},
@@ -1240,7 +1240,7 @@
       "width": 20,
       "height": 15,
       "objects": [
-        {"kind": "prize", "item": "SUNSTONE", "items": ["SUNSTONE", "EVERSTONE", "SITRUSBERRY", "SHEDSHELL"], "x": 5, "y": 4, "event_id": 2}
+        {"kind": "prize", "item": "SUNSTONE", "items": ["SUNSTONE", "EVERSTONE", "SITRUSBERRY", "SHEDSHELL"], "x": 5, "y": 4, "event_id": 2, "once": false, "dynamic": true, "quantities": {"SUNSTONE": 1, "EVERSTONE": 1, "SITRUSBERRY": 1, "SHEDSHELL": 1}}
       ],
       "warps": [
         {"src_x": 5, "src_y": 9, "dest_map": 28, "dest_x": 26, "dest_y": 6, "dir": 0, "event_id": 1},
@@ -3069,8 +3069,8 @@
       "width": 20,
       "height": 15,
       "objects": [
-        {"kind": "gift", "item": "AURORATICKET", "items": ["AURORATICKET"], "x": 6, "y": 5, "event_id": 3},
-        {"kind": "gift", "item": "OLDSEAMAP", "items": ["OLDSEAMAP"], "x": 10, "y": 5, "event_id": 4}
+        {"kind": "gift", "item": "AURORATICKET", "items": ["AURORATICKET"], "x": 6, "y": 5, "event_id": 3, "once": false, "dynamic": false, "quantities": {"AURORATICKET": 1}},
+        {"kind": "gift", "item": "OLDSEAMAP", "items": ["OLDSEAMAP"], "x": 10, "y": 5, "event_id": 4, "once": false, "dynamic": false, "quantities": {"OLDSEAMAP": 1}}
       ],
       "warps": [
         {"src_x": 8, "src_y": 2, "dest_map": 69, "dest_x": 31, "dest_y": 15, "dir": 0, "event_id": 1},
