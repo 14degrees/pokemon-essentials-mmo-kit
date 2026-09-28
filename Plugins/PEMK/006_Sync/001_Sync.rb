@@ -49,6 +49,7 @@ module PEMK
       (PEMK::Monsters.reset rescue nil)
       (PEMK::Trade.reset rescue nil)   # a fresh socket must abandon any in-flight trade
       (PEMK::Pickup.reset rescue nil)  # ... and any pending pickup grant + advertised flag
+      (PEMK::GiftClaim.reset rescue nil)  # ... and any gift reply + the advertised gift gate
       (PEMK::Encounter.reset rescue nil)  # ... and the advertised encounter mode (M4-D2)
       (PEMK::Catch.reset rescue nil)      # ... and the advertised catch mode (M4-D3)
       (PEMK::Reward.reset rescue nil)     # ... and the advertised reward mode (M4-D4)
@@ -169,6 +170,8 @@ module PEMK
       # server after the battle's end report, which opens the reward window it is
       # judged against. The post-battle checkpoint flushes it all.
       return if ($game_temp && $game_temp.in_battle rescue false)
+      # Nor while a gift waits for its grant or its :gift_applied (step 6).
+      return if (PEMK::GiftClaim.holding? rescue false)
 
       fc = frame
       quiescent = @last_change && (fc - @last_change) >= DEBOUNCE_FRAMES
@@ -211,7 +214,11 @@ module PEMK
       end
       # Bag: one whole-bag read HERE (game thread), sent as an absolute snapshot.
       # An empty bag ({}) is a valid send; only a nil (no $bag yet) keeps the flag.
-      if @inv_dirty
+      # Step 6: the server settles gift grants with the bag snapshots that follow them,
+      # so none leaves while a gift is between its request and its :gift_applied, and
+      # the owed gifts reach a new connection first.
+      if @inv_dirty && !(PEMK::GiftClaim.holding? rescue false)
+        (PEMK::GiftClaim.before_bag_flush rescue nil)
         bag = PEMK::Inventory.full_bag
         if bag
           c.send_message({ :type => :inv, :bag => bag, :seq => (@seq[:inv] += 1) })

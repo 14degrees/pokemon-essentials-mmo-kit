@@ -47,6 +47,7 @@ module PEMK
       @start        = nil   # [map,x,y]
       @encounters   = {}    # map_id => raw encounters hash
       @trainers_by_map = {} # map_id => frozen Array of [type, name, version]
+      @gifts        = {}    # [map,event_id] => frozen gift/prize object (step 6 payout gate)
       @loaded       = false
       load!(path, expected_version)
     end
@@ -166,7 +167,17 @@ module PEMK
     # Is event +event_id+ on +map_id+ a prize table (several rewards, one picked: the
     # Game Corner lottery)? It pays out again and again by design.
     def prize_event?(map_id, event_id)
-      @by_tile.any? { |(m, _x, _y), o| m == map_id && o["event_id"] == event_id && o["kind"] == "prize" }
+      o = @gifts[[map_id, event_id]]
+      !o.nil? && o["kind"] == "prize"
+    end
+
+    # The export's record of an event that gives items (pbReceiveItem): kind "gift"
+    # (one literal item) or "prize" (several). Newer exports add "once" (a single
+    # payout, after which the event turns to another page), "dynamic" (a call whose
+    # item is computed, so the literal list is not the whole story) and "quantities"
+    # (item => largest literal quantity). -> frozen Hash | nil.
+    def gift_object(map_id, event_id)
+      @gifts[[map_id, event_id]]
     end
 
     # --- trainers (Layer D D4 rewards) --------------------------------------------
@@ -270,6 +281,8 @@ module PEMK
           next
         end
         @by_tile[key] = obj.freeze
+        ev = obj["event_id"]
+        @gifts[[map_id, ev]] = obj if %w[gift prize].include?(obj["kind"]) && ev.is_a?(Integer)
       end
     end
 
@@ -355,6 +368,7 @@ module PEMK
       @heal.freeze
       @encounters.freeze
       @trainers_by_map.freeze
+      @gifts.freeze
     end
   end
 end

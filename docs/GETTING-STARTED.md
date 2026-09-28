@@ -188,6 +188,9 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    switches and variables during play: a value changed without the game's own
    events (a memory or save edit) is put back to the server's. In `shadow` the log
    shows `WOULD-REPAIR` lines; honest play should produce none.
+4. `PEMK_GIFT_ENFORCE=shadow`, then `on` — events ask the server before they give an
+   item, and a one-shot gift (a gym leader's TM) is paid once per account. In
+   `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
 
 There is nothing to declare in RPG Maker: which switches count as progression is
 worked out from your own events. After updating the kit, do one debug launch

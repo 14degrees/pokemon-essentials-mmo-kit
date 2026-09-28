@@ -127,10 +127,129 @@ module PEMK
         # sent a review chasing a re-farm that did not exist. Ship every tier.
         kind = items.uniq.length > 1 ? "prize" : "gift"
         { :kind => kind, :item => items.first, :items => items.uniq,
-          :x => event.x, :y => event.y, :event_id => event.id }
+          :x => event.x, :y => event.y, :event_id => event.id }.merge(gift_facts(event, script))
       end
     rescue
       nil
+    end
+
+    # Step 6 (the payout gate): what the server needs to judge a gift request.
+    #   dynamic    - a call whose item is computed, so :items is not the whole list
+    #   quantities - item => largest literal quantity (left out when one is computed)
+    #   once       - a single call, on a page that turns on a switch, self-switch or
+    #                variable a LATER page waits for: once paid, the event shows that
+    #                page and cannot pay again, so a second payout means an edit
+    def gift_facts(event, script)
+      calls = receive_calls(script)
+      quantities = {}
+      computed = {}
+      calls.each do |item, qty|
+        next unless item
+
+        if qty
+          quantities[item] = [quantities[item] || 0, qty].max
+        else
+          computed[item] = true
+        end
+      end
+      computed.each_key { |item| quantities.delete(item) }
+      { :once => calls.length == 1 && !script.include?("pbSetEventTime") && pays_once?(event),
+        :dynamic => calls.any? { |item, _| item.nil? }, :quantities => quantities }
+    rescue
+      {}
+    end
+
+    # -> [[item | nil, quantity | nil], ...], one per pbReceiveItem call: nil where the
+    # argument is computed rather than written out.
+    def receive_calls(script)
+      out = []
+      pos = 0
+      while (i = script.index("pbReceiveItem(", pos))
+        args, pos = call_args(script, i + "pbReceiveItem(".length)
+        item = args[0] ? args[0][/\A:([A-Za-z0-9_]+)\z/, 1] : nil
+        qty  = if args.length < 2 then 1
+               elsif args[1].match?(/\A\d+\z/) then args[1].to_i
+               end
+        out << [item, qty]
+      end
+      out
+    end
+
+    # The top-level arguments of a call whose "(" ends just before +start+.
+    # -> [[argument text, ...], index past the closing ")"]
+    def call_args(text, start)
+      args  = []
+      cur   = +""
+      depth = 0
+      i = start
+      while i < text.length
+        ch = text[i]
+        if "([{".include?(ch)
+          depth += 1
+          cur << ch
+        elsif ")]}".include?(ch) && depth > 0
+          depth -= 1
+          cur << ch
+        elsif ch == ")"
+          break
+        elsif ch == "," && depth == 0
+          args << cur.strip
+          cur = +""
+        else
+          cur << ch
+        end
+        i += 1
+      end
+      args << cur.strip unless args.empty? && cur.strip.empty?
+      [args, i + 1]
+    end
+
+    # RMXP runs the highest-numbered page whose conditions hold, so once the paying
+    # page turns on what a later page waits for, the event shows that page instead.
+    def pays_once?(event)
+      pages = event.pages
+      k = pages.index { |pg| pg && pg.list && pg.list.any? { |c| receive_command?(c) } }
+      return false unless k
+
+      marks = page_marks(pages[k])
+      pages[(k + 1)..-1].any? { |pg| pg && pg.condition && waits_on?(pg.condition, marks) }
+    end
+
+    def receive_command?(cmd)
+      params = cmd.respond_to?(:parameters) ? cmd.parameters : nil
+      return false unless params
+
+      case cmd.code
+      when 355, 655 then params[0].to_s.include?("pbReceiveItem(")
+      when 111      then params[0] == 12 && params[1].to_s.include?("pbReceiveItem(")
+      else false
+      end
+    end
+
+    # What a page turns on: self-switches (123 ON), switches (121 ON) and variables
+    # set to a constant (122 set, constant operand).
+    def page_marks(page)
+      marks = { :self => {}, :switches => {}, :variables => {} }
+      page.list.each do |cmd|
+        params = cmd.respond_to?(:parameters) ? cmd.parameters : nil
+        next unless params
+
+        case cmd.code
+        when 123 then marks[:self][params[0].to_s] = true if params[1] == 0
+        when 121 then (params[0]..params[1]).each { |id| marks[:switches][id] = true } if params[2] == 0
+        when 122
+          (params[0]..params[1]).each { |id| marks[:variables][id] = params[4] } if params[2] == 0 && params[3] == 0
+        end
+      end
+      marks
+    end
+
+    def waits_on?(cond, marks)
+      value = cond.variable_valid ? marks[:variables][cond.variable_id] : nil
+      !!((cond.self_switch_valid && marks[:self][cond.self_switch_ch.to_s]) ||
+         (cond.switch1_valid && marks[:switches][cond.switch1_id]) ||
+         (cond.switch2_valid && marks[:switches][cond.switch2_id]) ||
+         (value.is_a?(Integer) && value >= cond.variable_value))
     end
 
     # === trainers (where each trainer battle starts) — Layer D D4 ================
