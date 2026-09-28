@@ -233,10 +233,11 @@ module PEMK
 
         if ok
           body = Marshal.dump([@session[:my_pkmn]])   # the REAL object (server never loads it)
-          PEMK.send_message({ :type => :trade_lock, :from => PEMK.self_id, :to => @session[:partner],
-                              :trade_id => @session[:trade_id], :uid => @session[:my_uid] }, body)
-          @session[:my_locked] = true
           @session[:my_item] = @session[:my_pkmn].item_id   # the escrow holds this
+          PEMK.send_message({ :type => :trade_lock, :from => PEMK.self_id, :to => @session[:partner],
+                              :trade_id => @session[:trade_id], :uid => @session[:my_uid],
+                              :item => @session[:my_item] }, body)
+          @session[:my_locked] = true
           @session[:phase] = :locked_waiting
           @session[:since] = now
           maybe_commit

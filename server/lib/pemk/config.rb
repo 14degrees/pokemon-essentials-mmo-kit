@@ -13,7 +13,7 @@ module PEMK
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
-                :gift_enforce, :peer_check, :peer_classes, :trade_redelivery
+                :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -164,6 +164,12 @@ module PEMK
       # again. On unless PEMK_TRADE_REDELIVERY=off; only clients that say they can
       # take one are sent one.
       @trade_redelivery = env.fetch("PEMK_TRADE_REDELIVERY", "on").to_s.strip.downcase != "off"
+
+      # Item authority E0: the PC storage, the mailbox and held items come back at login
+      # from the server's record, like the bag, instead of from the save (whose separate
+      # channel let a crash duplicate a withdrawn or taken item). full by default (a dupe
+      # fix, and only for clients that send those stores); bag = the bag alone, as before.
+      @item_record = env.fetch("PEMK_ITEM_RECORD", "full").to_s.strip.downcase == "bag" ? :bag : :full
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

@@ -26,6 +26,7 @@ class SyncPluginTest < Minitest::Test
       module Trade; def self.busy?; false; end; end
       module TeamReport; def self.build; nil; end; end
       module Checkpoint; def self.request(_r); end; end
+      module Inventory; def self.full_bag; {}; end; def self.stores; nil; end; end
     end
     Temp = Struct.new(:in_battle)
     $game_temp = Temp.new(true)
@@ -43,7 +44,8 @@ class SyncPluginTest < Minitest::Test
   def test_nothing_leaves_mid_battle_and_all_of_it_right_after
     out = IO.popen([RbConfig.ruby, "-W0", "-e", RUNNER, SYNC], err: %i[child out], &:read)
     assert $?.success?, "sync runner crashed:\n#{out}"
-    assert_equal "[[], [:mon_party]]", out.strip
+    # a Pokemon that changes also re-reads the item stores (its held item)
+    assert_equal "[[], [:inv, :mon_party]]", out.strip
   end
 end
 

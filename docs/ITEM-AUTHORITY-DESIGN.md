@@ -143,8 +143,12 @@ dupes, and that several honest paths had no credit. The rules below come from it
 
 Each step ships alone, with unit tests and an autotest scenario.
 
-- **E0 - one record for every item store**, under the rules above. On by default for clients
-  that announce it (a dupe fix), with `PEMK_ITEM_RECORD=bag` to keep the bag-only record.
+- **E0 - one record for every item store**, under the rules above. On by default (a dupe
+  fix); `PEMK_ITEM_RECORD=bag` keeps the bag-only record. **Done 2026-09-28**, with its
+  prerequisites (the trade item binding, the transit holds, the Day Care and fusion lookups).
+  A save written before a Pokemon's uid arrived knows it by its mint nonce, so the login
+  record names each holder by uid and nonce. Autotest 070 crashes after a PC withdrawal, a
+  give and a take: one item each time, where the bag-only record duplicated or lost it.
 - **E1 - the item catalogue and the tiers in the exports.** Buy, sell and BP prices, key and
   consumable flags, mart stocks per event (the union of their badge branches), vending events,
   item-ball quantities, and each item's tier.

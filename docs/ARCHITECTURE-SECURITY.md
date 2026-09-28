@@ -16,12 +16,12 @@ Today PEMK meets that bar for *data* (money, items, Pokémon) but not yet for
 **No.** Picking up an overworld item is computed entirely on the client. There is
 **no distance check, no "does this item exist / is it still there" check** on the
 server. The client runs the map event, adds the item locally, and then syncs its
-**bag** to the server as a snapshot. The server clamps the *bag* (caps, shape) —
-so you can't hold an impossible quantity — but it never validated the **act** of
+**bag** to the server as a snapshot. The server checks the *bag*'s shape and caps
+and flags what breaks them (it records the bag either way) — but it never validated the **act** of
 picking it up: it doesn't know the item's tile, doesn't know your position, and
 can't tell a legitimate pickup from a fabricated one.
 
-So the bag *contents* are server-authoritative, but the *event that changed them*
+So the bag *contents* are server-recorded, but the *event that changed them*
 is trusted. That distinction is the whole point of this document, and closing it
 is Milestone 4.
 
@@ -34,7 +34,7 @@ is Milestone 4.
 | **Login / identity** | server | ✅ yes | can't — bcrypt + opaque session token, no client-claimed id |
 | **Money / coins / BP / soot** | client → **server ledger** | ⚠️ capped + audited, not authored | the VALUE is client-pushed; the ledger caps it, makes it append-only and idempotent, and M4-D4 bounds battle gains — but an in-cap lie is persisted |
 | **Badges** | client → **server ledger** | ⚠️ capped, not authored | the client computes the bitmask and pushes it on the `:econ` channel; the server enforces the cap, not the earning |
-| **Bag contents** | server snapshot | ✅ shape/caps only | can't hold impossible amounts, but see below |
+| **Bag, PC item storage, held items** | client → **server record** | ⚠️ recorded and restored together (item authority E0); caps flagged, acquisitions not judged yet | a crash can no longer duplicate an item moved between them; what enters the possession is still the client's (see [`ITEM-AUTHORITY-DESIGN.md`](ITEM-AUTHORITY-DESIGN.md)) |
 | **Pokémon identity & ownership** | server (UIDs) | ✅ yes | can't dupe — UID registry + ownership |
 | **Trades** | server | ✅ yes | can't dupe/steal — atomic CAS swap, rollback; a Pokémon the receiver never saved (a crash, a lost result) is sent again |
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
@@ -70,7 +70,7 @@ The honest counterweight to the ✅ column — these are the real remaining gaps
 |---|---|---|
 | `$game_variables` / `$game_switches` / `$game_self_switches` | **server-shadowed** (`PEMK_FLAG_STATE`), **held** (`PEMK_FLAG_ENFORCE`) | saved one-shot progression is restored at login in `on`, and a tracked value edited in session is repaired; a one-shot NPC gift is paid once per account with `PEMK_GIFT_ENFORCE` |
 | Per-mon stat block (IVs/EVs/moves/ability/nature) | **server first-sight lock** (detection, with `PEMK_BATTLE_ENFORCE_TEAMS`) | IVs, shiny and gender are locked the first time the server sees a mon, and a divergence is flagged (D5 `mon_counterfeit`); moves, EVs, ability and nature change in normal play, so they are recorded but not judged |
-| PC boxes, Pokédex, roamers, daycare, PC item store | **client-only** | not projected at all — "park it in a box" evades the party shadow |
+| PC boxes, Pokédex, roamers, daycare | **client-only** | not projected at all — "park it in a box" evades the party shadow (their held items are recorded, E0) |
 | Party composition | **server-shadowed** | detection-only; the save blob remains authoritative |
 | Money / badges | **server-persisted, client-authored** | capped and audited, not earned server-side |
 | Overworld position | **enforceable, but** | the no-clip verdict is suppressed whenever the CLIENT declares `:surf`/`:dive` |
