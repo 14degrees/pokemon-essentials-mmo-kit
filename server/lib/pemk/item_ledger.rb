@@ -38,16 +38,17 @@ module PEMK
     end
 
     # One snapshot the record adopted: +prev+ and +cur+ are {"ITEM" => count} over the
-    # same stores. Each increase beyond +allow+ takes credits; the rest becomes a debt.
-    # -> { "ITEM" => count left owing }
-    def judge(account_id, prev, cur, allow: {}, now: Time.now)
+    # same stores. Each increase beyond +allow+ takes credits; the rest becomes a debt,
+    # except for a +local+ item (E2b: one this game can produce unseen), which is
+    # recorded and never judged. -> { "ITEM" => count left owing }
+    def judge(account_id, prev, cur, allow: {}, local: nil, now: Time.now)
       owing = {}
       cur.each do |item, n|
         up = n.to_i - prev[item].to_i - allow[item].to_i
         next unless up.positive?
 
         missing = up - take(credits(account_id, item, now), up)
-        next unless missing.positive?
+        next unless missing.positive? && !local&.include?(item)
 
         @db[:item_credits].insert(account_id: account_id, item: item.to_s, qty: -missing, source: "seen",
                                   created_at: now, expires_at: now + GRACE)

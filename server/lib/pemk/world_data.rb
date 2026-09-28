@@ -126,6 +126,18 @@ module PEMK
       @flag_manifest
     end
 
+    # Item authority E1b: { "events" => [{ "map", "event" | "common_event", "calls",
+    # "items", "unbounded" }], "berry_plants" => bool, "mining" => bool } | nil.
+    def item_sources
+      @item_sources
+    end
+
+    # Every object of +kind+ ("item", "gift", "prize", "mart", "bp_shop") on every map.
+    # -> [[map_id, object], ...]
+    def objects_of(kind)
+      @by_tile.filter_map { |(map, _x, _y), o| [map, o] if o["kind"] == kind }
+    end
+
     def flag_tier(kind, id)
       m = @flag_manifest
       return "local" unless m
@@ -245,6 +257,9 @@ module PEMK
       # is exactly the pre-sovereignty behaviour. Frozen; nothing reads it yet (step 2
       # ships the data, step 3 consumes it).
       @flag_manifest = doc["flags"].is_a?(Hash) ? deep_freeze(doc["flags"]) : nil
+      # Item authority E1b: the events that produce items no request names. Absent =
+      # an export from before it: the server cannot tell those items apart.
+      @item_sources = doc["item_sources"].is_a?(Hash) ? deep_freeze(doc["item_sources"]) : nil
       @connections = freeze_connections(doc["connections"])
       @home  = coord_array(doc["home"], 4) || coord_array(doc["home"], 3)
       @start = coord_array(doc["start"], 3)

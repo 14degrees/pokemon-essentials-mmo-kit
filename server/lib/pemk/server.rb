@@ -92,6 +92,11 @@ module PEMK
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @item_ledger = ItemLedger.new(@db) if @config.item_authority != :off   # item authority E2
+      if @item_ledger   # E2b: which items this game can produce unseen, under the gates that are on
+        @item_tiers = ItemTiers.new(world: @world, battle: @battle, gifts: @config.gift_enforce != :off,
+                                    claims: @config.flag_state != :off, shops: @config.shop_enforce != :off,
+                                    repeatable: method(:repeatable_gift?), extra: @config.item_local)
+      end
       @last_item_sweep = nil
       @item_sweeping   = false
       @audit      = Audit.new(@world, logger: @log)
@@ -172,6 +177,17 @@ module PEMK
       end
       if @item_ledger && !(@world.loaded? && @battle.loaded?)
         @log.call("server: WARNING item authority is on but the world or battle export is missing - no pickup, gift or shop can explain an item")
+      end
+      if @item_tiers
+        @log.call("server: item tiers: #{@item_tiers.summary}; every other item is judged")
+        unless @item_tiers.complete?
+          @log.call("server: WARNING the exports predate the item sources - computed and unhooked sources are unknown " \
+                    "and their items judged (one debug launch regenerates them)")
+        end
+        unless @item_tiers.unbounded.empty?
+          @log.call("server: WARNING #{@item_tiers.unbounded.size} event(s) add an item the export cannot name, so " \
+                    "their items are judged - list the honest ones in PEMK_ITEM_LOCAL: #{@item_tiers.unbounded.join('; ')}")
+        end
       end
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
@@ -529,7 +545,8 @@ module PEMK
           pc_start_items.each { |i, n| allow[i] += n } if whole && prev[:pc].nil?
           @db[:inventory_snapshots].where(account_id: account_id).update(pc_started: true)
         end
-        @item_ledger.judge(account_id, before.transform_keys(&:to_s), after.transform_keys(&:to_s), allow: allow)
+        @item_ledger.judge(account_id, before.transform_keys(&:to_s), after.transform_keys(&:to_s), allow: allow,
+                           local: @item_tiers&.local)
       end
     rescue StandardError => e
       @log.call("inv: item judgment failed #{e.class}: #{e.message}")

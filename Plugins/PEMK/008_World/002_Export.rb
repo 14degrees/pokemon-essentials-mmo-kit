@@ -32,6 +32,7 @@ module PEMK
       counts = { :objects => 0, :warps => 0, :passability => 0, :ledges => 0, :heal => 0, :encounters => 0,
                  :trainers => 0 }
 
+      all_events = []   # [map_id, event] for the item sources (item authority E1b)
       mapinfos.keys.sort.each do |map_id|
         map = (load_data(sprintf("Data/Map%03d.rxdata", map_id)) rescue nil)
         next unless map && map.respond_to?(:events) && map.events
@@ -40,6 +41,7 @@ module PEMK
         warps    = []
         trainers = []
         map.events.each_value do |event|
+          all_events << [map_id, event]
           o = classify_event(event); objects << o if o
           collect_warps(event).each { |w| warps << w }
           collect_trainers(event).each do |type, name, version|
@@ -87,6 +89,8 @@ module PEMK
       doc[:home] = home if home
       st = start_point
       doc[:start] = st if st
+      sources = (item_sources(all_events) rescue nil)
+      doc[:item_sources] = sources if sources
 
       File.open(File.expand_path(OUT_PATH), "w") { |f| f.write(pretty(doc, 0) + "\n") }
       counts.merge(:maps => maps.size, :connections => conns.size)
@@ -309,25 +313,87 @@ module PEMK
     # balls as a CONDITIONAL BRANCH (code 111, subtype 12, text in params[1]), not a
     # plain Script command (code 355/655, text in params[0]) — read both.
     def event_script(event)
+      parts = event.pages.filter_map { |page| page && page.list && list_script(page.list) }
+      parts.empty? ? nil : parts.join("\n")
+    end
+
+    # The script text of one command list (an event page, a common event).
+    def list_script(list)
       parts = []
-      event.pages.each do |page|
-        next unless page && page.list
+      list.each do |cmd|
+        next unless cmd.respond_to?(:code)
 
-        page.list.each do |cmd|
-          next unless cmd.respond_to?(:code)
+        params = (cmd.respond_to?(:parameters) ? cmd.parameters : nil)
+        next unless params
 
-          params = (cmd.respond_to?(:parameters) ? cmd.parameters : nil)
-          next unless params
-
-          case cmd.code
-          when 355, 655
-            parts << params[0].to_s if params[0]
-          when 111
-            parts << params[1].to_s if params[0] == 12 && params[1]
-          end
+        case cmd.code
+        when 355, 655
+          parts << params[0].to_s if params[0]
+        when 111
+          parts << params[1].to_s if params[0] == 12 && params[1]
         end
       end
       parts.empty? ? nil : parts.join("\n")
+    end
+
+    # === item sources the server cannot credit — item authority E1b ============
+
+    # Calls that put an item in the player's hands without a request the server answers
+    # for that exact item: an item added straight to the bag, a gift or item ball whose
+    # item is computed, a Game Corner prize. With the literal gifts, item balls and
+    # shop stocks already exported, this names every other way the events can produce
+    # an item, so the server knows which items it can judge.
+    UNHOOKED = %w[$bag.add( pbBuyPrize(].freeze
+
+    # -> { :calls => [...], :items => [...], :unbounded => bool } | nil for one script.
+    # +common+: a common event, which no request can name, so even its literal gifts and
+    # item balls count here.
+    def item_source(script, common: false)
+      return nil unless script
+
+      calls = UNHOOKED.select { |c| script.include?(c) }.map { |c| c.chomp("(") }
+      computed = receive_calls(script).any? { |item, _| item.nil? } ||
+                 script.scan(/pbItemBall\(\s*([^,)\s]+)/).flatten.any? { |a| !a.start_with?(":") }
+      calls << "computed" if computed
+      calls << "pbReceiveItem" if common && script.include?("pbReceiveItem(")
+      calls << "pbItemBall" if common && script.include?("pbItemBall(")
+      return nil if calls.empty?
+
+      items = script.scan(/:([A-Z][A-Z0-9_]*)/).flatten.uniq.select { |i| item_id?(i) }
+      { :calls => calls.uniq, :items => items, :unbounded => items.empty? }
+    rescue
+      nil
+    end
+
+    def item_id?(name)
+      GameData::Item.exists?(name.to_sym)
+    rescue StandardError
+      false
+    end
+
+    # Every map event's and common event's item source, and whether the game has berry
+    # plants (every berry can then multiply) or the mining game.
+    def item_sources(maps_events)
+      list = []
+      scripts = []
+      maps_events.each do |map_id, event|
+        script = event_script(event)
+        scripts << script if script
+        src = item_source(script)
+        list << { :map => map_id, :event => event.id }.merge(src) if src
+      end
+      commons = (load_data("Data/CommonEvents.rxdata") rescue nil)
+      Array(commons).each do |ce|
+        next unless ce && ce.respond_to?(:list) && ce.list
+
+        script = list_script(ce.list)
+        scripts << script if script
+        src = item_source(script, common: true)
+        list << { :common_event => ce.id }.merge(src) if src
+      end
+      text = scripts.join("\n")
+      { :events => list, :berry_plants => text.include?("pbBerryPlant") || text.include?("pbPickBerry("),
+        :mining => text.include?("pbMiningGame") }
     end
 
     # === warps (Transfer Player, code 201) — Layer B/C =========================

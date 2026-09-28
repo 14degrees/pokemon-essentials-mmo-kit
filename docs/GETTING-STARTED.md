@@ -198,9 +198,11 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    lines; honest play should produce none.
 6. `PEMK_ITEM_AUTHORITY=shadow` — every item the player gains must come from a source
    the server knows (a granted pickup, a paid gift, a purchase, a trade). The log shows
-   `UNEXPLAINED` lines for the others. Turn steps 4 and 5 and `PEMK_PICKUP_ENFORCE` on
-   first: an item from a gate that is off cannot be explained. Berries and items won in
-   battle are not modelled yet and still show up.
+   `UNEXPLAINED` lines for the others. Items your game can produce unseen (berries,
+   what wild Pokemon hold, a vending machine, a computed prize...) are found in your own
+   events and data and left out of the judgment; the boot line `item tiers:` says how
+   many and why. Turning steps 4 and 5 on first leaves more items to judge. If a plugin
+   of yours gives items in its own code, list them in `PEMK_ITEM_LOCAL`.
 
 A separate setting protects players from each other: `PEMK_PEER_CHECK=shadow`, then
 `on`, checks a Pokemon another player sends (a trade, a PvP team) before it is

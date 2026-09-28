@@ -14,7 +14,7 @@ module PEMK
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
-                :shop_enforce, :item_authority
+                :shop_enforce, :item_authority, :item_local
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -187,6 +187,9 @@ module PEMK
       # runs as shadow.
       imode = env.fetch("PEMK_ITEM_AUTHORITY", "off").to_s.strip.downcase
       @item_authority = %w[off shadow on].include?(imode) ? imode.to_sym : :off
+      # Items the game produces in ways the exports cannot see (a plugin's own code, an
+      # event whose item is computed): recorded, never judged. Comma-separated ids.
+      @item_local = env.fetch("PEMK_ITEM_LOCAL", "").to_s.split(",").map { |i| i.strip.upcase }.reject(&:empty?).freeze
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

@@ -3,7 +3,9 @@
 # Item authority E2 (PEMK_ITEM_AUTHORITY=shadow): every item the player gains must be
 # explained by a source the server knows. The Great Ball on Route 1 (granted by the
 # pickup gate) and a Poke Ball from the Cedolan Mart (bought by the server) leave nothing
-# owed. A Master Ball added the way a memory edit would - no source at all - is owed.
+# owed. An X Attack no clerk sold, added the way a memory edit would, is owed. (A Master
+# Ball would not be: the Game Corner lottery draws its prize on the client, so it is a
+# local item, recorded and not judged.)
 Autotest.scenario "an item from nowhere is owed, a pickup and a purchase are not",
                   flags: { PEMK_ITEM_AUTHORITY: "shadow", PEMK_PICKUP_ENFORCE: "on", PEMK_SHOP_ENFORCE: "on" },
                   budget: 420 do |s|
@@ -52,8 +54,8 @@ Autotest.scenario "an item from nowhere is owed, a pickup and a purchase are not
   end
   s.check("nothing else is owed either", s.unexplained_items(a).inspect) { s.unexplained_items(a).empty? }
 
-  a.ap!("add_item MASTERBALL 1")           # the raw verb: no credit from the harness
-  s.check("a Master Ball from nowhere is owed") do
-    s.wait_for("the ledger owes it", seconds: 20) { s.unexplained_items(a) == [["MASTERBALL", 1]] }
+  a.ap!("add_item XATTACK 1")              # the raw verb: no credit from the harness
+  s.check("an X Attack from nowhere is owed") do
+    s.wait_for("the ledger owes it", seconds: 20) { s.unexplained_items(a) == [["XATTACK", 1]] }
   end
 end
