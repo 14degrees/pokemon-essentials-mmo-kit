@@ -293,6 +293,25 @@ module PEMK
           PEMK.log("auth: reconcile field #{field} error: #{e.class}: #{e.message}")
         end
       end
+      seed_economy(econ)
+    end
+
+    SEEDED_ECON = %i[money coins battle_points soot].freeze
+
+    # A balance the ledger has no row for (a new account's starting money, or money that
+    # never moved) keeps the save's value and seeds the ledger with it on the next flush,
+    # as an unseeded bag does. Without it the server counted the starting money as $0: a
+    # gated Mart refused the first purchase, and a first sale overwrote the rest.
+    def self.seed_economy(econ)
+      have = econ.keys.map { |k| k.to_sym }
+      SEEDED_ECON.each do |field|
+        next if have.include?(field)
+
+        value = $player.send(field)
+        PEMK::Sync.mark_econ(field, value) if value.is_a?(Integer) && value > 0
+      end
+    rescue => e
+      PEMK.log("auth: seed_economy error: #{e.class}: #{e.message}")
     end
 
     # Restore the bag from the server (server-persistent, like the economy). A
