@@ -184,6 +184,10 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    nothing. Play for a while and read the server log: `DELTA DRIFT` should not
    appear, and `SUSPECT rewind` should only name real rollbacks.
 2. `PEMK_FLAG_STATE=on` — saved progression comes back at every login.
+3. `PEMK_FLAG_ENFORCE=shadow`, then `on` — the server also holds the tracked
+   switches and variables during play: a value changed without the game's own
+   events (a memory or save edit) is put back to the server's. In `shadow` the log
+   shows `WOULD-REPAIR` lines; honest play should produce none.
 
 There is nothing to declare in RPG Maker: which switches count as progression is
 worked out from your own events. After updating the kit, do one debug launch

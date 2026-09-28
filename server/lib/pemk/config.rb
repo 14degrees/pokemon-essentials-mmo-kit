@@ -11,7 +11,7 @@ module PEMK
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
-                :battle_enforce_resim, :resim_min_strikes, :flag_state, :anomaly_detection
+                :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -130,10 +130,16 @@ module PEMK
       # delta stream into a mirror and measure the two against each other, granting
       # progression facts along the way; on = additionally MATERIALIZE those facts
       # into the client at login (a grant-only union, so it can restore progress but
-      # never destroy any). Mirrored VALUES are not yet applied at login: overwriting
-      # a counter needs to know which side is newer, which step 5's fencing supplies.
+      # never destroy any). Mirrored VALUES are held in session by PEMK_FLAG_ENFORCE.
       fmode = env.fetch("PEMK_FLAG_STATE", "off").to_s.strip.downcase
       @flag_state = %w[off shadow on].include?(fmode) ? fmode.to_sym : :off
+
+      # Step 5: in-session enforcement over the owned values. off = nothing; shadow =
+      # log what a repair WOULD restore when a snapshot disagrees with the mirror the
+      # game's own writes built; on = keep the mirror and repair the client. Needs
+      # PEMK_FLAG_STATE (the mirror only exists then), else it stays off.
+      emode = env.fetch("PEMK_FLAG_ENFORCE", "off").to_s.strip.downcase
+      @flag_enforce = %w[off shadow on].include?(emode) && @flag_state != :off ? emode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

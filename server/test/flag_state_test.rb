@@ -526,4 +526,124 @@ class FlagStateTest < Minitest::Test
     assert_empty dropped.cooldowns_for(@a)
   end
 
+  # --- step 5: in-session enforcement -----------------------------------------
+
+  def enforcing(mode = :on)
+    PEMK::FlagState.new(@db, policy: { switches: [1, 2, 3, 4, 9], variables: [4, 7, 10] },
+                        facts: { 4 => "sw:defeated_gym_1" }, repeatable: ["6:2"],
+                        enforce: mode, logger: ->(m) { @logs << m })
+  end
+
+  # State changed some other way than the game's own writes (a memory edit) comes
+  # back to what those writes left; ids the policy does not own are never touched.
+  def test_an_edited_value_is_repaired_to_the_mirror
+    fs = enforcing
+    fs.apply_flags(@a, snap(switches: [1], variables: { "7" => 3 }, self_switches: ["5:2:A"]), 1)
+    fs.apply_delta(@a, delta(variables: { "7" => 4 }))          # the game moved it to 4
+    status, _, plan = fs.apply_flags(@a, snap(switches: [1, 3], variables: { "7" => 99, "77" => 5 },
+                                              self_switches: []), 2, repair: true)
+    assert_equal :ack, status
+    assert_equal({ 3 => false }, plan[:switches])                 # switched on by no event
+    assert_equal({ "7" => 4 }, plan[:variables])                  # 4 edited to 99; 77 is local
+    assert_equal({ "5:2:A" => true }, plan[:self_switches])       # cleared by no event
+    row = fs.snapshot(@a)
+    assert_equal [1], row[:switches].to_a                         # stored as the client will hold it
+    assert_equal 4, row[:variables].to_h["7"]
+    assert(@logs.any? { |l| l.include?("REPAIR") }, @logs.inspect)
+  end
+
+  def test_honest_play_is_never_repaired
+    fs = enforcing
+    fs.apply_flags(@a, snap(switches: [1], variables: { "7" => 3 }), 1)
+    fs.apply_delta(@a, delta(switches: { "3" => true }, variables: { "7" => 4 }, self_switches: { "5:2:A" => true }))
+    _, _, plan = fs.apply_flags(@a, snap(switches: [1, 3], variables: { "7" => 4 }, self_switches: ["5:2:A"]), 2,
+                                repair: true)
+    assert_nil plan
+    refute(@logs.any? { |l| l.include?("REPAIR") }, @logs.inspect)
+  end
+
+  def test_shadow_only_says_what_it_would_repair
+    fs = enforcing(:shadow)
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 99 }), 2, repair: true)
+    assert_nil plan
+    assert_equal 99, fs.snapshot(@a)[:variables].to_h["7"]       # the client's state stands
+    assert(@logs.any? { |l| l.include?("WOULD-REPAIR") }, @logs.inspect)
+  end
+
+  # An older client cannot apply a repair: it is only logged, like shadow.
+  def test_a_client_that_cannot_repair_is_only_logged
+    fs = enforcing
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 99 }), 2, repair: false)
+    assert_nil plan
+    assert(@logs.any? { |l| l.include?("WOULD-REPAIR") }, @logs.inspect)
+  end
+
+  # A variable holding a non-Integer (a Pokemon) cannot show in a snapshot: never
+  # judged, so never overwritten.
+  def test_an_untracked_variable_is_never_repaired
+    fs = enforcing
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    fs.apply_delta(@a, delta(variables: { "7" => nil }))
+    _, _, plan = fs.apply_flags(@a, snap(variables: {}), 2, repair: true)
+    assert_nil plan
+  end
+
+  # A repeatable event's self-switch is guarded by its cooldown, not repaired.
+  def test_repeatable_self_switches_are_left_to_their_cooldown
+    fs = enforcing
+    fs.apply_flags(@a, snap(self_switches: []), 1)
+    _, _, plan = fs.apply_flags(@a, snap(self_switches: ["6:2:A"]), 2, repair: true)
+    assert_nil plan
+  end
+
+  # A fact switch set by no event is repaired off, and never banked.
+  def test_an_edited_fact_is_not_banked
+    fs = enforcing
+    fs.apply_flags(@a, snap(switches: []), 1)
+    _, _, plan = fs.apply_flags(@a, snap(switches: [4]), 2, repair: true)
+    assert_equal({ 4 => false }, plan[:switches])
+    assert_equal 0, @db[:progression_facts].where(account_id: @a).count
+  end
+
+  # Durability, like the facts: the next login is judged against the mirror as it
+  # stood at the seq the stored blob was saved at, never against a later value the
+  # crash lost.
+  def test_a_login_is_judged_against_the_state_the_blob_was_saved_at
+    fs = enforcing
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    fs.note_durable(@a, 1)                                         # a blob saved at seq 1
+    fs.apply_delta(@a, delta(variables: { "7" => 5 }))             # later, never saved: a crash
+    fs.apply_flags(@a, snap(variables: { "7" => 5 }), 2, repair: true)
+    fs.rebase_for_login(@a, 1)                                     # the next session loads that blob
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 3 }), 3, repair: true)
+    assert_nil plan                                                # 3 is what was saved
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 99 }), 4, repair: true)
+    assert_equal({ "7" => 3 }, plan[:variables])                   # an edit after login still is repaired
+  end
+
+  # A blob that does not match the durable mirror: its first snapshot is trusted.
+  def test_an_unverified_login_trusts_its_first_snapshot
+    fs = enforcing
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    fs.note_durable(@a, 1)
+    fs.rebase_for_login(@a, 7)                                     # the blob says seq 7
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 42 }), 8, repair: true)
+    assert_nil plan
+    assert(@logs.any? { |l| l.include?("login state unverified") }, @logs.inspect)
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 43 }), 9, repair: true)
+    assert_equal({ "7" => 42 }, plan[:variables])                  # judged from there on
+  end
+
+  # Under enforcement an overflowing delta cannot hand the next snapshot the truth.
+  def test_an_overflow_does_not_let_the_next_snapshot_rewrite_the_mirror
+    fs = enforcing
+    fs.apply_flags(@a, snap(variables: { "7" => 3 }), 1)
+    fs.apply_delta(@a, delta(overflow: true))
+    _, _, plan = fs.apply_flags(@a, snap(variables: { "7" => 99 }), 2, repair: true)
+    assert_equal({ "7" => 3 }, plan[:variables])
+    assert(@logs.any? { |l| l.include?("SUSPECT delta overflow") }, @logs.inspect)
+  end
+
 end

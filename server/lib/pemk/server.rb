@@ -86,7 +86,7 @@ module PEMK
       if @config.flag_state != :off
         @flag_state = FlagState.new(@db, policy: manifest_policy, facts: manifest_fact_keys,
                                     repeatable: manifest_repeatable, latched: manifest_latched,
-                                    logger: @log)
+                                    enforce: @config.flag_enforce, logger: @log)
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @audit      = Audit.new(@world, logger: @log)
@@ -156,6 +156,7 @@ module PEMK
       end
       @log.call("server: flag state = #{@config.flag_state} " \
                 "(switches/variables#{@config.flag_state == :on ? '; facts materialized at login, grant-only' : ' — detection only'})")
+      @log.call("server: flag enforcement = #{@config.flag_enforce} (owned values repaired to the mirror when on)")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -299,8 +300,20 @@ module PEMK
       end
     end
 
+    # What a client says it can do (a login or auth frame's :caps). Unknown words are
+    # ignored; a client that lists nothing gets the pre-caps behaviour.
+    def note_caps(conn, env)
+      conn.data[:caps] = Array(env[:caps]).grep(String).first(8).map { |c| c[0, 32] }
+    end
+
+    def repairs?(conn)
+      Array(conn.data[:caps]).include?("flag_repair")
+    end
+
     def handle_login(conn, env)
       return reply(conn, type: :login_err, reason: "rate_limited") unless @limiter.allow?(conn.addr)
+
+      note_caps(conn, env)
 
       email = env[:email].to_s
       pw    = env[:password].to_s
@@ -320,7 +333,7 @@ module PEMK
           @reactor.post do
             @mailbox.submit(acct[:id]) do
               blob = @characters.load_blob(acct[:id])   # opaque; never loaded here
-              rec  = reconcile_block(acct[:id])
+              rec  = reconcile_block(acct[:id], fresh: true)
               pos  = (@characters.load_position(acct[:id]) rescue nil)   # M4-B: seed last_pos (never brick login)
               @reactor.post do
                 if @reactor.alive?(conn)   # never bind a dead conn into @online
@@ -339,6 +352,10 @@ module PEMK
 
     def handle_auth(conn, env)
       token = env[:token].to_s
+      note_caps(conn, env)
+      # A reconnect resuming a live session must not be judged like a fresh one: the
+      # client keeps its state, it does not load the stored blob.
+      fresh = env[:resume] != true
       @pool.submit do
         account_id = @sessions.resolve(token)
         if account_id
@@ -346,7 +363,7 @@ module PEMK
           @reactor.post do
             @mailbox.submit(account_id) do
               blob = @characters.load_blob(account_id)
-              rec  = reconcile_block(account_id)
+              rec  = reconcile_block(account_id, fresh: fresh)
               pos  = (@characters.load_position(account_id) rescue nil)   # M4-B: seed last_pos (never brick login)
               @reactor.post do
                 if @reactor.alive?(conn)   # never bind a dead conn into @online
@@ -394,12 +411,14 @@ module PEMK
       # the position audit. nil (no presence yet) leaves the stored position untouched.
       fseq = env[:flags_seq]
       @mailbox.submit(account_id) do
-        @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv, position: last_pos)
+        @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv, position: last_pos,
+                                      flags_seq: fseq)
         # The blob is the client's durability boundary: progression facts granted up
         # to the flags seq it carries are now on the player's disk, so promote them
         # out of pending. Anything granted after it waits for the next save, or a
         # crash here would restore a switch onto a save that lacks its payout.
         @flag_state&.commit_facts(account_id, fseq)
+        @flag_state&.note_durable(account_id, fseq)
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
     end
@@ -859,10 +878,18 @@ module PEMK
       # A dropped job (queue full) must NOT leave the client believing its snapshot
       # landed — it would advance its seq and the server would then reject every
       # later one as stale. Nack so the client can resend.
+      repair = repairs?(conn)
       queued = @mailbox.submit(account_id) do
-        status, flags = @flag_state.apply_flags(account_id, payload, seq)
+        status, flags, plan = @flag_state.apply_flags(account_id, payload, seq, repair: repair)
         flag_anomaly(account_id, :flag_rewind) if flags&.include?("rewind")
-        @reactor.post { reply(conn, type: :flags_ack, seq: seq, flagged: status == :ack && flags.any?) }
+        @reactor.post do
+          reply(conn, type: :flags_ack, seq: seq, flagged: status == :ack && flags.any?)
+          # Step 5: the owned values the snapshot got wrong, as the server holds them.
+          if plan
+            reply(conn, type: :flag_repair, seq: seq, switches: plan[:switches],
+                        variables: plan[:variables], self_switches: plan[:self_switches])
+          end
+        end
       end
       reply(conn, type: :flags_ack, seq: seq, busy: true) unless queued
     end
@@ -1153,7 +1180,10 @@ module PEMK
     # so the client keeps its blob bag and seeds the record on the first flush.
     # mon_seq is the :mon_party high-water; mon_evict is the M3.2 positive list of
     # uids this account traded away and no longer owns (the client evicts them).
-    def reconcile_block(account_id)
+    def reconcile_block(account_id, fresh: true)
+      # Step 5: a session that loads the stored blob is judged against the durable
+      # mirror (or trusted for its first snapshot); a resumed one keeps its mirror.
+      @flag_state&.rebase_for_login(account_id, @characters.flags_seq(account_id)) if fresh
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       { econ: snap[:balances], econ_seq: snap[:last_seq],
@@ -1170,6 +1200,7 @@ module PEMK
         battle_enforce_rng: @config.battle_enforce_rng.to_s,                 # M4 Layer D D7 rng/capture mode
         battle_enforce_resim: @config.battle_enforce_resim.to_s,             # M4 Layer D D8 enforcement mode
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
+        flag_enforce: @config.flag_enforce.to_s,                             # step 5: owned values repaired
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
@@ -1399,6 +1430,7 @@ module PEMK
       if aid
         cancel_pending_trades(aid, conn)
         clear_peer_session(aid)   # a dropped account's peer session dies with it
+        @flag_state&.forget(aid) unless @online.key?(aid)   # step 5 mirrors of a gone account
       end
 
       map = conn.data[:map_id]

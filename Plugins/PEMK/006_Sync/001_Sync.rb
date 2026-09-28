@@ -90,6 +90,11 @@ module PEMK
     # Twin for the :flags channel. Without it, reset zeroes the seq on a new socket
     # and the server drops every later snapshot as stale — the channel goes silent
     # after the first reconnect.
+    # The seq of the last :flags snapshot sent (a repair names the one it judged).
+    def flags_seq
+      @seq[:flags]
+    end
+
     def adopt_flags_seq(n)
       @seq[:flags] = n if n.is_a?(Integer) && n > @seq[:flags]
     end

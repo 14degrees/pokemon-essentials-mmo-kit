@@ -38,7 +38,8 @@ module PEMK
       pw = ask(_INTL("Enter your password:"), true, 64)
       return false if pw.empty?
 
-      reply = PEMK::Auth.send_and_wait(c, { :type => :login, :email => email, :password => pw },
+      reply = PEMK::Auth.send_and_wait(c, { :type => :login, :email => email, :password => pw,
+                                            :caps => PEMK::Auth::CAPS },
                                        [:login_ok, :login_err])
       return true if apply(reply, :login_ok)
 
@@ -71,7 +72,8 @@ module PEMK
         return false
       end
 
-      reply = PEMK::Auth.send_and_wait(c, { :type => :login, :email => email, :password => pw },
+      reply = PEMK::Auth.send_and_wait(c, { :type => :login, :email => email, :password => pw,
+                                            :caps => PEMK::Auth::CAPS },
                                        [:login_ok, :login_err])
       if apply(reply, :login_ok)
         pbMessage(_INTL("Your account is ready. Welcome!"))

@@ -32,6 +32,7 @@ module PEMK
     def reset
       @mode = :off
       @tiers = { :switches => {}, :variables => {} }
+      @repair = nil   # a repair from a dead session must not land in the next one
       (PEMK::Flags::Delta.reset rescue nil)
     end
 
@@ -140,6 +141,73 @@ module PEMK
       out
     end
 
+    # --- step 5: in-session repair --------------------------------------------
+    # The server's mirror of the owned state is built from the game's own writes; a
+    # snapshot that disagreed with it changed some id another way (a memory or save
+    # edit). The repair puts the server's values back at a safe frame, skipping any
+    # id the game wrote again since that snapshot (the next one shows it).
+    def note_repair(msg)
+      @repair = msg if msg.is_a?(Hash) && msg[:seq].is_a?(Integer)
+    end
+
+    def tick_repair
+      r = @repair
+      return unless r && repair_safe?
+
+      @repair = nil
+      applied = apply_repair(r)
+      return if applied.zero?
+
+      $game_map.need_refresh = true if $game_map   # event pages must re-evaluate
+      (PEMK::Sync.mark_flags rescue nil)           # a fresh snapshot confirms it
+      PEMK.log("flags: repaired #{applied} value(s) to the server's (snapshot #{r[:seq]})")
+    rescue => e
+      PEMK.log("flags: repair error #{e.class}: #{e.message}")
+    end
+
+    def repair_safe?
+      $scene.is_a?(Scene_Map) && $game_temp && $game_switches && $game_variables && $game_self_switches &&
+        !$game_temp.in_battle && !$game_temp.message_window_showing &&
+        !$game_temp.player_transferring && !(pbMapInterpreterRunning? rescue true)
+    rescue
+      false
+    end
+
+    # -> how many values changed. Suppressed: this is the server's state coming
+    # back, and its mirror already holds it.
+    def apply_repair(r)
+      seq = r[:seq]
+      d   = PEMK::Flags::Delta
+      applied = 0
+      d.suppress do
+        (r[:switches] || {}).each do |id, on|
+          id = id.to_i
+          next if id <= 0 || d.written_since?("sw/#{id}", seq)
+
+          $game_switches[id] = on ? true : false
+          applied += 1
+        end
+        (r[:variables] || {}).each do |id, val|
+          id = id.to_i
+          next if id <= 0 || !val.is_a?(Integer) || d.written_since?("var/#{id}", seq)
+
+          cur = $game_variables[id]
+          next unless cur.nil? || cur.is_a?(Integer)   # never overwrite what the game parked there
+
+          $game_variables[id] = val
+          applied += 1
+        end
+        (r[:self_switches] || {}).each do |k, on|
+          parts = k.to_s.split(":")
+          next unless parts.length == 3 && !d.written_since?("ss/#{k}", seq)
+
+          $game_self_switches[[parts[0].to_i, parts[1].to_i, parts[2]]] = on ? true : false
+          applied += 1
+        end
+      end
+      applied
+    end
+
     # :flags_ack is telemetry — log a server flag, never write anything back.
     def on_ack(msg)
       PEMK.log("flags: server flagged a state rewind (seq #{msg[:seq]})") if msg && msg[:flagged]
@@ -205,6 +273,7 @@ module PEMK
       return 0 unless times.is_a?(Hash) && $PokemonGlobal && $game_self_switches
 
       applied = 0
+      armed   = []
       PEMK::Flags::Delta.suppress do
         $PokemonGlobal.eventvars = {} unless $PokemonGlobal.eventvars.is_a?(Hash)
         times.each do |key, at|
@@ -223,14 +292,23 @@ module PEMK
           next unless cur.nil? || (cur.is_a?(Integer) && cur < at)
 
           $PokemonGlobal.eventvars[k] = at
-          $game_self_switches[[k[0], k[1], "A"]] = true
+          armed << [k[0], k[1], "A"]
           applied += 1
         end
       end
+      # Recorded, not suppressed: which cooldowns applied is the client's call, so the
+      # server learns the self-switches from the delta stream like any game write.
+      armed.each { |key| $game_self_switches[key] = true }
       applied
     rescue => e
       PEMK.log("flags: cooldown restore error #{e.class}: #{e.message}")
       0
     end
   end
+end
+
+# Step 5: a pending repair lands on the first safe overworld frame.
+if defined?(EventHandlers)
+  EventHandlers.add(:on_frame_update, :pemk_flag_repair,
+    proc { PEMK::Flags.tick_repair })
 end

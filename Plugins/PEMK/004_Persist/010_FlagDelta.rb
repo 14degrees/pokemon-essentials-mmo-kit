@@ -33,6 +33,7 @@ module PEMK
       @overflow      = false
       @origin        = nil # [map_id, event_id] of the running event, for attribution
       @suppressed    = false
+      @written_at    = {}  # "sw/4" => the flags seq current when the game last wrote it
 
       module_function
 
@@ -76,18 +77,33 @@ module PEMK
 
       def suppressed?; @suppressed == true; end
 
+      # Did the game write +key+ after the snapshot +seq+ was sent? A repair judged on
+      # that snapshot must then leave it alone: the next snapshot shows the new value.
+      def written_since?(key, seq)
+        at = @written_at[key]
+        !at.nil? && at >= seq
+      end
+
+      def stamp(key)
+        @written_at.clear if @written_at.size > 5_000
+        @written_at[key] = (PEMK::Sync.flags_seq rescue 0)
+      end
+
       # --- recording ---------------------------------------------------------
 
       def record_switch(id, value)
         return if @suppressed
         return unless PEMK::Flags.owned?(:switches, id)
 
+        stamp("sw/#{id}")
         note(@switches, id, value ? true : false)
       end
 
       def record_variable(id, value)
         return if @suppressed
         return unless PEMK::Flags.owned?(:variables, id)
+
+        stamp("var/#{id}")
         # Only primitives cross the wire. A variable legitimately holds a Pokémon or
         # an Array in Essentials; those are recorded as untracked rather than shipped.
         return note(@variables, id, nil) unless value.is_a?(Integer)
@@ -99,7 +115,9 @@ module PEMK
         return if @suppressed
         return unless key.is_a?(Array) && key.length >= 3
 
-        note(@self_switches, "#{key[0]}:#{key[1]}:#{key[2]}", value ? true : false)
+        k = "#{key[0]}:#{key[1]}:#{key[2]}"
+        stamp("ss/#{k}")
+        note(@self_switches, k, value ? true : false)
       end
 
       def note(bucket, key, value)

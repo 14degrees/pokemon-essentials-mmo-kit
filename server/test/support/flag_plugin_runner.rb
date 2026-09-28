@@ -257,14 +257,17 @@ check(results, "cooldown_never_moves_backwards") do
   $PokemonGlobal.eventvars[[13, 17]] == 9_000
 end
 
-# The restore is server state: echoing it back would be noise the trust gate must explain.
-check(results, "cooldown_restore_does_not_echo") do
+# Which cooldowns apply is the client's call, so the server cannot fold them into its
+# mirror itself: the self-switch A a restore sets travels as a recorded write (the
+# timestamp itself lives in eventvars, outside the delta stream).
+check(results, "cooldown_restore_reports_its_self_switch") do
   $game_self_switches = Game_SelfSwitches.new
   $PokemonGlobal.eventvars = {}
   PEMK::Flags::Delta.reset
   PEMK::Flags.note_facts(switches: [], self_switches: [], event_times: { "13:17" => 5_000 })
   PEMK::Flags.reconcile
-  PEMK::Flags::Delta.drain.nil?
+  d = PEMK::Flags::Delta.drain
+  d && d[:self_switches] == { "13:17:A" => true } && d[:switches].empty? && d[:variables].empty?
 end
 
 # The projection ships only the Integer entries - setVariable can park anything here.
