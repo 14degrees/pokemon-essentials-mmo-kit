@@ -52,18 +52,39 @@ module PEMK
       @inflight = {}
     end
 
-    # Yield every Pokémon in the player's possession: party, then box slots.
-    def each_owned
-      ($player.party.each { |p| yield p if p } if $player&.party)
+    # Yield every Pokémon in the player's possession: party, box slots, the Day Care,
+    # and the partner a fusion (Kyurem, Necrozma, Calyrex) keeps inside its host. A
+    # Pokémon parked in the Day Care or a fusion is still owned: it needs a uid, and a
+    # trade or a redelivery must find it there.
+    def each_owned(&blk)
+      ($player.party.each { |p| with_partner(p, &blk) } if $player&.party)
       storage = $PokemonStorage
       if storage&.boxes
         storage.boxes.each do |box|
           next unless box
-          box.each { |p| yield p if p }
+          box.each { |p| with_partner(p, &blk) }
         end
       end
+      day_care_slots.each { |slot| with_partner(slot.pokemon, &blk) }
     rescue => e
       PEMK.log("mon: each_owned error: #{e.class}: #{e.message}")
+    end
+
+    def with_partner(pkmn)
+      return unless pkmn
+
+      yield pkmn
+      partner = (pkmn.fused rescue nil)
+      yield partner if partner.is_a?(Pokemon)
+    end
+
+    def day_care_slots
+      dc = $PokemonGlobal && $PokemonGlobal.day_care
+      return [] unless dc && dc.respond_to?(:slots)
+
+      dc.slots.select { |slot| slot && slot.pokemon }
+    rescue StandardError
+      []
     end
 
     # Collect up to +max+ mint requests for uid-less mons, assigning each a
@@ -155,7 +176,8 @@ module PEMK
 
     # --- M3.2 trade helpers -----------------------------------------------------
 
-    # Find the owned instance carrying +uid+ (party or any box). -> Pokemon | nil.
+    # Find the owned instance carrying +uid+ (party, a box, the Day Care, a fusion).
+    # -> Pokemon | nil.
     def find_by_uid(uid)
       return nil unless uid
 
@@ -163,10 +185,33 @@ module PEMK
       nil
     end
 
-    # Remove the instance with +uid+ from party (kept COMPACT) or a box slot.
-    # -> true if removed.
+    # Where the instance with +uid+ is: [:party | :box | :day_care | :fused, Pokemon],
+    # or [nil, nil].
+    def locate(uid)
+      return [nil, nil] unless uid
+
+      ($player.party.each { |p| return [:party, p] if p && p.pemk_uid == uid } if $player&.party)
+      if $PokemonStorage&.boxes
+        $PokemonStorage.boxes.each { |box| box&.each { |p| return [:box, p] if p && p.pemk_uid == uid } }
+      end
+      day_care_slots.each { |slot| return [:day_care, slot.pokemon] if slot.pokemon.pemk_uid == uid }
+      each_owned do |p|
+        partner = (p.fused rescue nil)
+        return [:fused, partner] if partner.is_a?(Pokemon) && partner.pemk_uid == uid
+      end
+      [nil, nil]
+    end
+
+    # The key item a fusion turned into its "used" form, by host species (Necrozma by form).
+    FUSION_ITEMS = { :KYUREM => %i[DNASPLICERSUSED DNASPLICERS], :CALYREX => %i[REINSOFUNITYUSED REINSOFUNITY] }.freeze
+    NECROZMA_ITEMS = { 1 => %i[NSOLARIZERUSED NSOLARIZER], 2 => %i[NLUNARIZERUSED NLUNARIZER] }.freeze
+
+    # Remove the instance with +uid+ from party (kept COMPACT), a box slot, the Day
+    # Care, or the fusion holding it (the host goes back to its own form, as its item
+    # would unfuse it, and the item returns to its unused form). -> true if removed.
     def remove_by_uid(uid)
       return false unless uid && $player&.party
+      return true if remove_from_day_care(uid) || remove_from_fusion(uid)
 
       idx = $player.party.index { |p| p && p.pemk_uid == uid }
       if idx
@@ -187,6 +232,31 @@ module PEMK
         end
       end
       false
+    end
+
+    def remove_from_day_care(uid)
+      slot = day_care_slots.find { |s| s.pokemon.pemk_uid == uid }
+      return false unless slot
+
+      slot.reset
+      true
+    end
+
+    def remove_from_fusion(uid)
+      host = nil
+      each_owned do |p|
+        partner = (p.fused rescue nil)
+        if partner.is_a?(Pokemon) && partner.pemk_uid == uid
+          host = p
+          break
+        end
+      end
+      return false unless host
+
+      used, fresh = host.isSpecies?(:NECROZMA) ? NECROZMA_ITEMS[host.form] : FUSION_ITEMS[host.species]
+      host.setForm(0) { host.fused = nil }
+      $bag.replace_item(used, fresh) if used && $bag && $bag.has?(used)
+      true
     end
 
     # Login enforcement (M3.2): drop uids this account traded away and no longer

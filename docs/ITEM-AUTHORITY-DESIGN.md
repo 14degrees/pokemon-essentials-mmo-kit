@@ -1,0 +1,172 @@
+# Item authority: the server owns the bag
+
+Status: design, 2026-09-28, revised after an adversarial review the same day. Approved in
+principle by the project owner ("le serveur maître du sac"). Built in shippable steps, each
+off by default unless it only fixes a loss or a dupe.
+
+## 1. Where we start
+
+The bag is client-authored. Every change to `$bag` marks the `:inv` channel, and the client
+sends the whole bag as an absolute snapshot `{item => qty}`. The server stores the last one
+(`inventory_snapshots`), checks only its shape (caps), and restores it at login over the bag
+the save file carries. It never rejects, never corrects, keeps no history.
+
+Everything else that holds items lives only in the save blob:
+
+| Store | Where | Server sees it |
+|---|---|---|
+| Bag | `$bag` (8 pockets) | yes, restored at login |
+| PC item storage | `$PokemonGlobal.pcItemStorage` | no |
+| Mailbox | `$PokemonGlobal.mailbox` (up to 10 `Mail`) | no |
+| Held items | `Pokemon#item` in the party, the boxes, the Day Care, a fused partner | party only, and only with team checks on |
+
+Two things follow.
+
+- **A dupe and a loss window.** The bag and the blob are persisted on separate channels. A
+  PC withdrawal or taking a held item reaches the server with the next bag flush (half a
+  second), while the PC or the Pokemon that gave the item only changes with the next blob.
+  Kill the game in between: the login restores the bag (with the item) and loads the PC or
+  the Pokemon from the older blob (with the item too). The reverse moves lose items.
+- **No source is judged.** Pickups and one-shot gifts are gated, but the bag the client
+  reports afterwards is adopted whatever it holds.
+
+Increases of the whole possession come from (engine survey, `Data/Scripts`):
+
+- **Server-gated already:** item balls and hidden items (`pbItemBall`, `PEMK_PICKUP_ENFORCE`),
+  NPC gifts (`pbReceiveItem`, `PEMK_GIFT_ENFORCE`).
+- **Shops:** the Poke Mart (plus free Premier Balls), the Battle Point shop, the Game Corner
+  prize desk (`pbBuyPrize`, coins taken by the event), vending machines (an event's
+  `$bag.add` after a Change Gold).
+- **The field:** berry picking (yield from the client clock), the mining game, Mystery Gift,
+  the PC item storage's start items (created lazily).
+- **Battle:** held items gained on the player's side (Pickup, Honey Gather, Thief/Covet and
+  Magician/Pickpocket against wild Pokemon, Ball Fetch, Harvest, Recycle, Sticky Barb), the
+  held item of a caught wild Pokemon, unused battle items given back.
+- **Other players:** a traded Pokemon's held item and mail.
+- **Event exchanges:** fossils, Apricorns, Heart Scales (the event removes one item and
+  gives another item or a Pokemon).
+- **Debug**, which must never be explained.
+
+Decreases (uses, battle consumption, evolution items, TRs - every TM in this PBS is a TR -,
+sales, tosses, releases, items handed to NPCs) are the client's business: a decrease never
+gives anything, so the server accepts every one.
+
+## 2. The model
+
+The server keeps, per account:
+
+- **the possession**: the last accepted totals per item, over all stores (bag, PC, mailbox,
+  held items). Moving an item between stores does not change its total;
+- **the credits**: increases the server authorized and has not yet seen, each with its item,
+  quantity, source and expiry.
+
+On each snapshot, per item: `delta = reported total - possession`. A decrease is accepted. An
+increase takes credits for that item, oldest first; what no credit covers is **unexplained**.
+
+- `shadow` logs `UNEXPLAINED +n ITEM` and files a D5 report; the record adopts the snapshot.
+- `on` records only the explained part, and sends the client its corrected possession
+  (`:inv_correct`), applied on a free overworld frame like `:flag_repair`.
+
+Items are sorted at build time into **tiers**, from the project's own data:
+
+- **tracked**: every way this game can produce the item is a credit source. Judged.
+- **local**: some source cannot be seen or bounded (a computed `pbReceiveItem`, the mining
+  table, Mystery Gift, battle held items until they are modelled...). Recorded, never judged.
+
+Anything the export does not understand makes an item local: a degradation, never a false
+accusation. The tiers ship in the world export, like the flag manifest.
+
+## 3. Credit sources
+
+| Source | Credit | Strength |
+|---|---|---|
+| Pickup grant | the export's item and quantity | server-decided |
+| Gift grant, literal event | the export's item, the request's quantity (bounded by the export) | server-decided |
+| Gift grant, computed or unknown event | none: the client chose the item | the item stays local |
+| Mart purchase (gated) | the item bought, plus the bonus Premier Balls the engine gives | server transaction |
+| Battle Point shop (gated) | the item, against its BP price | server transaction |
+| Trade | the traded Pokemon's held item and mail, moved between the two records in the swap | conservation between accounts |
+| PC start items | `Metadata.start_item_storage`, once per account | server-known |
+| Vending machine | the event's literal item, through a request bound to the event (later) | local until then |
+| Berry picking, mining, battle held items, Mystery Gift, prize desk | none in the first release | local |
+
+A credit lives until its source settles (see section 4); what a fresh login loads is the
+record, which never held an unsettled credit's item.
+
+## 4. What the review changed
+
+An adversarial review of the first draft found that E0 as first written would have added
+dupes, and that several honest paths had no credit. The rules below come from it.
+
+- **Items in transit.** The engine moves an item in two steps with a message in between:
+  taking a held item adds it to the bag, shows a message, then clears the Pokemon; the box
+  screen's "Take" and the mailbox's "Move to Bag" do the same. `Sync.tick` runs inside
+  messages, so a snapshot there counts the item twice, and so does the save written when the
+  window closes. These methods run under an `Inventory.atomic` hold: no `:inv` snapshot and
+  no closing save while it is held (nor while the box screen holds a Pokemon in its hand).
+- **Every store marks the channel.** `Pokemon#item=`, `PCItemStorage#add/remove/clear` and
+  the mail helpers mark `:inv`, and a save always sends the full snapshot (hash-gated), so a
+  berry eaten in battle or an item lost on release reaches the record.
+- **Restore by totals, not by placement.** Uids arrive after the blob is written, evictions
+  and redeliveries run after the inventory reconcile, and a Pokemon can be in the record but
+  not in the blob. The login therefore restores the bag and the PC from the record, then
+  brings each item's total across every store to the record's total: an excess comes off
+  held items first (the record's uids only say which Pokemon to prefer), then the bag; a
+  deficit is added to the bag. Items of a Pokemon that is gone are never moved to the bag.
+- **The record is authoritative only when it is whole.** An older client sends the bag alone;
+  the other stores then carry an older seq. They are used only when their seq equals the
+  bag's, otherwise the blob's stores are kept and become the new baseline.
+- **Trades carry their held item.** Done ahead of E0 as a fix: the commit waits for the offered
+  Pokemon to be unchanged (still in the party or a box, same item), and a change after the
+  commit is settled when the result comes. With E0, `:trade_lock` and `:trade_commit` also carry
+  the item, and the swap moves it between the two records, aborting on a mismatch.
+- **One container list.** Party, boxes, the Day Care, a fusion's partner, the Bug Contest's
+  set-aside party and the Frontier's saved party (rentals excluded) are enumerated in one
+  place, for the snapshot, the restore, the uid sweep and uid lookups. Done ahead of E0 for the
+  Day Care and fusions.
+- **Credits live until they are settled**, not on a timer: a pickup or gift credit with its
+  grant (sealed, voided), a purchase with its transaction; a short grace period applies before
+  an increase is called unexplained. A fresh login drops unsettled credits, but the `resume`
+  flag that decides "fresh" is the client's, so credits must never depend on it alone.
+- **Tiers follow the gates that are on.** The export ships each item's sources; the server
+  derives the tiers at boot from the gates enabled (a Mart item is tracked only once shops are
+  server transactions; an item ball only with the pickup gate, and an offline pickup becomes
+  owed, like a gift).
+- **No client-chosen credit.** A gift grant for a computed or unknown event never credits a
+  tracked item. Vending needs an explicit request bound to its event, not money that dropped
+  (the economy channel coalesces to the latest balance, so any spend would fund it).
+- **Level credit from totals.** The reward audit counts Rare and EXP Candies in the bag only,
+  so depositing them reads as using them and buys level credit. It moves to totals across all
+  stores with E0.
+
+## 5. Steps
+
+Each step ships alone, with unit tests and an autotest scenario.
+
+- **E0 - one record for every item store**, under the rules above. On by default for clients
+  that announce it (a dupe fix), with `PEMK_ITEM_RECORD=bag` to keep the bag-only record.
+- **E1 - the item catalogue and the tiers in the exports.** Buy, sell and BP prices, key and
+  consumable flags, mart stocks per event (the union of their badge branches), vending events,
+  item-ball quantities, and each item's tier.
+- **E2 - the ledger in shadow** (`PEMK_ITEM_AUTHORITY=shadow`). Possession, credits from the
+  sources above that are already server-known, `UNEXPLAINED` logs and the `item_unexplained`
+  D5 kind. Every autotest scenario runs with it and must log nothing.
+- **E3 - shops as server transactions** (`PEMK_SHOP_ENFORCE`). The client asks to buy or sell;
+  the server checks the stock, the price and the balance, moves the money and the credit in
+  one transaction, and answers. A sale needs the item in the possession, so a made-up item can
+  no longer turn into money.
+- **E4 - enforcement** (`PEMK_ITEM_AUTHORITY=on`). Unexplained increases of tracked items are
+  not recorded and are corrected on the client.
+- **Later:** battle allowances (a won wild battle credits its foe's possible held items, a
+  Pickup Pokemon its table), berry plants, the prize desk, and fixes for the engine's own dupes
+  (a held item swapped for mail then cancelled; Trick or Bestow on a wild Pokemon that is then
+  caught).
+
+## 6. Limits we accept
+
+- The server bounds what enters the possession; it cannot say an item was used legitimately.
+  Uses are the client's, as the EXP and level checks already assume.
+- An item added and spent between two snapshots never shows in one. Its effects are judged
+  where they land: levels by the reward audit, money by the ledger, and sales by E3.
+- Local items stay client-authored until their source is modelled. The tier table says which,
+  so an operator knows exactly what is judged.
