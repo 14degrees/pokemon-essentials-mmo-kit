@@ -78,6 +78,18 @@ module Autotest
       define_method("#{verb}!") { |*args, timeout: 30| ap!([verb, *args].join(" ").strip, timeout: timeout) }
     end
 
+    # A test's own setup is a source no server knows: with item authority on, the harness
+    # credits the account first, as a pickup or a purchase would (E2).
+    def add_item(item, qty = 1, timeout: 30)
+      @scenario.credit_setup(self, item, qty)
+      ap(["add_item", item, qty].join(" "), timeout: timeout)
+    end
+
+    def add_item!(item, qty = 1, timeout: 30)
+      @scenario.credit_setup(self, item, qty)
+      ap!(["add_item", item, qty].join(" "), timeout: timeout)
+    end
+
     def state
       ap("state")
     end

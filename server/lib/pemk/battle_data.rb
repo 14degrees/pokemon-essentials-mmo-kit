@@ -71,6 +71,11 @@ module PEMK
     def item(id);         @items[id];          end
     def item_known?(id);  @items.key?(id);     end
 
+    # Item authority E2: the engine rules that hand out items the server can bound -
+    # {"start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true}. Empty for
+    # an export that predates them.
+    def item_rules; @item_rules || {}; end
+
     # Can this item legally sit in a battler's held-item slot? Unknown item -> false
     # (a held item the export doesn't know about is not something we can vouch for).
     def holdable?(id)
@@ -144,6 +149,7 @@ module PEMK
       @moves        = freeze_hash(doc["moves"])
       @species      = freeze_hash(species)
       @trainers     = load_trainers(doc["trainers"])   # optional (a pre-D4 export has none)
+      @item_rules   = freeze_hash(doc["item_rules"])   # optional (item authority E2)
 
       @loaded = true
       @log.call("battle-data: loaded #{summary} from #{path}")

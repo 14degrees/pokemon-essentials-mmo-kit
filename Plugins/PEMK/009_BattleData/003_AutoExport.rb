@@ -70,7 +70,7 @@ module PEMK
 
     # battle_data.json derives from the compiled GameData .dat files it walks.
     def battle_sources
-      %w[species moves abilities items types trainers].map { |n| "Data/#{n}.dat" } + exporter_sources
+      %w[species moves abilities items types trainers metadata].map { |n| "Data/#{n}.dat" } + exporter_sources
     end
 
     # The exporters themselves: a kit update that changes what they write regenerates

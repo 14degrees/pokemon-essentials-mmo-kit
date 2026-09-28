@@ -20,8 +20,9 @@ module PEMK
       @log = logger || ->(_m) {}
     end
 
-    # rows: [{ account_id:, uid:, trade_id:, body: }]. Called inside the trade's
-    # transaction, so the swap and its deliveries commit together.
+    # rows: [{ account_id:, uid:, trade_id:, body:, item: }], item being the held item
+    # the lock said and the sender's record confirmed (nil otherwise). Called inside the
+    # trade's transaction, so the swap and its deliveries commit together.
     def store(rows, now: Time.now)
       rows.each do |r|
         fields = { trade_id: r[:trade_id], body: Sequel.blob(r[:body]), item: r[:item], acked: false,
@@ -41,9 +42,18 @@ module PEMK
       @db[:trade_deliveries].where(account_id: account_id, acked: true).delete
     end
 
-    # A fresh login loads a save that holds no unsealed delivery.
+    # A fresh login loads a save that holds no unsealed delivery: each is owed again, and
+    # may explain its item again when it comes (item authority E2).
     def unack(account_id)
       @db[:trade_deliveries].where(account_id: account_id, acked: true).update(acked: false)
+      @db[:trade_deliveries].where(account_id: account_id, explained: true).update(explained: false)
+    end
+
+    # E2: the delivered Pokemon +uid+ joined +account_id+'s possession holding +item+.
+    # -> true when its delivery explains that item: the item the swap confirmed, once.
+    def explain(account_id, uid, item)
+      @db[:trade_deliveries].where(account_id: account_id, uid: uid, item: item.to_s, explained: false)
+                            .update(explained: true).positive?
     end
 
     # -> [{ uid:, trade_id:, body: }] still owed to +account_id+. A uid it no longer
