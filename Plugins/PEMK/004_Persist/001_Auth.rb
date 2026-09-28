@@ -322,7 +322,12 @@ module PEMK
       deadline = mono + timeout
       while mono < deadline
         sleep(0.01)
-        c.poll.each { |m| return m if m.is_a?(Hash) && types.include?(m[:type]) }
+        batch = c.poll
+        i = batch.index { |m| m.is_a?(Hash) && types.include?(m[:type]) }
+        # Everything else in the batch goes back to the client, for the pump: a frame
+        # that came in the same read as the reply used to be dropped.
+        c.requeue(i ? batch[0...i] + batch[(i + 1)..-1] : batch)
+        return batch[i] if i
         return nil unless c.connected?
       end
       nil
