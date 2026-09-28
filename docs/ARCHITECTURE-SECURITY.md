@@ -461,10 +461,25 @@ A fresh login drops the credits still waiting: the record it loads never held th
 - **`shadow`** — judges and reports; the record adopts every snapshot.
 - **`on`** — enforcement (step E4) is not built yet: `on` runs as `shadow`.
 
-Sources the server does not model yet leave their items unexplained: berries, battle
-held items (Pickup, Thief, a caught Pokemon's item), the prize desk, vending machines,
-Mystery Gift, and anything added with the gates off. Read `UNEXPLAINED` lines with that
-list in mind until the tiers (E2b) sort those items out.
+Only **tracked** items are judged. An item is tracked when every way the game can produce
+it leaves a credit under the gates that are on; it is **local** - recorded, never judged -
+when some source cannot be seen or bounded. The exports list those sources, from the
+project's own data: the items wild Pokemon may hold (caught with them, or stolen), the
+Pickup ability's table and Honey Gather, every berry when the game has berry plants, the
+mining game's table, gifts and prizes whose item is computed (the lottery), items events
+add straight to the bag (a vending machine, the prize desk), common events that give
+items, and, while their gate is off, shop stocks and literal gifts. The boot log says how
+many items are local and why (`item tiers: 227 local (wild held items 89, berry plants 67,
+...)` for the demo with every gate on, which leaves 466 items judged). An event whose
+item the export cannot name at all is listed in a `WARNING`; its items stay judged, and
+`PEMK_ITEM_LOCAL` (comma-separated ids) makes them local, as it does for items a plugin's
+own code gives. Anything the exports do not understand makes an item local: a
+degradation, never a false accusation.
+
+Mystery Gift is not modelled: an item it gives is judged like any other. In the demo the
+Master Ball and the Rare Candy are local (the lottery draws its prize on the client; the
+Pickup ability can find a Rare Candy) until the lottery is drawn by the server and battle
+rewards are credited.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 

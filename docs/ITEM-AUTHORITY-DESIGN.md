@@ -165,7 +165,13 @@ Each step ships alone, with unit tests and an autotest scenario.
   otherwise a credit. An increase no credit covers is a debt for two minutes (a pickup is
   reported after its message closes, when the bag already went out), then `UNEXPLAINED`:
   one line per account and item and one review count per account each sweep. Autotest 072
-  buys and picks up honestly and adds a Master Ball from nowhere. The tiers are E2b.
+  buys and picks up honestly and adds an X Attack from nowhere. **E2b done the same day**:
+  the world export lists the item sources no request names (computed gifts and item balls,
+  `$bag.add`, `pbBuyPrize`, common events, berry plants, the mining game) and the battle
+  export the species' wild items and the Pickup, Honey Gather and mining tables; the
+  server derives the tiers at boot from them and the gates that are on, judges tracked
+  items only, and names in a warning any source whose items it cannot tell
+  (`PEMK_ITEM_LOCAL` for the honest ones).
 - **E3 - shops as server transactions** (`PEMK_SHOP_ENFORCE`). The client asks to buy or sell;
   the server checks the stock, the price and the balance, moves the money and the credit in
   one transaction, and answers. A sale needs the item in the possession, so a made-up item can

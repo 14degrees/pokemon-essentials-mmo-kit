@@ -36,7 +36,7 @@ class ServerItemLedgerTest < Minitest::Test
           "once" => true, "dynamic" => true }
       ] },
       "15" => { "name" => "Mart", "width" => 10, "height" => 10, "objects" => [
-        { "kind" => "mart", "items" => %w[POTION POKEBALL], "prices" => {}, "dynamic" => false,
+        { "kind" => "mart", "items" => %w[POKEBALL], "prices" => {}, "dynamic" => false,
           "x" => 2, "y" => 2, "event_id" => 5 },
         { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "dynamic" => false,
           "x" => 6, "y" => 2, "event_id" => 7 }
@@ -54,7 +54,11 @@ class ServerItemLedgerTest < Minitest::Test
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["items"].merge!("POTION" => item(300), "POKEBALL" => item(200, ball: true), "PREMIERBALL" => item(0, ball: true),
                       "PROTEIN" => item(10_000, bp: 16))
-  src["item_rules"] = { "start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true }
+  # The engine's tables, fixed here (the real export's wild items and Pickup table would
+  # make half these items local): NUGGET alone comes from the Pickup ability.
+  src["item_rules"] = { "start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true,
+                        "pickup_items" => ["NUGGET"] }
+  src["species"].each_value { |s| s.delete("wild_items") }
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
 
@@ -155,15 +159,15 @@ class ServerItemLedgerTest < Minitest::Test
     s, lo = login("il1@t.co")
     id = lo[:account_id]
     inv(s, 1, {}, st)                  # the first snapshot is the baseline
-    inv(s, 2, { MASTERBALL: 1 })
-    assert_equal [["MASTERBALL", -1]], owing(id)
+    inv(s, 2, { RARECANDY: 1 })
+    assert_equal [["RARECANDY", -1]], owing(id)
 
     # Its grace runs out: the next sweep reports it.
     hold_periodic_sweep
     @db[:item_credits].where(account_id: id).update(expires_at: Time.now - 1)
     @server.send(:settle_items)
     Timeout.timeout(5) { sleep 0.05 until @db[:player_flags].where(account_id: id, kind: "item_unexplained").count == 1 }
-    assert(logs.any? { |l| l.include?("account #{id} UNEXPLAINED +1 MASTERBALL") })
+    assert(logs.any? { |l| l.include?("account #{id} UNEXPLAINED +1 RARECANDY") })
     assert_empty owing(id)
   end
 
@@ -183,6 +187,16 @@ class ServerItemLedgerTest < Minitest::Test
     assert_equal 2, lines.size, lines.inspect
     assert(lines.any? { |l| l.include?("+3 ORANBERRY") })
     assert_equal 1, @db[:player_flags].where(account_id: id, kind: "item_unexplained").get(:count)
+  end
+
+  # A Nugget can come from the Pickup ability, which no request names: recorded, not judged.
+  def test_a_local_item_owes_nothing
+    start_server
+    assert(logs.any? { |l| l.include?("item tiers: ") && l.include?("Pickup 1") })
+    s, lo = login("il2b@t.co")
+    inv(s, 1, {}, st)
+    inv(s, 2, { NUGGET: 1, RARECANDY: 1, MASTERBALL: 1 })
+    assert_equal [["RARECANDY", -1]], owing(lo[:account_id]), "the Master Ball: a computed gift"
   end
 
   def test_the_first_snapshot_is_the_baseline
@@ -374,9 +388,9 @@ end
   def test_an_item_the_senders_record_never_knew_is_not_explained
     start_server
     a, la, b, lb, ua, ub = traders(a_holders: {})
-    assert_equal true, trade(a, la, b, lb, ua, ub, a_says: :MASTERBALL)[:ok]
+    assert_equal true, trade(a, la, b, lb, ua, ub, a_says: :RARECANDY)[:ok]
     assert_nil @db[:trade_deliveries].where(account_id: lb[:account_id], uid: ua).get(:item)
-    inv(b, 2, {}, st(holders: { ua => :MASTERBALL }))
-    assert_equal [["MASTERBALL", -1]], owing(lb[:account_id])
+    inv(b, 2, {}, st(holders: { ua => :RARECANDY }))
+    assert_equal [["RARECANDY", -1]], owing(lb[:account_id])
   end
 end
