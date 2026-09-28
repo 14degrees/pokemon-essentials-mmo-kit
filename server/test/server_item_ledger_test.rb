@@ -242,6 +242,9 @@ class ServerItemLedgerTest < Minitest::Test
     inv(s, 2, { POKEBALL: 10, PREMIERBALL: 1 })
     assert_empty owing(lo[:account_id])
     assert_empty credits(lo[:account_id])
+    # The purchase joined the record: no credit is left over to explain ten more.
+    inv(s, 3, { POKEBALL: 20, PREMIERBALL: 1 })
+    assert_equal [["POKEBALL", -10]], owing(lo[:account_id])
   end
 
   def test_a_bp_exchange_explains_its_item
