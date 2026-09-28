@@ -19,6 +19,8 @@
 #   add_item ITEM [QTY]    add_pokemon SPECIES LEVEL    heal    money AMOUNT
 # Readers: get_switch ID, get_var ID, get_selfswitch MAP EVENT LETTER, get_item ITEM
 # (how many the bag holds). And save.
+# set_raw_var ID VALUE / set_raw_switch ID on|off change a value without the game's
+# setter (what a memory edit does), to test that the server repairs it.
 #===============================================================================
 module PEMK
   module Autopilot
@@ -408,6 +410,12 @@ module PEMK
           when "get_item"
             item = a[0].to_s.upcase.to_sym
             { "item" => item.to_s, "quantity" => ($bag ? $bag.quantity(item) : 0) }
+          when "set_raw_var"      # the value changes, the game's setter never runs:
+            $game_variables.instance_variable_get(:@data)[a[0].to_i] = a[1].to_i   # what a memory edit does
+            { "variable" => a[0].to_i, "value" => $game_variables[a[0].to_i] }
+          when "set_raw_switch"
+            $game_switches.instance_variable_get(:@data)[a[0].to_i] = on?(a[1])
+            { "switch" => a[0].to_i, "value" => $game_switches[a[0].to_i] ? true : false }
           end
         Autopilot.respond(id, { "ok" => true }.merge(result))
       end
@@ -422,7 +430,7 @@ module PEMK
       Autopilot.verb("event_pages") { |id, rest| cmd_event_pages(id, rest) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
       %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
-         get_switch get_var get_selfswitch get_item].each do |name|
+         get_switch get_var get_selfswitch get_item set_raw_var set_raw_switch].each do |name|
         Autopilot.verb(name) do |id, rest|
           next Autopilot.respond(id, "ok" => false, "error" => "no game loaded yet") unless $player
 

@@ -7,7 +7,7 @@
 # a blackout home is honest play too. Nothing may be suspected, corrected, refused,
 # flagged or quarantined, and the relaunch must give everything back.
 MAX_SECURITY = {
-  PEMK_POS_ENFORCE: "on", PEMK_PICKUP_ENFORCE: "on", PEMK_FLAG_STATE: "on",
+  PEMK_POS_ENFORCE: "on", PEMK_PICKUP_ENFORCE: "on", PEMK_FLAG_STATE: "on", PEMK_FLAG_ENFORCE: "on",
   PEMK_BATTLE_ENFORCE_TEAMS: "on", PEMK_BATTLE_ENFORCE_ENCOUNTERS: "on",
   PEMK_BATTLE_ENFORCE_CATCHES: "on", PEMK_BATTLE_ENFORCE_REWARDS: "on",
   PEMK_BATTLE_ENFORCE_EXP: "on", PEMK_BATTLE_ENFORCE_RNG: "on",
@@ -17,7 +17,7 @@ MAX_SECURITY = {
 # What the server writes about an account it suspects, corrects or refuses.
 ALARMS = Regexp.union(/SUSPECT/, /DRIFT/, /mode_mismatch/, /over budget/, /over the hourly/,
                       /CONDEMNED/, /noclip/, /illegal_warp/, /posenforce/, /interact (?!match)/,
-                      /suspicious team/, /illegal team/, /bag divergence/, /quarantin/)
+                      /suspicious team/, /illegal team/, /bag divergence/, /quarantin/, /REPAIR/)
 
 Autotest.scenario "an honest player trips nothing with every protection on",
                   flags: MAX_SECURITY, budget: 600 do |s|
