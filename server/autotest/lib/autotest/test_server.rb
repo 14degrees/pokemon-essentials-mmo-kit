@@ -39,6 +39,12 @@ module Autotest
       @mutex.synchronize { @lines.grep(pattern) }
     end
 
+    # Keeps +account_id+'s mailbox busy for +seconds+: what the account asks meanwhile is
+    # answered late, as by a slow server.
+    def hold_account(account_id, seconds)
+      @server.instance_variable_get(:@mailbox).submit(account_id) { sleep seconds }
+    end
+
     private
 
     def boot

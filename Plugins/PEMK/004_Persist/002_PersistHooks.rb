@@ -76,6 +76,7 @@ module Game
         (PEMK::Inventory.restore_stores rescue nil)  # PC, mailbox, held items (after evictions)
         (PEMK::TradeRedeliver.ask_owed rescue nil)   # traded Pokemon the save may lack
         (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
+        (PEMK::Shop.settled_by_login rescue nil)     # the restore already holds every deal the server made
         # Server-authoritative: the local Game.rxdata is a disposable per-session
         # cache, so overwriting it is always fine. Clear begun_new_game so the core
         # skips its "a different game is already saved" warning on the next save.
@@ -91,6 +92,7 @@ module Game
         (PEMK::Inventory.restore_stores rescue nil)  # PC, mailbox, held items (after evictions)
         (PEMK::TradeRedeliver.ask_owed rescue nil)   # traded Pokemon the save may lack
         (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
+        (PEMK::Shop.settled_by_login rescue nil)     # the restore already holds every deal the server made
         PEMK::Auth.clear_pending
       end
 

@@ -144,12 +144,13 @@ money by a server transaction.
 
 These are live today and are fixed first.
 
-- **A stale reply overwrote newer money.** `:econ_ack` and `:econ_rej` were applied as
-  absolute values whatever frame they answered. With a gain pending when an older frame's
-  reply landed, a spend in between marked a value that no longer had the gain. A reply
-  now applies only when it answers its field's latest frame, and as a delta (local +=
-  server value - value sent) while a newer change is pending.
-- **A late shop reply.** When a gated deal's reply misses its five seconds, the clerk
+- **A stale reply overwrote newer money** (fixed 2026-09-29). `:econ_ack` and `:econ_rej`
+  were applied as absolute values whatever frame they answered. With a gain pending when an
+  older frame's reply landed, a spend in between marked a value that no longer had the
+  gain. A reply now applies only when it answers its field's latest frame, and as a delta
+  (local += server value - value sent) while a newer change is pending.
+- **A late shop reply** (fixed 2026-09-29; void rows capped per account, and a refused deal
+  needs no row). When a gated deal's reply misses its five seconds, the clerk
   says it cannot reach the server, but the server may already have moved the money and
   the items. The next `ask` dropped the late grant. A sale then left the items in the bag
   and out of the server's record, and E4 took them back. The review proposed that each
@@ -195,10 +196,10 @@ These are live today and are fixed first.
   - Whether a plugin registers an `:on_trainer_load` handler (named as unbounded).
   - The start money.
   - Done: the prices a clerk's Mart calls can see.
-- **M0.5 - protocol safety.**
-  - Done: the starting money seed.
-  - Seq-bound replies applied as deltas.
-  - A deal given up on is asked for again by its seq, and a late grant is applied.
+- **M0.5 - protocol safety.** Done 2026-09-29:
+  - the starting money seed;
+  - seq-bound replies applied as deltas;
+  - a deal given up on asked about again by its nonce, and a late grant applied.
 - **M1 - claims in shadow** (`PEMK_MONEY_AUTHORITY=shadow`).
   - The client sends trainer and Pay Day claims with nonces. The server checks them, logs
     what it would pay against what the frames show, and logs `UNEXPLAINED` for a frame

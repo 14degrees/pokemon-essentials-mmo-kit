@@ -122,6 +122,21 @@ class ServerShopTest < Minitest::Test
     recv_type(s, :shop_grant, :shop_deny)
   end
 
+  def ask_deal(s, op, item, qty, unit, nonce:, seq:, event: 5)
+    send_env(s, { type: :shop_req, op: op, item: item, quantity: qty, unit_price: unit, map: 15, event: event,
+                  seq: seq, nonce: nonce })
+    recv_type(s, :shop_grant, :shop_deny)
+  end
+
+  def recheck(s, nonce, seq:)
+    send_env(s, { type: :shop_req, recheck: true, nonce: nonce, seq: seq })
+    recv_type(s, :shop_grant, :shop_deny)
+  end
+
+  def record(lo, column = :bag)
+    @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(column).to_h
+  end
+
   def bp_player(points: 50)
     s, lo = player
     send_env(s, { type: :econ, field: :battle_points, value: points, seq: 1 })
@@ -248,6 +263,64 @@ class ServerShopTest < Minitest::Test
     assert_equal "money", ask(s, :sell, "POTION", 2, 150)[:reason]
     assert_equal 2, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
     assert_equal 999_900, money(lo)
+  end
+
+  # A deal the client names by a nonce runs once: the same request again (its answer
+  # lost with a socket) gets the recorded answer, and moves nothing.
+  def test_a_deal_runs_once_by_its_nonce
+    start_server
+    s, lo = player
+    assert_equal true, lo[:shop_recheck]
+    r = ask_deal(s, :buy, "POTION", 1, 300, nonce: 77, seq: 1)
+    assert_equal [:shop_grant, 700, -300, 77], r.values_at(:type, :balance, :delta, :nonce)
+    again = ask_deal(s, :buy, "POTION", 1, 300, nonce: 77, seq: 2)
+    assert_equal [:shop_grant, -300], again.values_at(:type, :delta)
+    assert_equal 700, money(lo), "not run twice"
+    assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], reason: "shop:buy:POTIONx1").count
+  end
+
+  # A client that gave up waiting asks how the deal ended. A nonce the server never saw
+  # is void from then on: the request, arriving late, runs nothing.
+  def test_a_deal_given_up_on_is_asked_again
+    start_server
+    s, lo = player
+    ask_deal(s, :buy, "POTION", 1, 300, nonce: 5, seq: 1)
+    assert_equal [:shop_grant, -300, 0], recheck(s, 5, seq: 2).values_at(:type, :delta, :bonus)
+    assert_equal [:shop_deny, "void"], recheck(s, 6, seq: 3).values_at(:type, :reason)
+    assert_equal [:shop_deny, "void"], ask_deal(s, :buy, "POTION", 1, 300, nonce: 6, seq: 4).values_at(:type, :reason)
+    assert_equal 700, money(lo)
+    assert_equal [:shop_deny, "price"], ask_deal(s, :buy, "POTION", 1, 1, nonce: 8, seq: 5).values_at(:type, :reason)
+    assert_equal [:shop_deny, "void"], recheck(s, 8, seq: 6).values_at(:type, :reason), "a refusal moved nothing"
+    assert_equal "bad", recheck(s, nil, seq: 7)[:reason]
+    assert_equal %w[grant void void], @db[:shop_deals].order(:nonce).select_map(:outcome)
+  end
+
+  # A client asking about nonces it never sent gets told no, without filling the table.
+  def test_voids_are_bounded
+    start_server
+    _, lo = player
+    deals = PEMK::ShopDeals.new(@db)
+    (1..PEMK::ShopDeals::VOID_MAX + 5).each { |n| assert_equal "void", deals.void(lo[:account_id], n)[:outcome] }
+    assert_equal PEMK::ShopDeals::VOID_MAX, @db[:shop_deals].count
+  end
+
+  # A purchase joins the server's record (bag and judged totals), as a sale leaves it: a
+  # login after a lost answer restores both sides of the deal.
+  def test_a_purchase_joins_the_record
+    start_server
+    s, lo = player(bag: { POTION: 1 })
+    @db[:inventory_snapshots].where(account_id: lo[:account_id]).update(judged: Sequel.pg_jsonb("POTION" => 1))
+    assert_equal :shop_grant, ask(s, :buy, "POTION", 2, 300)[:type]
+    assert_equal 3, record(lo)["POTION"]
+    assert_equal 3, record(lo, :judged)["POTION"]
+    assert_equal :shop_grant, ask(s, :sell, "POTION", 3, 150, seq: 2)[:type], "all three are the server's"
+    assert_nil record(lo)["POTION"]
+  end
+
+  def test_shadow_does_not_record_deals
+    start_server("shadow")
+    _, lo = player
+    assert_equal false, lo[:shop_recheck]
   end
 
   def test_shadow_grants_and_moves_no_money

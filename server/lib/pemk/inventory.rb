@@ -142,6 +142,29 @@ module PEMK
       true
     end
 
+    # A purchase the server makes: its items join the record's bag (and the judged totals,
+    # under +canon+'s names) in the same transaction as the money, as a sale's leave it.
+    # A client that lost the answer and logs in again gets both sides of the deal back
+    # from the server. +items+ { item => qty }. -> false when there is no record yet (the
+    # first snapshot brings them).
+    def add_bought(account_id, items, canon: ->(i) { i }, now: Time.now)
+      row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
+      return false unless row && row[:bag]
+
+      bag    = row[:bag].to_h
+      judged = row[:judged] && row[:judged].to_h
+      items.each do |item, qty|
+        next unless qty.to_i.positive?
+
+        bag[item.to_s] = bag[item.to_s].to_i + qty
+        judged[canon.call(item.to_s)] = judged[canon.call(item.to_s)].to_i + qty if judged
+      end
+      fields = { bag: Sequel.pg_jsonb(bag), updated_at: now }
+      fields[:judged] = Sequel.pg_jsonb(judged) if judged
+      @db[:inventory_snapshots].where(account_id: account_id).update(fields)
+      true
+    end
+
     # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record
     # never saw that Pokemon or is not whole. The snapshot lists every owned uid.
     def holder_item(account_id, uid)

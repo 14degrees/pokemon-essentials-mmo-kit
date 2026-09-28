@@ -94,6 +94,7 @@ module PEMK
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
+      @shop_deals = ShopDeals.new(@db) if @config.shop_enforce == :on   # E3: a deal runs once, asked again by its nonce
       @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
       if @item_ledger   # E2b: which items this game can produce unseen, under the gates that are on
@@ -1289,6 +1290,9 @@ module PEMK
     # itself and answers with the balance the client adopts; in shadow it only judges.
     def handle_shop_req(conn, env, account_id)
       seq = env[:seq]; op = env[:op]; item = env[:item]; qty = env[:quantity]; unit = env[:unit_price]
+      nonce = @shop_deals && ShopDeals.nonce(env[:nonce])   # a deal the server records (gate on)
+      return recheck_deal(conn, account_id, seq, nonce) if env[:recheck] == true
+
       bp = env[:bp] == true   # the Battle Point exchange: bought with BP, never sold to
       unless %i[buy sell].include?(op) && item.is_a?(String) && item.match?(GIFT_ITEM) &&
              qty.is_a?(Integer) && qty.between?(1, 999) && unit.is_a?(Integer) && unit >= 0 && !(bp && op == :sell)
@@ -1301,7 +1305,16 @@ module PEMK
       field = bp ? :battle_points : :money
       shop  = bp ? "bpshop" : "shop"
       @mailbox.submit(account_id) do
+        # A deal already made (its answer lost or late) is answered as it ended, never
+        # run twice; a nonce asked about before it arrived is void.
+        if nonce && (done = @shop_deals.find(account_id, nonce))
+          out = deal_reply(done)
+          @reactor.post { reply(conn, seq: seq, nonce: nonce, **out) if @reactor.alive?(conn) }
+          next
+        end
         balance = nil
+        delta   = nil
+        bonus   = 0
         why ||= "not_held" if op == :sell && !on && !@inventory.holds?(account_id, item, qty)
         @db.transaction do
           # A sale the server makes takes the items out of its record with the money in,
@@ -1320,29 +1333,67 @@ module PEMK
               raise Sequel::Rollback   # nothing moves: not the items either
             end
           end
-          # E2: what the clerk sold - and the Premier Balls a Mart adds - is explained.
+          # What the clerk sold - and the Premier Balls a Mart adds - joins the server's
+          # record, as a sale's items leave it: the next snapshot shows no increase. A
+          # credit would be left over there, to explain items conjured later. Without a
+          # record to join (shadow, or none yet), a credit explains them instead (E2).
           if why.nil? && op == :buy
-            ref = "#{env[:map]}:#{env[:event]}"
-            credit_item(account_id, item, qty, shop, ref)
-            bonus = bp ? 0 : premier_bonus(item, qty)
-            credit_item(account_id, "PREMIERBALL", bonus, shop, ref) if bonus.positive?
+            bonus  = bp ? 0 : premier_bonus(item, qty)
+            bought = { item => qty }
+            bought["PREMIERBALL"] = bonus if bonus.positive?
+            unless on && @inventory.add_bought(account_id, bought, canon: method(:canon))
+              ref = "#{env[:map]}:#{env[:event]}"
+              bought.each { |i, n| credit_item(account_id, i, n, shop, ref) }
+            end
+          end
+          if nonce && why.nil?
+            @shop_deals.record(account_id, nonce, "grant", op: op, item: item, quantity: qty, field: field,
+                                                           delta: delta, bonus: bonus)
           end
         end
         if why
           @log.call("#{shop}: account #{account_id} #{on ? 'DENY' : 'WOULD-DENY'} #{op} #{item} x#{qty} at #{unit} (#{why})")
         end
-        out = why && on ? { type: :shop_deny, reason: why } : { type: :shop_grant, balance: balance }
+        out = if why && on
+                { type: :shop_deny, reason: why }
+              else
+                { type: :shop_grant, balance: balance, delta: delta, bonus: bonus }
+              end
+        out[:nonce] = nonce if nonce
         @reactor.post { reply(conn, seq: seq, **out) if @reactor.alive?(conn) }
       rescue StandardError => e
         @log.call("shop: request failed #{e.class}: #{e.message}")
       end
     end
 
+    # A client that gave up waiting for a deal asks how it ended, by its nonce: the
+    # recorded outcome, or - the request never having arrived - void, so a copy of it
+    # still on its way is refused. A recheck never runs a deal.
+    def recheck_deal(conn, account_id, seq, nonce)
+      return reply(conn, type: :shop_deny, seq: seq, reason: "bad") unless nonce
+
+      @mailbox.submit(account_id) do
+        done = @shop_deals.find(account_id, nonce) || @shop_deals.void(account_id, nonce)
+        out = deal_reply(done)
+        @reactor.post { reply(conn, seq: seq, nonce: nonce, **out) if @reactor.alive?(conn) }
+      rescue StandardError => e
+        @log.call("shop: recheck failed #{e.class}: #{e.message}")
+      end
+    end
+
+    # The answer a recorded deal gives when asked again: what it moved (the balance may
+    # have moved since), or void - nothing moved.
+    def deal_reply(done)
+      return { type: :shop_grant, delta: done[:delta], bonus: done[:bonus].to_i } if done[:outcome] == "grant"
+
+      { type: :shop_deny, reason: "void" }
+    end
+
     # -> nil when the export allows it, else why not. A purchase needs a clerk the world
     # export knows (a Mart, or the Battle Point exchange for +bp+), an item in its stock
-    # (any item for a computed stock, never a free one) and the catalogue price in money
-    # or BP, or the one the event sets; a sale needs a sellable item at its catalogue
-    # sell price.
+    # (any item for a computed stock, never a free one) and a price one of its event's
+    # Mart calls can charge, in money or BP; a sale needs a sellable item at a price the
+    # clerk can pay back, from a clerk that buys anything back.
     def shop_refusal(op, map, event, item, unit, bp: false)
       data = @battle.item(item)
       return "not_sold" unless data
@@ -1789,6 +1840,24 @@ module PEMK
       maybe_anomaly_sweep
       maybe_resim_sweep
       maybe_item_sweep
+      maybe_prune_deals
+    end
+
+    DEAL_PRUNE_SEC = 3600
+
+    # E3: recorded deals older than a week go, once an hour, on a worker.
+    def maybe_prune_deals
+      return unless @shop_deals
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @last_deal_prune && (now - @last_deal_prune) < DEAL_PRUNE_SEC
+
+      @last_deal_prune = now
+      @pool.submit do
+        @shop_deals.prune
+      rescue StandardError => e
+        @log.call("shop: prune failed #{e.class}: #{e.message}")
+      end
     end
 
     # E2: an increase still owing a source after its grace is unexplained. Same
@@ -1956,6 +2025,7 @@ module PEMK
         trade_redelivery: !@trade_deliveries.nil?,                           # ask for traded Pokemon a save lacks
         shop_gate: @config.shop_enforce != :off,                             # E3: Mart purchases asked first
         bp_shop_gate: @config.shop_enforce != :off,                          # ... and Battle Point exchanges
+        shop_recheck: !@shop_deals.nil?,                                     # ... a deal given up on is asked again
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
