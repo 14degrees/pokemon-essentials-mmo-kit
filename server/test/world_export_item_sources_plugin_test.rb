@@ -39,7 +39,8 @@ class WorldExportItemSourcesPluginTest < Minitest::Test
       [7,  ev.(5, s355.("pbReceiveItem(pbGet(9))"))],
       [5,  ev.(1, br.("pbItemBall(:POKEBALL)"))],
       [5,  ev.(2, s355.("pbReceiveItem(:POKEBALL)"))],
-      [5,  ev.(3, s355.("pbBerryPlant"))]
+      [5,  ev.(3, s355.("pbBerryPlant"))],
+      [25, ev.(3, br.("pbNextMysteryGiftID > 0"), s355.("pbReceiveMysteryGift(pbNextMysteryGiftID)"))]
     ]
     print W.item_sources(events).inspect
   RUBY
@@ -54,6 +55,8 @@ class WorldExportItemSourcesPluginTest < Minitest::Test
     assert_equal [["pbBuyPrize"], %w[SMOKEBALL]], by["13:28"].values_at(:calls, :items)
     assert_equal [["computed"], [], true], by["7:5"].values_at(:calls, :items, :unbounded), "nothing names its item"
     assert_equal [["pbReceiveItem"], %w[TM80]], by["c3"].values_at(:calls, :items), "a common event's literal gift"
+    assert_equal [["pbReceiveMysteryGift"], [], true], by["25:3"].values_at(:calls, :items, :unbounded),
+                 "a Mystery Gift: its items are not in the event"
     refute by.key?("5:1"), "a literal item ball: its own object"
     refute by.key?("5:2"), "a literal gift: its own object"
     refute by.key?("c4")

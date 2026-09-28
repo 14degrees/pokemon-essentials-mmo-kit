@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-28T21:35:08",
+  "generated_at": "2026-09-28T22:56:52",
   "maps": {
     "1": {
       "name": "Intro",
@@ -3791,7 +3791,9 @@
       {"map": 13, "event": 28, "calls": ["pbBuyPrize"], "items": ["SMOKEBALL", "MIRACLESEED", "CHARCOAL", "MYSTICWATER", "YELLOWFLUTE"], "unbounded": false},
       {"map": 13, "event": 30, "calls": ["pbBuyPrize"], "items": ["TM13", "TM23", "TM24", "TM30", "TM35"], "unbounded": false},
       {"map": 19, "event": 2, "calls": ["$bag.add"], "items": ["FRESHWATER", "SODAPOP", "LEMONADE"], "unbounded": false},
-      {"map": 30, "event": 2, "calls": ["computed"], "items": ["FIRESTONE", "THUNDERSTONE", "WATERSTONE", "LEAFSTONE", "MOONSTONE", "SUNSTONE", "DUSKSTONE", "DAWNSTONE", "SHINYSTONE", "OVALSTONE", "EVERSTONE", "SITRUSBERRY", "SHEDSHELL"], "unbounded": false}
+      {"map": 25, "event": 4, "calls": ["pbReceiveMysteryGift"], "items": [], "unbounded": true},
+      {"map": 30, "event": 2, "calls": ["computed"], "items": ["FIRESTONE", "THUNDERSTONE", "WATERSTONE", "LEAFSTONE", "MOONSTONE", "SUNSTONE", "DUSKSTONE", "DAWNSTONE", "SHINYSTONE", "OVALSTONE", "EVERSTONE", "SITRUSBERRY", "SHEDSHELL"], "unbounded": false},
+      {"map": 54, "event": 4, "calls": ["pbReceiveMysteryGift"], "items": [], "unbounded": true}
     ],
     "berry_plants": true,
     "mining": true

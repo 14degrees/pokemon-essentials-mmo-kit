@@ -511,7 +511,11 @@ item the export cannot name at all is listed in a `WARNING`; its items stay judg
 own code gives. Anything the exports do not understand makes an item local: a
 degradation, never a false accusation.
 
-Mystery Gift is not modelled: an item it gives is judged like any other. In the demo the
+A Mystery Gift's items come from a file or a download, never from the event that hands
+them out, so each Mystery Gift event is exported as a source the export cannot name: the
+boot warning lists it (the demo has two), and an operator who distributes Mystery Gifts
+lists their items in `PEMK_ITEM_LOCAL` before turning `on`, which would otherwise take
+them back. In the demo the
 Master Ball and the Rare Candy are local (the lottery draws its prize on the client; the
 Pickup ability can find a Rare Candy) until the lottery is drawn by the server and battle
 rewards are credited.

@@ -340,10 +340,11 @@ module PEMK
 
     # Calls that put an item in the player's hands without a request the server answers
     # for that exact item: an item added straight to the bag, a gift or item ball whose
-    # item is computed, a Game Corner prize. With the literal gifts, item balls and
-    # shop stocks already exported, this names every other way the events can produce
-    # an item, so the server knows which items it can judge.
-    UNHOOKED = %w[$bag.add( pbBuyPrize(].freeze
+    # item is computed, a Game Corner prize, a Mystery Gift (its items come from a file
+    # or a download, never from the event). With the literal gifts, item balls and shop
+    # stocks already exported, this names every other way the events can produce an
+    # item, so the server knows which items it can judge.
+    UNHOOKED = %w[$bag.add( pbBuyPrize( pbReceiveMysteryGift(].freeze
 
     # -> { :calls => [...], :items => [...], :unbounded => bool } | nil for one script.
     # +common+: a common event, which no request can name, so even its literal gifts and
