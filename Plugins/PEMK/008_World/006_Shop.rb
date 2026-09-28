@@ -45,12 +45,15 @@ module PEMK
       @bp_gate = (v == true)
     end
 
+    # Once the server said it makes the deals, a shop never deals without it: with the
+    # link down the ask gets no answer and the clerk refuses, instead of the engine's
+    # shop running unasked (a dropped link would otherwise buy items no one credited).
     def gate?
-      @gate == true && online?
+      @gate == true
     end
 
     def bp_gate?
-      @bp_gate == true && online?
+      @bp_gate == true
     end
 
     def online?
@@ -117,7 +120,7 @@ module PEMK
     end
 
     def refusal(reply)
-      case reply && reply[:reason].to_s
+      case reply ? reply[:reason].to_s : ""   # no answer at all: the link
       when "money"    then _INTL("You don't have enough money.")
       when "bp"       then _INTL("I'm sorry, you don't have enough BP.")
       when "not_sold" then _INTL("Sorry, that isn't something I sell.")

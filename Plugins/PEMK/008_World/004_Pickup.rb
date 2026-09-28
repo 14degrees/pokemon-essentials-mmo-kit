@@ -8,11 +8,11 @@
 # flowing and the grant/deny is dispatched here — then calls the original pickup on
 # :pickup_grant, or leaves the ball on :pickup_deny / timeout.
 #
-# The client only gates when it KNOWS the server is enforcing AND it is online +
-# authenticated; otherwise (offline / solo / pre-login / flag-off / tile-less / bag
-# full) it does the normal local pickup, so nothing changes until an operator opts
-# in. A timeout / dropped link leaves the ball for a later retry — NOT a local
-# fallback, so induced packet loss can't bypass enforcement.
+# The client gates once the server said it enforces (adopted at login); otherwise
+# (solo / pre-login / flag-off / tile-less / bag full) it does the normal local
+# pickup, so nothing changes until an operator opts in. A timeout or a dropped link -
+# even one dropped before the pickup starts - leaves the ball for a later retry, NOT a
+# local fallback, so cutting the connection can't bypass enforcement.
 #
 # HONEST caveat: the server consumes the one-shot at GRANT time, so if a grant is
 # LOST (timeout on a bad link, or a drop in the request->grant window) that one item
@@ -62,10 +62,11 @@ module PEMK
       false
     end
 
-    # True only when we must ask the server first: it says enforce AND we're online.
-    # Any false -> caller does the local pickup.
+    # True when we must ask the server first: it said it enforces. With the link down
+    # the ask gets no grant and the ball stays for later - a local pickup then would let
+    # a dropped link skip the gate, and the one-shot the server keeps with it.
     def enforce?
-      @enforce && online?
+      @enforce == true
     end
 
     # The gated pickup path. +blk+ is the original pbItemBall (adds + message +
