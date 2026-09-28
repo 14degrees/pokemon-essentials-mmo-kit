@@ -13,7 +13,7 @@ module PEMK
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
-                :gift_enforce, :peer_check, :peer_classes
+                :gift_enforce, :peer_check, :peer_classes, :trade_redelivery
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -159,6 +159,11 @@ module PEMK
       @peer_check = %w[off shadow on].include?(pcheck) ? pcheck.to_sym : :off
       extra = env.fetch("PEMK_PEER_CLASSES", "").to_s.split(",").map(&:strip).reject(&:empty?)
       @peer_classes = (PEER_CLASSES + extra).uniq.freeze
+
+      # A traded Pokemon the receiver never saved (a crash, a lost result) is sent
+      # again. On unless PEMK_TRADE_REDELIVERY=off; only clients that say they can
+      # take one are sent one.
+      @trade_redelivery = env.fetch("PEMK_TRADE_REDELIVERY", "on").to_s.strip.downcase != "off"
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
