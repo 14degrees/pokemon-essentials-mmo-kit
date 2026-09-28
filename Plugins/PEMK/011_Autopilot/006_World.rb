@@ -413,6 +413,36 @@ module PEMK
           when "set_raw_var"      # the value changes, the game's setter never runs:
             $game_variables.instance_variable_get(:@data)[a[0].to_i] = a[1].to_i   # what a memory edit does
             { "variable" => a[0].to_i, "value" => $game_variables[a[0].to_i] }
+          when "pc_deposit", "pc_withdraw"   # item qty
+            item = a[0].to_s.upcase.to_sym
+            qty  = [a[1].to_i, 1].max
+            $PokemonGlobal.pcItemStorage ||= PCItemStorage.new
+            st = $PokemonGlobal.pcItemStorage
+            ok = if name == "pc_deposit"
+                   $bag.remove(item, qty) && st.add(item, qty)
+                 else
+                   st.remove(item, qty) && $bag.add(item, qty)
+                 end
+            { "item" => item.to_s, "moved" => ok ? true : false, "pc" => st.quantity(item),
+              "bag" => $bag.quantity(item) }
+          when "get_pc"
+            st = $PokemonGlobal.pcItemStorage
+            { "item" => a[0].to_s.upcase, "quantity" => st ? st.quantity(a[0].to_s.upcase.to_sym) : 0 }
+          when "give_held"                   # party_index item
+            pkmn = $player.party[a[0].to_i]
+            item = a[1].to_s.upcase.to_sym
+            ok = pkmn && !pkmn.item && $bag.remove(item)
+            pkmn.item = item if ok
+            { "given" => ok ? true : false, "held" => pkmn && pkmn.item_id.to_s }
+          when "take_held"                   # party_index
+            pkmn = $player.party[a[0].to_i]
+            item = pkmn && pkmn.item_id
+            ok = item && $bag.add(item)
+            pkmn.item = nil if ok
+            { "taken" => ok ? true : false, "item" => item.to_s }
+          when "get_held"
+            pkmn = $player.party[a[0].to_i]
+            { "held" => pkmn && pkmn.item_id ? pkmn.item_id.to_s : nil }
           when "set_raw_switch"
             $game_switches.instance_variable_get(:@data)[a[0].to_i] = on?(a[1])
             { "switch" => a[0].to_i, "value" => $game_switches[a[0].to_i] ? true : false }
@@ -430,7 +460,8 @@ module PEMK
       Autopilot.verb("event_pages") { |id, rest| cmd_event_pages(id, rest) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
       %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
-         get_switch get_var get_selfswitch get_item set_raw_var set_raw_switch].each do |name|
+         get_switch get_var get_selfswitch get_item set_raw_var set_raw_switch
+         pc_deposit pc_withdraw get_pc give_held take_held get_held].each do |name|
         Autopilot.verb(name) do |id, rest|
           next Autopilot.respond(id, "ok" => false, "error" => "no game loaded yet") unless $player
 
