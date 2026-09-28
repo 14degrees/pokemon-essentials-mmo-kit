@@ -207,7 +207,9 @@ Each step ships alone, with unit tests and an autotest scenario.
   branch (the Lerucean stall's Saturday sale) and the catalogue's both pass, a Key Item the
   event always prices never passes at its catalogue $0, and a sale is paid the clerk's own
   buy-back price (setPrice's rule). Autotest 075 buys the stall's Silph Scope and sells it
-  a Great Ball.
+  a Great Ball. Late answers (2026-09-29): a deal runs once by its nonce, a purchase
+  joins the server's bag record, and a deal whose answer missed the wait is asked about
+  again and applied late, the sync held meanwhile (autotest 076).
 - **E4 - enforcement** (`PEMK_ITEM_AUTHORITY=on`). Unexplained increases of tracked items are
   not recorded and are corrected on the client. Detailed in section 7. **Done 2026-09-28**
   (migration 028 for the vanished holders); autotest 074 buys a Poke Ball and adds an X

@@ -448,6 +448,26 @@ link down the clerk says it cannot reach the server, instead of the engine's sho
 running unasked. Item balls under `PEMK_PICKUP_ENFORCE` behave the same way (a dropped
 link leaves the ball for later).
 
+An answer can also come after the clerk stopped waiting (a slow server, a link that
+drops just after the request). The server may then have moved the money and the items
+already, while the game did not. In `on` each deal carries a nonce, and the server
+records a deal that went through (`shop_deals`) in the deal's own transaction; a
+request whose nonce is recorded is answered from the record and never runs twice. A
+purchase also adds its items to the server's bag record, as a sale takes them out.
+
+A deal the client gave up on is in doubt, kept in the save:
+- The client asks how it ended by the nonce, at once and after a reconnect. A nonce the
+  server has no deal for is recorded as void, so a copy of the request still on its way
+  is refused. Void rows are capped per account.
+- Until the answer comes, no money or bag frame leaves and no other deal starts, so the
+  ledger and the record still hold the deal. A late grant is applied on a free frame -
+  the items, the money, and a word from the shop.
+- A fresh login restores money and bag from the server, which settles every doubt.
+
+The server advertises this at login (`shop_recheck`); against an older server the client
+keeps the old behaviour. Autotest 076 holds the server for eight seconds during a
+purchase.
+
 The Battle Point exchange (`pbBattlePointShop`) is gated the same way under the same
 setting: its clerk, the item in its stock and the BP price (the catalogue's or one the
 event can set) are checked, and in `on` the server takes the BP from its ledger

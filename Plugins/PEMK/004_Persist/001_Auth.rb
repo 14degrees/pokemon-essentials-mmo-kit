@@ -179,6 +179,7 @@ module PEMK
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
       (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
+      (PEMK::Shop.adopt_recheck(reply[:shop_recheck]) rescue nil)  # ... a deal given up on is asked about
       (PEMK::ItemCorrect.reset rescue nil)   # E4: a waiting correction is sent again, or the login restore did it
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
@@ -222,6 +223,7 @@ module PEMK
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
       (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
+      (PEMK::Shop.adopt_recheck(reply[:shop_recheck]) rescue nil)  # ... a deal in doubt is asked about again
       (PEMK::ItemCorrect.reset rescue nil)   # E4: a waiting correction is sent again, or the login restore did it
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode

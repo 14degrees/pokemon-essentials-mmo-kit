@@ -207,6 +207,8 @@ module PEMK
       return if ($game_temp && $game_temp.in_battle rescue false)
       # Nor while a gift waits for its grant or its :gift_applied (step 6).
       return if (PEMK::GiftClaim.holding? rescue false)
+      # Nor while a gated deal is in doubt (E3): its money and items wait for its outcome.
+      return if (PEMK::Shop.holding? rescue false)
 
       fc = frame
       quiescent = @last_change && (fc - @last_change) >= DEBOUNCE_FRAMES
@@ -219,10 +221,15 @@ module PEMK
       c = PEMK.client
       return unless c && c.connected? && dirty?
 
-      @econ.each do |field, value|
-        seq = (@seq[:economy] += 1)
-        c.send_message({ :type => :econ, :field => field, :value => value, :seq => seq })
-        @econ_sent[field] = [seq, value]
+      # A gated deal in doubt (E3): the money and the items wait for its outcome, so the
+      # server's ledger and record still hold the deal when its answer comes back.
+      doubt = (PEMK::Shop.holding? rescue false)
+      unless doubt
+        @econ.each do |field, value|
+          seq = (@seq[:economy] += 1)
+          c.send_message({ :type => :econ, :field => field, :value => value, :seq => seq })
+          @econ_sent[field] = [seq, value]
+        end
       end
       # Switches/variables/self-switches: one whole-state read HERE (game thread),
       # sent as an absolute snapshot and hash-gated so an unchanged story costs
@@ -256,7 +263,7 @@ module PEMK
       # the owed gifts reach a new connection first.
       # Nor while an item moves between two stores in two steps (ItemTransit): the bag
       # would show it while the Pokemon still holds it.
-      if @inv_dirty && !(PEMK::GiftClaim.holding? rescue false) && !(PEMK::Inventory.atomic? rescue false)
+      if @inv_dirty && !doubt && !(PEMK::GiftClaim.holding? rescue false) && !(PEMK::Inventory.atomic? rescue false)
         (PEMK::GiftClaim.before_bag_flush rescue nil)
         bag = PEMK::Inventory.full_bag
         if bag
@@ -301,7 +308,7 @@ module PEMK
         end
         @mon_dirty = more ? true : false   # stay dirty while mints remain pending
       end
-      @econ = {}
+      @econ = {} unless doubt
       # If a channel is still dirty (e.g. the bag couldn't be read this pass so
       # @inv_dirty stayed set), keep the debounce/staleness clocks armed so tick()
       # retries — resetting them unconditionally would strand the pending snapshot.
