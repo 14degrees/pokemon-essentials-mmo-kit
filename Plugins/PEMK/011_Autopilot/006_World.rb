@@ -36,7 +36,13 @@ module PEMK
       end
 
       # Breadth-first over the map with Game_Player#passable?. -> [dir, ...] or nil.
+      # Keeps off the grass when it can, as a player would: a wild battle cuts a walk
+      # short. Through it only when there is no other way (or the grass is the goal).
       def path_to(tx, ty)
+        search(tx, ty, avoid_grass: true) || search(tx, ty, avoid_grass: false)
+      end
+
+      def search(tx, ty, avoid_grass:)
         start = [$game_player.x, $game_player.y]
         return [] if start == [tx, ty]
 
@@ -48,6 +54,7 @@ module PEMK
             nxt = [x + dx, y + dy]
             next if prev.key?(nxt) || !$game_map.valid?(*nxt)
             next unless $game_player.passable?(x, y, d)
+            next if avoid_grass && nxt != [tx, ty] && grass?(*nxt)
 
             prev[nxt] = [x, y, d]
             return unwind(prev, nxt) if nxt == [tx, ty]
@@ -57,6 +64,11 @@ module PEMK
           end
         end
         nil
+      end
+
+      def grass?(x, y)
+        tag = ($game_map.terrain_tag(x, y) rescue nil)
+        tag ? tag.land_wild_encounters : false
       end
 
       def unwind(prev, tile)

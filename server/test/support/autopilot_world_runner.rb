@@ -396,6 +396,22 @@ check(results, "grass_lists_where_wild_battles_start") do
   r && r["ok"] && r["tiles"].sort == [[6, 4], [6, 5], [7, 4], [7, 5]]
 end
 
+# A wild battle cuts a walk short: walk_to keeps off the grass when it can.
+check(results, "walk_to_keeps_off_the_grass_when_it_can") do
+  place(4, 5)
+  seen = []
+  $world_hook = -> { seen << [$game_player.x, $game_player.y] }
+  r = command("23 walk_to 7 3")
+  $world_hook = nil
+  r && r["ok"] && r["status"] == "arrived" && seen.none? { |x, y| x >= 6 && y >= 4 }
+end
+
+check(results, "walk_to_goes_through_grass_when_it_must") do
+  place(4, 5)
+  r = command("24 walk_to 7 5")   # both ways in are grass
+  r && r["ok"] && r["status"] == "arrived" && [$game_player.x, $game_player.y] == [7, 5]
+end
+
 check(results, "setters_refuse_before_a_game_is_loaded") do
   r = command("8 heal")
   r && r["ok"] == false
