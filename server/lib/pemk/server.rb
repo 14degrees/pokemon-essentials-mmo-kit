@@ -170,6 +170,7 @@ module PEMK
       @reactor.stop
       @thread&.join(5)
       @pool.shutdown
+      @db.disconnect   # the workers are done: a stopped server holds no connection
       @log.call("server: stopped")
     end
 
@@ -178,6 +179,7 @@ module PEMK
       start
       @thread.join           # block until SIGTERM stops the reactor
       @pool.shutdown
+      @db.disconnect
       @log.call("server: stopped")
     end
 
