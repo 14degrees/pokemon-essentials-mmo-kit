@@ -37,20 +37,23 @@ class ServerItemLedgerTest < Minitest::Test
       ] },
       "15" => { "name" => "Mart", "width" => 10, "height" => 10, "objects" => [
         { "kind" => "mart", "items" => %w[POTION POKEBALL], "prices" => {}, "dynamic" => false,
-          "x" => 2, "y" => 2, "event_id" => 5 }
+          "x" => 2, "y" => 2, "event_id" => 5 },
+        { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "dynamic" => false,
+          "x" => 6, "y" => 2, "event_id" => 7 }
       ] }
     }
   ))
   WORLD.flush
 
   BATTLE = Tempfile.new(["pemk_battle", ".json"])
-  def self.item(price, ball: false)
+  def self.item(price, ball: false, bp: 1)
     { "pocket" => 3, "is_ball" => ball, "is_berry" => false, "is_machine" => false, "can_hold" => true,
-      "move" => nil, "price" => price, "sell_price" => price / 2, "bp_price" => 1, "important" => false,
+      "move" => nil, "price" => price, "sell_price" => price / 2, "bp_price" => bp, "important" => false,
       "consumable" => true }
   end
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
-  src["items"].merge!("POTION" => item(300), "POKEBALL" => item(200, ball: true), "PREMIERBALL" => item(0, ball: true))
+  src["items"].merge!("POTION" => item(300), "POKEBALL" => item(200, ball: true), "PREMIERBALL" => item(0, ball: true),
+                      "PROTEIN" => item(10_000, bp: 16))
   src["item_rules"] = { "start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true }
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
@@ -226,6 +229,20 @@ class ServerItemLedgerTest < Minitest::Test
     assert_empty owing(lo[:account_id])
     assert_empty credits(lo[:account_id])
   end
+
+def test_a_bp_exchange_explains_its_item
+  start_server("PEMK_SHOP_ENFORCE" => "on")
+  s, lo = login("il5b@t.co")
+  send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+  recv_type(s, :econ_ack, :econ_rej)
+  inv(s, 1, {})
+  send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 2, unit_price: 16, bp: true, map: 15, event: 7,
+                seq: 1 })
+  assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+  inv(s, 2, { PROTEIN: 2 })
+  assert_empty owing(lo[:account_id])
+  assert_empty credits(lo[:account_id])
+end
 
   def test_a_refused_purchase_explains_nothing
     start_server("PEMK_SHOP_ENFORCE" => "shadow")

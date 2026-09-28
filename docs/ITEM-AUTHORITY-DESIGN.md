@@ -169,9 +169,10 @@ Each step ships alone, with unit tests and an autotest scenario.
 - **E3 - shops as server transactions** (`PEMK_SHOP_ENFORCE`). The client asks to buy or sell;
   the server checks the stock, the price and the balance, moves the money and the credit in
   one transaction, and answers. A sale needs the item in the possession, so a made-up item can
-  no longer turn into money. **Marts done 2026-09-28** (the Battle Point shop next): the
-  server's own ledger rows take negative seqs, so the client's next money frame is never
-  taken for a replay. Autotest 071 buys a Poke Ball in the Cedolan department store.
+  no longer turn into money. **Marts done 2026-09-28**, then the Battle Point exchange (in
+  BP, advertised as its own gate): the server's own ledger rows take negative seqs, so the
+  client's next money or BP frame is never taken for a replay. Autotest 071 buys a Poke
+  Ball in the Cedolan department store, 073 a Protein for 1 BP in the Battle Frontier Mart.
 - **E4 - enforcement** (`PEMK_ITEM_AUTHORITY=on`). Unexplained increases of tracked items are
   not recorded and are corrected on the client.
 - **Later:** battle allowances (a won wild battle credits its foe's possible held items, a
