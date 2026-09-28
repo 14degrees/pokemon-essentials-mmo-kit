@@ -162,8 +162,11 @@ cutting the connection does not skip the gate.
 A grant becomes final once the bag that holds it reaches the server (the bag is
 restored from the server at login). The client reports the item in its bag, holds
 its bag updates back until that report is out, and re-sends what it is owed before
-anything else on a new connection. A crash before the bag got through voids the
-grant at the next login, so the event, re-armed by the older save, pays it again.
+anything else on a new connection; a bag snapshot that shows the item seals the grant
+too, whether the client reported it or not. A crash before the bag got through voids the
+grant at the next login, so the event, re-armed by the older save, pays it again - once:
+a payout voided before stays paid, so a client that never reports its gifts cannot have
+one paid again at every login.
 `DENY` is logged. With `PEMK_ANOMALY_DETECTION` on, the third refusal of one gift,
 or any item an event never gives, goes to the D5 review queue.
 
@@ -426,7 +429,14 @@ money off itself, and a sale turned any item in the bag - made up or not - into 
   its bag record, and logs `WOULD-DENY`; the client still moves the money.
 - **`on`** — the server refuses what fails (`DENY`) and moves the money itself, in its
   ledger (`shop:buy:ITEMxN`); the client adopts the balance it answers with. Nothing is
-  bought or sold without an answer.
+  bought or sold without an answer. A sale takes the items out of the server's record in
+  the same transaction as the money, so a client that keeps them cannot sell the same
+  record twice.
+
+Once a client knows the gate is on, its shops never deal without the server: with the
+link down the clerk says it cannot reach the server, instead of the engine's shop
+running unasked. Item balls under `PEMK_PICKUP_ENFORCE` behave the same way (a dropped
+link leaves the ball for later).
 
 The Battle Point exchange (`pbBattlePointShop`) is gated the same way under the same
 setting: its clerk, the item in its stock and the BP price (the catalogue's or the one the
@@ -458,6 +468,15 @@ closes, when the bag has already gone out); a source heard in that time pays it.
 is logged `UNEXPLAINED +n ITEM` and counted for the review queue (D5 `item_unexplained`).
 A fresh login drops the credits still waiting: the record it loads never held their items.
 
+Only a snapshot that carries every store is judged, and always against the totals of the
+last one judged: a stretch of bag-only snapshots (the Bug Contest, a collection too big to
+send, an older client) is recorded, never judged, so it neither reads a store move as an
+increase nor lets one slip in. The server's own moves (a sale, a Pokemon traded away)
+lower those totals too. An item id that no item can have is left out (and flags the
+snapshot), a Pokemon may be named as holding an item only if the held counts include it,
+and an item the engine swaps for its twin (the DNA Splicers and their used form, the
+Exp. All switched off) counts as one.
+
 - **`shadow`** — judges and reports; the record adopts every snapshot.
 - **`on`** — enforcement (step E4) is not built yet: `on` runs as `shadow`.
 
@@ -480,6 +499,11 @@ Mystery Gift is not modelled: an item it gives is judged like any other. In the 
 Master Ball and the Rare Candy are local (the lottery draws its prize on the client; the
 Pickup ability can find a Rare Candy) until the lottery is drawn by the server and battle
 rewards are credited.
+
+What stays open: a local item is recorded without being judged, so the shop gate pays for
+one the record holds, whatever its origin - a Nugget the Pickup ability could have found
+sells for its price. Money itself is still client-authored within the economy caps (the
+ledger bounds battle gains, not every change). Only tracked items are fully server-owned.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
