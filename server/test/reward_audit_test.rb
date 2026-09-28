@@ -128,6 +128,12 @@ class RewardAuditTest < Minitest::Test
     assert_nil detail
   end
 
+  # A battle lost to a trainer's second Pokemon still paid EXP for knocking out the first.
+  def test_a_lost_battle_still_bounds_the_exp_it_paid
+    @ra.record_battle(1, [foe(10)], 2, now: @t)   # lost
+    refute @ra.check_levels(1, [["HOOTHOOT", 5, 6]], now: @t).first
+  end
+
   # --- level items used outside battles ----------------------------------------------
   # Curve n*100: min exp for old -> new is curve(new) - curve(old + 1) + 1.
   def bag(candies, xs = 0); { RARECANDY: candies, EXPCANDYXS: xs }; end

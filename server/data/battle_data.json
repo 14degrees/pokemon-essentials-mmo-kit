@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-25T13:04:08",
+  "generated_at": "2026-09-28T09:57:58",
   "caps": {
     "max_level": 100,
     "iv_stat_limit": 31,
@@ -165427,5 +165427,27 @@
         "Legendary"
       ]
     }
-  }
+  },
+  "trainers": [
+    {"type": "CAMPER", "name": "Liam", "version": 0, "party": [["DIGLETT", 10], ["BONSLY", 11]]},
+    {"type": "LEADER_Brock", "name": "Brock", "version": 0, "party": [["GEODUDE", 12], ["ONIX", 14]]},
+    {"type": "TEAMROCKET_M", "name": "Grunt", "version": 1, "party": [["WEEPINBELL", 21]]},
+    {"type": "TEAMROCKET_F", "name": "Grunt", "version": 1, "party": [["BURMY", 19], ["WINGULL", 19], ["ELECTABUZZ", 20]]},
+    {"type": "YOUNGSTER", "name": "Ben", "version": 0, "party": [["RATTATA", 11], ["EKANS", 11]]},
+    {"type": "CAMPER", "name": "Jeff", "version": 0, "party": [["SPEAROW", 16], ["SENTRET", 16]]},
+    {"type": "CAMPER", "name": "Jeff", "version": 1, "party": [["FEAROW", 29], ["FURRET", 29]]},
+    {"type": "PICNICKER", "name": "Susie", "version": 0, "party": [["MEOWTH", 18]]},
+    {"type": "PICNICKER", "name": "Susie", "version": 1, "party": [["PERSIAN", 32]]},
+    {"type": "HIKER", "name": "Ford", "version": 0, "party": [["MACHOP", 19]]},
+    {"type": "FISHERMAN", "name": "Andrew", "version": 0, "party": [["MAGIKARP", 14], ["MAGIKARP", 18]]},
+    {"type": "BEAUTY", "name": "Bridget", "version": 0, "party": [["SKITTY", 18]]},
+    {"type": "LASS", "name": "Crissy", "version": 0, "party": [["PLUSLE", 17], ["MINUN", 17]]},
+    {"type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0, "party": [["TURTWIG", 19], ["CHIMCHAR", 19]]},
+    {"type": "POKEMONTRAINER_May", "name": "May", "version": 0, "party": [["COMBUSKEN", 19]]},
+    {"type": "SWIMMER2_F", "name": "Ariel", "version": 0, "party": [["STARYU", 15], ["GOLDEEN", 11]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 0, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["BULBASAUR", 18]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 1, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["CHARMANDER", 18]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 2, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["SQUIRTLE", 18]]},
+    {"type": "CHAMPION", "name": "Blue", "version": 0, "party": [["VENUSAUR", 63], ["CHARIZARD", 63], ["BLASTOISE", 63]]}
+  ]
 }
