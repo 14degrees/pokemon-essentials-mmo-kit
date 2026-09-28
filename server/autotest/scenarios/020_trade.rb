@@ -3,8 +3,9 @@
 # Two players on one map trade a Pokemon each through the pause menu. The server
 # swaps the owners in one transaction: each window must end up with the other's
 # Pokemon under the same server uid, the registry must agree, and a relaunch (from
-# the save the trade forces) must keep it that way.
-Autotest.scenario "two players trade a Pokemon", budget: 420 do |s|
+# the save the trade forces) must keep it that way. The escrow is checked on its way
+# (PEMK_PEER_CHECK on): an honest Pokemon passes the server and the client.
+Autotest.scenario "two players trade a Pokemon", flags: { PEMK_PEER_CHECK: "on" }, budget: 420 do |s|
   a = s.player(:a)
   b = s.player(:b)
   s.together(-> { a.new_game("Alice") }, -> { b.new_game("Bob") })
@@ -54,6 +55,9 @@ Autotest.scenario "two players trade a Pokemon", budget: 420 do |s|
   s.check("the transfer log holds one row each way") do
     rows = s.db[:monster_transfers].where(uid: [pikachu, eevee]).select_map(%i[uid from_account_id to_account_id])
     rows.sort == [[pikachu, id_a, id_b], [eevee, id_b, id_a]].sort
+  end
+  s.check("neither escrow was refused, by the server or a client") do
+    s.server.grep(/REFUSE/).empty? && [a, b].none? { |p| p.log_tail(400).any? { |l| l.include?("peer:") } }
   end
 
   a.relaunch

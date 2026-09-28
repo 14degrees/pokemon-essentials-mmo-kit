@@ -196,8 +196,9 @@ money and the Pokédex are never touched.
   primitive-codec envelope and rejects legacy whole-Marshal frames, while deep
   graphs (saves, teams) ride as opaque bodies it stores/forwards without decoding.
   The only remaining `Marshal.load` of a peer-influenced graph is on the **client**
-  — its own save, or a team it is about to battle — the accepted residual of the
-  trusted-host model.
+  — its own save, or a Pokemon another player sent (a trade, a PvP team). With
+  `PEMK_PEER_CHECK=on` those bytes are read before they are loaded, by the server
+  and by the client, and refused when they name a class no party holds.
 - **Debug-mode boot stack.** Loading server state at the debug boot used to
   intermittently hit an mkxp-z `SystemStackError` (load-only, a relaunch
   recovered). The wire-hardening shrank the load-path stack (no repro in 55

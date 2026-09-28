@@ -4,6 +4,7 @@
 # server/lib and the vendored protocol/ dir (see bin/pemk_server.rb).
 require "pemk_wire"        # PEMK::Wire (from protocol/)
 require "pemk_prng"        # PEMK::Prng (from protocol/) — D7 cross-engine battle PRNG
+require "pemk_marshal_scan" # PEMK::MarshalScan (from protocol/) — a peer body read, never loaded
 require "pemk/config"
 require "pemk/db"
 require "pemk/password"
