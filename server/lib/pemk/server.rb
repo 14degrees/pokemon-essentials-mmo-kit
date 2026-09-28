@@ -1129,37 +1129,40 @@ module PEMK
     # itself and answers with the balance the client adopts; in shadow it only judges.
     def handle_shop_req(conn, env, account_id)
       seq = env[:seq]; op = env[:op]; item = env[:item]; qty = env[:quantity]; unit = env[:unit_price]
+      bp = env[:bp] == true   # the Battle Point exchange: bought with BP, never sold to
       unless %i[buy sell].include?(op) && item.is_a?(String) && item.match?(GIFT_ITEM) &&
-             qty.is_a?(Integer) && qty.between?(1, 999) && unit.is_a?(Integer) && unit >= 0
+             qty.is_a?(Integer) && qty.between?(1, 999) && unit.is_a?(Integer) && unit >= 0 && !(bp && op == :sell)
         return reply(conn, type: :shop_deny, seq: seq, reason: "bad")
       end
       return reply(conn, type: :shop_grant, seq: seq) if @config.shop_enforce == :off
 
-      why = shop_refusal(op, env[:map], env[:event], item, unit)
-      on  = @config.shop_enforce == :on
+      why   = shop_refusal(op, env[:map], env[:event], item, unit, bp: bp)
+      on    = @config.shop_enforce == :on
+      field = bp ? :battle_points : :money
+      shop  = bp ? "bpshop" : "shop"
       @mailbox.submit(account_id) do
         balance = nil
         why ||= "not_held" if op == :sell && !@inventory.holds?(account_id, item, qty)
         @db.transaction do
           if why.nil? && on
             delta = op == :buy ? -(unit * qty) : unit * qty
-            st, value, = @ledger.adjust(account_id, :money, delta, reason: "shop:#{op}:#{item}x#{qty}")
+            st, value, = @ledger.adjust(account_id, field, delta, reason: "#{shop}:#{op}:#{item}x#{qty}")
             if st == :ack
               balance = value
             else
-              why = "money"
+              why = bp ? "bp" : "money"
             end
           end
-          # E2: what the clerk sold - and the Premier Balls the engine adds - is explained.
+          # E2: what the clerk sold - and the Premier Balls a Mart adds - is explained.
           if why.nil? && op == :buy
             ref = "#{env[:map]}:#{env[:event]}"
-            credit_item(account_id, item, qty, "shop", ref)
-            bonus = premier_bonus(item, qty)
-            credit_item(account_id, "PREMIERBALL", bonus, "shop", ref) if bonus.positive?
+            credit_item(account_id, item, qty, shop, ref)
+            bonus = bp ? 0 : premier_bonus(item, qty)
+            credit_item(account_id, "PREMIERBALL", bonus, shop, ref) if bonus.positive?
           end
         end
         if why
-          @log.call("shop: account #{account_id} #{on ? 'DENY' : 'WOULD-DENY'} #{op} #{item} x#{qty} at #{unit} (#{why})")
+          @log.call("#{shop}: account #{account_id} #{on ? 'DENY' : 'WOULD-DENY'} #{op} #{item} x#{qty} at #{unit} (#{why})")
         end
         out = why && on ? { type: :shop_deny, reason: why } : { type: :shop_grant, balance: balance }
         @reactor.post { reply(conn, seq: seq, **out) if @reactor.alive?(conn) }
@@ -1169,19 +1172,20 @@ module PEMK
     end
 
     # -> nil when the export allows it, else why not. A purchase needs a clerk the world
-    # export knows, an item in its stock (any item for a computed stock, never a free one)
-    # and the catalogue price, or the one the event sets; a sale needs a sellable item
-    # at its catalogue sell price.
-    def shop_refusal(op, map, event, item, unit)
+    # export knows (a Mart, or the Battle Point exchange for +bp+), an item in its stock
+    # (any item for a computed stock, never a free one) and the catalogue price in money
+    # or BP, or the one the event sets; a sale needs a sellable item at its catalogue
+    # sell price.
+    def shop_refusal(op, map, event, item, unit, bp: false)
       data = @battle.item(item)
       return "not_sold" unless data
       return nil unless data.key?("price")   # an export from before item authority: nothing to check
 
       if op == :buy
         shop = map.is_a?(Integer) && event.is_a?(Integer) ? @world.shop_object(map, event) : nil
-        return "not_a_shop" unless shop && shop["kind"] == "mart"
+        return "not_a_shop" unless shop && shop["kind"] == (bp ? "bp_shop" : "mart")
 
-        price = (shop["prices"] || {})[item] || data["price"]
+        price = (shop["prices"] || {})[item] || data[bp ? "bp_price" : "price"]
         return "not_sold" if shop["dynamic"] ? price.to_i <= 0 : !Array(shop["items"]).include?(item)
         return "price" unless unit == price
       else
@@ -1675,6 +1679,7 @@ module PEMK
         peer_check: @config.peer_check.to_s,                                 # a peer's Pokemon checked before loading
         trade_redelivery: !@trade_deliveries.nil?,                           # ask for traded Pokemon a save lacks
         shop_gate: @config.shop_enforce != :off,                             # E3: Mart purchases asked first
+        bp_shop_gate: @config.shop_enforce != :off,                          # ... and Battle Point exchanges
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }

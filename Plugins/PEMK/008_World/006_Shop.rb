@@ -14,30 +14,43 @@
 #   deny    nothing changes, with a word from the clerk
 #   silence the same as a deny: nothing is bought or sold unasked
 # The economy channel is flushed before asking, so the server judges the money the
-# client has, and no other money change leaves while the answer is awaited.
+# client has, and no other money change leaves while the answer is awaited. The
+# Battle Point exchange works the same way with BP (bp_shop_gate at login).
 #
-# The two screens below are the engine's own (v21.1), with the ask inserted right
+# The three screens below are the engine's own (v21.1), with the ask inserted right
 # before the purchase or the sale is applied; with the gate off, the engine's run.
 #===============================================================================
 module PEMK
   module Shop
-    @gate  = false
-    @seq   = 0
-    @inbox = {}
+    @gate    = false
+    @bp_gate = false
+    @seq     = 0
+    @inbox   = {}
 
     module_function
 
     def reset
-      @gate  = false
-      @inbox = {}
+      @gate    = false
+      @bp_gate = false
+      @inbox   = {}
     end
 
     def adopt_gate(v)
       @gate = (v == true)
     end
 
+    # The Battle Point exchange has its own word: a server from before it knew only the
+    # Mart, and would take a BP purchase for a Mart one and refuse it.
+    def adopt_bp_gate(v)
+      @bp_gate = (v == true)
+    end
+
     def gate?
       @gate == true && online?
+    end
+
+    def bp_gate?
+      @bp_gate == true && online?
     end
 
     def online?
@@ -93,9 +106,20 @@ module PEMK
       end
     end
 
+    # The BP after the exchange, the same way.
+    def settle_bp(reply, adapter, delta)
+      value = reply[:balance]
+      if value.is_a?(Integer)
+        $player.battle_points = value
+      else
+        adapter.setBP(adapter.getBP + delta)
+      end
+    end
+
     def refusal(reply)
       case reply && reply[:reason].to_s
       when "money"    then _INTL("You don't have enough money.")
+      when "bp"       then _INTL("I'm sorry, you don't have enough BP.")
       when "not_sold" then _INTL("Sorry, that isn't something I sell.")
       when "not_held" then _INTL("You don't seem to have that.")
       when ""         then _INTL("The shop can't reach the server right now. Please try again.")
@@ -247,6 +271,73 @@ if defined?(PokemonMartScreen) && !PokemonMartScreen.method_defined?(:pemk_orig_
         @scene.pbHideMoney
       end
       @scene.pbEndSellScene
+    end
+  end
+end
+
+if defined?(BattlePointShopScreen) && !BattlePointShopScreen.method_defined?(:pemk_orig_pbBuyScreen)
+  class BattlePointShopScreen
+    alias_method :pemk_orig_pbBuyScreen, :pbBuyScreen
+
+    def pbBuyScreen
+      return pemk_orig_pbBuyScreen unless PEMK::Shop.bp_gate?
+
+      @scene.pbStartScene(@stock, @adapter)
+      item = nil
+      loop do
+        item = @scene.pbChooseItem
+        break if !item
+        quantity       = 0
+        itemname       = @adapter.getName(item)
+        itemnameplural = @adapter.getNamePlural(item)
+        price = @adapter.getPrice(item)
+        unit  = price
+        if @adapter.getBP < price
+          pbDisplayPaused(_INTL("You don't have enough BP."))
+          next
+        end
+        if GameData::Item.get(item).is_important?
+          next if !pbConfirm(_INTL("You would like the {1}?\nThat will be {2} BP.",
+                                   itemname, price.to_s_formatted))
+          quantity = 1
+        else
+          maxafford = (price <= 0) ? Settings::BAG_MAX_PER_SLOT : @adapter.getBP / price
+          maxafford = Settings::BAG_MAX_PER_SLOT if maxafford > Settings::BAG_MAX_PER_SLOT
+          quantity = @scene.pbChooseNumber(
+            _INTL("How many {1} would you like?", itemnameplural), item, maxafford
+          )
+          next if quantity == 0
+          price *= quantity
+          if quantity > 1
+            next if !pbConfirm(_INTL("You would like {1} {2}?\nThey'll be {3} BP.",
+                                     quantity, itemnameplural, price.to_s_formatted))
+          elsif quantity > 0
+            next if !pbConfirm(_INTL("So you want {1} {2}?\nIt'll be {3} BP.",
+                                     quantity, itemname, price.to_s_formatted))
+          end
+        end
+        if @adapter.getBP < price
+          pbDisplayPaused(_INTL("I'm sorry, you don't have enough BP."))
+          next
+        end
+        # Item authority E3: the server makes the exchange.
+        if !$bag.can_add?(item, quantity)
+          pbDisplayPaused(_INTL("You have no room in your Bag."))
+          next
+        end
+        reply = PEMK::Shop.ask(:buy, item, quantity, unit, bp: true)
+        unless reply && reply[:type] == :shop_grant
+          pbDisplayPaused(PEMK::Shop.refusal(reply))
+          next
+        end
+        quantity.times { break if !@adapter.addItem(item) }
+        $stats.battle_points_spent += price
+        $stats.mart_items_bought += quantity
+        PEMK::Shop.settle_bp(reply, @adapter, -price)
+        @stock.delete_if { |itm| GameData::Item.get(itm).is_important? && $bag.has?(itm) }
+        pbDisplayPaused(_INTL("Here you are! Thank you!")) { pbSEPlay("Mart buy item") }
+      end
+      @scene.pbEndScene
     end
   end
 end

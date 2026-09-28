@@ -177,6 +177,7 @@ module PEMK
       (PEMK::PeerPokemon.adopt_mode(reply[:peer_check]) rescue nil)  # a peer's Pokemon checked first
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
+      (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
@@ -218,6 +219,7 @@ module PEMK
       (PEMK::PeerPokemon.adopt_mode(reply[:peer_check]) rescue nil)  # a peer's Pokemon checked first
       (PEMK::TradeRedeliver.adopt(reply[:trade_redelivery]) rescue nil)  # traded Pokemon a save lacks
       (PEMK::Shop.adopt_gate(reply[:shop_gate]) rescue nil)  # E3: Mart deals made server-side
+      (PEMK::Shop.adopt_bp_gate(reply[:bp_shop_gate]) rescue nil)  # ... and Battle Point exchanges
       (PEMK::Encounter.adopt_mode(reply[:battle_enforce_encounters]) rescue nil)   # M4-D2: encounter mode
       (PEMK::Catch.adopt_mode(reply[:battle_enforce_catches]) rescue nil)          # M4-D3: catch mode
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
