@@ -82,6 +82,16 @@ module PEMK
       @seq[:inv] = n if n.is_a?(Integer) && n > @seq[:inv]
     end
 
+    # E4: the seq of the last bag snapshot sent, and whether the possession changed since
+    # (a correction applies only to the snapshot it was judged against).
+    def inv_seq
+      @seq[:inv]
+    end
+
+    def inv_dirty?
+      @inv_dirty == true
+    end
+
     # Checkpoint calls this right after a successful serialize: the bytes on disk now
     # contain every flag frame sent so far, so this seq is the blob's durability
     # watermark. It has to be stamped HERE and not at push time - the exit backstop
@@ -236,6 +246,8 @@ module PEMK
           if snap != @inv_last
             msg = { :type => :inv, :bag => bag, :seq => (@seq[:inv] += 1) }
             msg[:stores] = stores if stores
+            fixed = (PEMK::ItemCorrect.take_applied rescue nil)   # E4: the correction this shows applied
+            msg[:corrected] = fixed if fixed
             c.send_message(msg)
             @inv_last = snap
           end

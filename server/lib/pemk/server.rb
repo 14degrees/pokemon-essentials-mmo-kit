@@ -14,6 +14,9 @@ module PEMK
   # Per-player mailbox routing, zone presence and the save store are the next
   # increments; authenticated gameplay frames are logged here for now.
   class Server
+    # E4: a swap that would move a held item the server does not recognize.
+    class TradeItemRefused < StandardError; end
+
     AUTH_TYPES     = %i[ping register login auth].freeze
     # Authenticated point-to-point frames the server relays to the :to account
     # (challenge handshake + the whole battle stream), the role the old in-process
@@ -91,7 +94,7 @@ module PEMK
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
-      @item_ledger = ItemLedger.new(@db) if @config.item_authority != :off   # item authority E2
+      @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
       if @item_ledger   # E2b: which items this game can produce unseen, under the gates that are on
         @item_tiers = ItemTiers.new(world: @world, battle: @battle, gifts: @config.gift_enforce != :off,
@@ -100,6 +103,9 @@ module PEMK
         @item_twins = item_twins
         @judged_local = @item_tiers.local.map { |i| @item_twins.fetch(i, i) }.to_set.freeze
       end
+      # E4: enforcement only where every source is a credit the server hands out first.
+      @item_enforce = @config.item_authority == :on && enforce_blockers.empty?
+      @recent_down = RecentDecreases.new if @item_enforce   # what left the possession lately (a ball thrown)
       @last_item_sweep = nil
       @item_sweeping   = false
       @audit      = Audit.new(@world, logger: @log)
@@ -176,7 +182,12 @@ module PEMK
       @log.call("server: shop enforcement = #{@config.shop_enforce} (Mart purchases and sales made server-side when on)")
       @log.call("server: item authority = #{@config.item_authority} (item increases judged against server-known sources; logs only)")
       if @config.item_authority == :on
-        @log.call("server: WARNING item authority 'on' (enforcement, E4) is not built yet - it runs as shadow")
+        if @item_enforce
+          @log.call("server: item enforcement ON (E4) - unexplained judged items are taken back " \
+                    "(grace #{@config.item_grace}s)")
+        else
+          @log.call("server: WARNING item authority 'on' needs #{enforce_blockers.join(', ')} - it runs as shadow")
+        end
       end
       if @item_ledger && !(@world.loaded? && @battle.loaded?)
         @log.call("server: WARNING item authority is on but the world or battle export is missing - no pickup, gift or shop can explain an item")
@@ -528,7 +539,13 @@ module PEMK
             judge_items(account_id, prev, bag, stores, status[1]) if @item_ledger
           end
         end
-        @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
+        # E4: while units are owed, each judged snapshot brings the correction for its seq.
+        fix = @item_enforce && status[0] == :ack ? correction_for(account_id) : nil
+        @log.call("inv: account #{account_id} applied correction ##{env[:corrected]}") if env[:corrected].is_a?(Integer)
+        @reactor.post do
+          reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?)
+          send_correction(conn, seq, fix) if fix
+        end
       end
     end
 
@@ -538,25 +555,47 @@ module PEMK
     # reads a store move as an increase nor lets an increase slip in; a bag-only snapshot
     # is recorded, never judged. The first full snapshot is the baseline. A savepoint: a
     # failed judgment never costs the snapshot, and is logged loudly.
+    #
+    # A Pokemon that drops out of the snapshot while the registry still gives it to the
+    # account (a save that lost a traded Pokemon, a client hiding one) leaves its item in
+    # inventory_snapshots.vanished: its drop settles no debt (E4), and the same Pokemon back
+    # with the same item is not an increase.
     def judge_items(account_id, prev, bag, stores, flags)
       return unless stores && !flags.include?("bad_stores")
 
       @db.transaction(savepoint: true) do
-        after = canonical(Inventory.totals(bag, stores))
-        base  = prev && prev[:judged] && prev[:judged].to_h
+        after  = canonical(Inventory.totals(bag, stores))
+        base   = prev && prev[:judged] && prev[:judged].to_h
+        fields = { judged: Sequel.pg_jsonb(after) }
         if base
-          allow = arrivals(account_id, prev[:holders].to_h, stores[:holders])
+          vanished = prev[:vanished].to_h
+          allow, hidden = arrivals(account_id, prev[:holders].to_h, stores[:holders], vanished)
           if stores[:pc].is_a?(Hash) && !prev[:pc_started] && prev[:pc].nil?
             pc_start_items.each { |i, n| allow[i] += n }   # the PC item storage appeared, with its start items
           end
           @item_ledger.judge(account_id, base, after, allow: allow, local: @judged_local)
+          settle_spent(account_id, base, after, hidden) if @item_enforce
+          fields[:vanished] = Sequel.pg_jsonb(vanished)
         end
-        fields = { judged: Sequel.pg_jsonb(after) }
         fields[:pc_started] = true if stores[:pc].is_a?(Hash)   # a storage already there got its items long ago
         @db[:inventory_snapshots].where(account_id: account_id).update(fields)
       end
     rescue StandardError => e
       @log.call("inv: WARNING item judgment failed for account #{account_id} #{e.class}: #{e.message}")
+    end
+
+    # E4: what left the possession settles its open debts - except what a vanished Pokemon
+    # took along. A pending debt settled so was spent before its verdict: unexplained all
+    # the same.
+    def settle_spent(account_id, base, after, hidden)
+      down = base.each_with_object({}) do |(item, n), out|
+        d = n.to_i - after[item].to_i - hidden[item]
+        out[item] = d if d.positive?
+      end
+      spent, settled = @item_ledger.settle_decreases(account_id, down)
+      @recent_down.note(account_id, down, settled)
+      spent.each { |item, n| @log.call("inv: account #{account_id} UNEXPLAINED +#{n} #{item} (spent before its verdict)") }
+      flag_anomaly(account_id, :item_unexplained) unless spent.empty?
     end
 
     # How much each item grew in this snapshot: over every store when it and the record
@@ -594,18 +633,72 @@ module PEMK
       twins.freeze
     end
 
-    # The Pokemon that joined the possession holding an item: one the server delivered in
-    # a trade explains its own item, once per delivery. -> { "ITEM" => n }
-    def arrivals(account_id, before, holders)
-      allow = Hash.new(0)
-      return allow unless @trade_deliveries && holders.is_a?(Hash)
+    # The Pokemon that joined the possession holding an item, and those that left it while
+    # the registry still gives them to the account (+vanished+, updated in place). One
+    # back with the item it left with is not an increase; one the server delivered in a
+    # trade explains its own item, once per delivery.
+    # -> [allow { "ITEM" => n }, hidden { "ITEM" => n } (what vanished Pokemon took along)]
+    def arrivals(account_id, before, holders, vanished)
+      allow  = Hash.new(0)
+      hidden = Hash.new(0)
+      return [allow, hidden] unless holders.is_a?(Hash)
 
       holders.each do |uid, item|
+        back = vanished.delete(uid.to_s)
         next if item.nil? || before.key?(uid.to_s)
 
-        allow[item.to_s] += 1 if @trade_deliveries.explain(account_id, uid, item)
+        if back == item.to_s
+          allow[canon(item)] += 1
+        elsif @trade_deliveries&.explain(account_id, uid, item)
+          allow[canon(item)] += 1
+        end
       end
-      allow
+      gone = before.select { |uid, item| item && !holders.key?(uid.to_i) }
+      unless gone.empty?
+        @db[:monsters].where(id: gone.keys.map(&:to_i), owner_account_id: account_id).select_map(:id).each do |uid|
+          vanished[uid.to_s] = gone[uid.to_s]
+          hidden[canon(gone[uid.to_s])] += 1
+        end
+      end
+      [allow, hidden]
+    end
+
+    def canon(item)
+      @item_twins.fetch(item.to_s, item.to_s)
+    end
+
+    def key_item?(item)
+      @battle.item(item.to_s)&.fetch("important", false) ? true : false
+    end
+
+    # E4's preconditions: what keeps item authority 'on' from enforcing. -> [what is missing]
+    def enforce_blockers
+      out = []
+      out << "PEMK_PICKUP_ENFORCE=on" unless @config.pickup_enforce
+      out << "PEMK_GIFT_ENFORCE=on" unless @config.gift_enforce == :on
+      out << "PEMK_SHOP_ENFORCE=on" unless @config.shop_enforce == :on
+      out << "trade redelivery" unless @config.trade_redelivery
+      out << "PEMK_ITEM_RECORD=full" unless @config.item_record == :full
+      out << "complete exports (one debug launch regenerates them)" unless @item_tiers&.complete?
+      out
+    end
+
+    # E4: the owed units a correction takes back - never a local item or a key item, whose
+    # owed debts (a tier changed since) are dropped. -> { Symbol => n } | nil
+    def correction_for(account_id)
+      owed = @item_ledger.owed(account_id)
+      stale = owed.keys.select { |i| @judged_local.include?(i) || key_item?(i) }
+      @item_ledger.drop_owed(account_id, stale)
+      owed = owed.reject { |i, _| stale.include?(i) }
+      owed.empty? ? nil : owed.to_h { |i, n| [i.to_sym, n] }
+    end
+
+    # Reactor thread: +items+ back from +conn+, bound to the snapshot seq the server judged.
+    def send_correction(conn, seq, items)
+      return unless conn && items && @reactor.alive?(conn) && Array(conn.data[:caps]).include?("inv_correct")
+
+      id = (conn.data[:correction_id] = conn.data[:correction_id].to_i + 1)
+      reply(conn, type: :inv_correct, id: id, seq: seq, items: items)
     end
 
     def pc_start_items
@@ -1206,7 +1299,10 @@ module PEMK
         @db.transaction do
           # A sale the server makes takes the items out of its record with the money in,
           # so a client that keeps them cannot sell the same record again.
-          why ||= "not_held" if op == :sell && on && !@inventory.take_sold(account_id, item, qty)
+          if op == :sell && on && why.nil?
+            owed = @item_enforce ? @item_ledger.open_debts(account_id)[canon(item)].to_i : 0
+            why = "not_held" unless @inventory.take_sold(account_id, item, qty, owed: owed)
+          end
           if why.nil? && on
             delta = op == :buy ? -(unit * qty) : unit * qty
             st, value, = @ledger.adjust(account_id, field, delta, reason: "#{shop}:#{op}:#{item}x#{qty}")
@@ -1335,12 +1431,49 @@ module PEMK
     # SecureRandom — a cheat can no longer force an unrolled catch. A successful catch
     # CONSUMES the stashed mint (one catch per encounter). Fail-OPEN: no mint / not
     # enforcing / unknown species -> deny -> the client rolls locally.
+    #
+    # E4: a ball the server judges and did not recognize when it was thrown (ball_ok?)
+    # breaks at once - 0 shakes, never a local roll - so an item taken from nowhere cannot
+    # catch. Checked on the account's mailbox (the ledger), then back here.
     def handle_catch_req(conn, env, account_id)
       seq = env[:seq]
       unless @config.battle_enforce_catches == :on
         return reply(conn, type: :catch_deny, seq: seq, reason: "not_enforcing")
       end
 
+      ball = canon(env[:ball].to_s[0, 64])
+      if @item_enforce && ball.match?(Inventory::ITEM_ID) && !@judged_local.include?(ball)
+        @mailbox.submit(account_id) do
+          ok = ball_ok?(account_id, ball)
+          @reactor.post do
+            next unless @reactor.alive?(conn)
+            next adjudicate_catch(conn, env, account_id) if ok
+
+            @log.call("catch: account #{account_id} threw a #{ball} the server does not recognize -> 0 shakes")
+            reply(conn, type: :catch_verdict, seq: seq, shakes: 0, critical: false)
+          end
+        rescue StandardError => e
+          @log.call("catch: ball check failed #{e.class}: #{e.message}")
+          @reactor.post { adjudicate_catch(conn, env, account_id) if @reactor.alive?(conn) }
+        end
+        return
+      end
+      adjudicate_catch(conn, env, account_id)
+    end
+
+    # E4: was the +ball+ thrown one the server recognized? Its bag snapshot may land before
+    # the throw is judged, so the possession is taken as it was before the minute's
+    # decreases. Debts go first, so a throw while any of that ball was unexplained spent an
+    # unexplained one; and a ball the possession never showed was never recognized.
+    def ball_ok?(account_id, ball)
+      units, settled = @recent_down.recent(account_id, ball)
+      judged = @db[:inventory_snapshots].where(account_id: account_id).get(:judged).to_h[ball].to_i
+      debts  = @item_ledger.open_debts(account_id)[ball].to_i
+      (debts + settled).zero? && judged + units >= 1
+    end
+
+    def adjudicate_catch(conn, env, account_id)
+      seq = env[:seq]
       species = env[:species].to_s[0, 32]
       level   = env[:level]
       mints   = conn.data[:enc_mints]
@@ -1471,6 +1604,10 @@ module PEMK
               # Both item records first, in account order, before any ledger row - the order
               # a snapshot takes too (its record, then the ledger), so the two never deadlock.
               [a, b].sort.each { |acc| @db[:inventory_snapshots].where(account_id: acc).for_update.first }
+              # E4: a held item leaves only as the sender's record names it and recognizes it.
+              if @item_enforce && (bad = unrecognized_giver(a => a_gives, b => b_gives))
+                raise TradeItemRefused, "account #{bad} gives a held item the server does not recognize"
+              end
               # E2: a traded Pokemon's held item is explained on the other side as the
               # sender's record knew it - by its delivery when there is one (bound to that
               # Pokemon), else by a credit. Read before the senders' records lose it.
@@ -1483,6 +1620,9 @@ module PEMK
               b_gives.each { |u| @inventory.drop_holder(b, u) }
             end
           end
+        rescue TradeItemRefused => e
+          @log.call("server: trade #{trade_id} refused - #{e.message}")
+          [:abort, :item]
         rescue StandardError => e
           @log.call("server: trade #{trade_id} #{a}<->#{b} raised #{e.class}: #{e.message}")
           [:err, "error"]
@@ -1571,6 +1711,24 @@ module PEMK
       end
     end
 
+    # E4 (inside the swap, both records locked): -> the account giving a Pokemon whose held
+    # item its record does not name, or names without recognizing enough of it (judged
+    # total minus open debts), or nil.
+    def unrecognized_giver(gives)
+      gives.each do |account, uids|
+        items = uids.map { |u| @inventory.holder_item(account, u) }
+        return account if items.include?(:unknown)
+
+        judged = @db[:inventory_snapshots].where(account_id: account).get(:judged).to_h
+        debts  = @item_ledger.open_debts(account)
+        items.compact.map { |i| canon(i) }.tally.each do |item, n|
+          next if @judged_local.include?(item)
+          return account if judged[item].to_i - debts[item].to_i < n
+        end
+      end
+      nil
+    end
+
     # -> the account whose escrow said its Pokemon held something else than its record
     # says, or nil. Only judged when the escrow said it and the record knows the Pokemon.
     def held_item_mismatch(said, gives)
@@ -1629,15 +1787,24 @@ module PEMK
     # One line per account and item, and one review count per account, each sweep: a
     # source the server does not model yet (a berry tree picked twenty times) is one
     # finding, not twenty.
+    # E4: a verdict keeps the debt owed (never a local or a key item: those go to review
+    # only) and sends the account's live connection its correction.
     def settle_items
-      found = @item_ledger.settle.group_by { |u| u[:account_id] }
+      keep = @item_enforce ? ->(_acc, item) { !@judged_local.include?(item) && !key_item?(item) } : nil
+      found = @item_ledger.settle(keep: keep).group_by { |u| u[:account_id] }
       found.each do |account_id, list|
         list.group_by { |u| u[:item] }.each do |item, us|
           since = us.map { |u| u[:since] }.min
           @log.call("inv: account #{account_id} UNEXPLAINED +#{us.sum { |u| u[:qty] }} #{item} " \
-                    "(seen from #{since.strftime('%H:%M:%S')}, no source within #{ItemLedger::GRACE}s)")
+                    "(seen from #{since.strftime('%H:%M:%S')}, no source within #{@item_ledger.grace}s" \
+                    "#{us.any? { |u| u[:owed] } ? '; taken back' : ''})")
         end
         flag_anomaly(account_id, :item_unexplained)
+        next unless list.any? { |u| u[:owed] }
+
+        seq = @db[:inventory_snapshots].where(account_id: account_id).get(:last_seq)
+        fix = correction_for(account_id)
+        @reactor.post { send_correction(@online[account_id], seq, fix) } if fix && seq
       end
     rescue StandardError => e
       @log.call("inv: item sweep failed #{e.class}: #{e.message}")

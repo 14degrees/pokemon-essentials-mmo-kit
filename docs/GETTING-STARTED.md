@@ -203,6 +203,10 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    events and data and left out of the judgment; the boot line `item tiers:` says how
    many and why. Turning steps 4 and 5 on first leaves more items to judge. If a plugin
    of yours gives items in its own code, list them in `PEMK_ITEM_LOCAL`.
+7. `PEMK_ITEM_AUTHORITY=on` — what the server cannot explain is taken back from the
+   player's possession. It needs `PEMK_PICKUP_ENFORCE=on` and steps 4 and 5 `on`; the
+   boot log says what is missing, and runs `shadow` until then. Go there only once
+   `shadow` has shown no `UNEXPLAINED` line from honest play.
 
 A separate setting protects players from each other: `PEMK_PEER_CHECK=shadow`, then
 `on`, checks a Pokemon another player sends (a trade, a PvP team) before it is
