@@ -53,6 +53,7 @@ class GiftGatePluginTest < Minitest::Test
       def self.send_message(m); $sent << m if @client.up; end
       module Config; GIFT_GRANT_TIMEOUT = 0.3; end
       module Flags; def self.active?; true; end; end
+      module Presence; def self.emit(type); PEMK.send_message({ :type => type }); end; end
     end
     def pbReceiveItem(item, quantity = 1)   # the vanilla gift
       $given << [item, quantity]
@@ -84,6 +85,7 @@ class GiftGatePluginTest < Minitest::Test
     req = reqs.call.last
     out[:grant] = [r, $given.dup, $held, G.holding?, [req[:map], req[:event], req[:item], req[:quantity]],
                    $sent.last[:type], $sent.last[:nonce] == req[:nonce]]
+    out[:order] = $sent.map { |m| m[:type] }
 
     # already claimed: nothing given, the event moves on
     $sent.clear; $given.clear; $msgs.clear
@@ -163,6 +165,7 @@ class GiftGatePluginTest < Minitest::Test
     o = run_gate
     assert_equal [true, 1, [:gift_claim]], o[:off]
     assert_equal [true, [[:TM80, 1]], true, false, [10, 3, "TM80", 1], :gift_applied, true], o[:grant]
+    assert_equal %i[pos gift_req gift_applied], o[:order], "where the player stands goes first"
     assert_equal [true, 0, ["You already received the TM80."]], o[:claimed]
     assert_equal [false, 1], o[:refused]
     assert_equal [true, 0, [[10, 3, "TM80", 1]], 1,

@@ -40,7 +40,7 @@ is Milestone 4.
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
 | **Overworld movement / position** | client → **server-audited** | ✅ enforceable (M4-B) | no-clip / illegal-warp snapped back to last-good tile (opt-in flag; audit-only by default) |
 | **Item pickup (distance, existence)** | client → **server-granted** | ✅ enforceable (M4-C) | remote / duplicate pickups denied — distance gate + one-shot + server grant (opt-in flag) |
-| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C, `PEMK_GIFT_ENFORCE`) | item balls are distance-gated + one-shot; a one-shot NPC **gift** is paid once per account (`PEMK_GIFT_ENFORCE=on`), other gifts are recorded; the event's own conditions (a battle won, a switch on) still run on the client |
+| **Interacting with NPCs / objects** | client → **server-audited** | ⚠️ partial (M4-C, `PEMK_GIFT_ENFORCE`) | item balls are distance-gated + one-shot; a one-shot NPC **gift** is paid once per account and only on its event's map (`PEMK_GIFT_ENFORCE=on`), other gifts are recorded; the event's own conditions (a battle won, a switch on) still run on the client |
 | **Story progression (switches, variables, self-switches)** | client → **server-shadowed** | ⚠️ partial (`PEMK_FLAG_STATE`, `PEMK_FLAG_ENFORCE`) | a rollback of saved one-shot progression is detected (`shadow`) and undone at login (`on`); a tracked value edited in session is repaired (`PEMK_FLAG_ENFORCE=on`); writes through the game's own setters are trusted |
 | **Wild encounters / which Pokémon appears** | **server** | ✅ enforceable (M4-D2, `PEMK_BATTLE_ENFORCE_ENCOUNTERS=on`) | the server mints species/level/PID/IVs/shiny; the client builds what it is given |
 | **Catching** | **server** | ✅ enforceable (M4-D3, `PEMK_BATTLE_ENFORCE_CATCHES=on`) | the server runs the capture formula and rolls the shakes with SecureRandom, clamping every client input |
@@ -166,6 +166,17 @@ anything else on a new connection. A crash before the bag got through voids the
 grant at the next login, so the event, re-armed by the older save, pays it again.
 `DENY` is logged. With `PEMK_ANOMALY_DETECTION` on, the third refusal of one gift,
 or any item an event never gives, goes to the D5 review queue.
+
+A gift is also asked from where its event is. The client sends where it stands just
+before it asks (after a transfer its position otherwise only goes out on the next idle
+frame), and a new payout asked from another map is refused in `on` (`not_here`, logged
+`asked from map N`, D5 `gift_remote`) and logged `WOULD-DENY` in `shadow`, where it
+also explains no item to the ledger. The map the player just left counts for two
+minutes, for an event that moves the player and then pays. A payout asked again (its
+reply lost, re-sent after a reconnect) is not judged by place: it was when first asked.
+Older clients, which do not send their position first, are not judged by place. With
+`PEMK_POS_ENFORCE=on` that position is itself checked, so a gift cannot be claimed from
+a map the player never reached.
 
 Not covered yet: the gate bounds how many times a one-shot gift pays, not whether
 its event's conditions were met (a battle won, a switch on): those still run on the

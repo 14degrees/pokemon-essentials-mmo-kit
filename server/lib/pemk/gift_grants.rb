@@ -65,6 +65,13 @@ module PEMK
       [:deny, "already_claimed", denied]
     end
 
+    # Would a request for this event be a new payout (never granted, or voided)? One
+    # asked again, or already paid, is not.
+    def first_time?(account_id, map, event)
+      row = @db[:gift_grants].where(account_id: account_id, map: map, event: event).first
+      row.nil? || row[:state] == "void"
+    end
+
     # :gift_applied - the client holds the payout of request +nonce+. -> true when it
     # moved a grant (a stale or unknown nonce changes nothing).
     def applied(account_id, map, event, nonce, now: Time.now)

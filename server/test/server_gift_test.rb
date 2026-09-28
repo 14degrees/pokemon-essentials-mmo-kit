@@ -94,16 +94,25 @@ class ServerGiftTest < Minitest::Test
     c.close
   end
 
-  def login(email)
+  def login(email, caps: nil)
     c = open_conn
-    send_env(c, { type: :login, email: email, password: "password1" })
+    msg = { type: :login, email: email, password: "password1" }
+    msg[:caps] = caps if caps
+    send_env(c, msg)
     [c, recv_type(c, :login_ok)]
   end
 
-  def resume(token)
+  def resume(token, caps: nil)
     c = open_conn
-    send_env(c, { type: :auth, token: token, resume: true })
+    msg = { type: :auth, token: token, resume: true }
+    msg[:caps] = caps if caps
+    send_env(c, msg)
     [c, recv_type(c, :auth_ok)]
+  end
+
+  # Where the client says it stands, as its presence does before each request.
+  def stand(c, map)
+    send_env(c, { type: :pos, map: map, x: 1, y: 1 })
   end
 
   def ask(c, nonce, event: 3, item: "TM80", quantity: 1, seq: nonce)
@@ -262,6 +271,73 @@ class ServerGiftTest < Minitest::Test
     bag(c2, 1)
     assert_equal "sealed", grant_state
     assert_equal "already_claimed", ask(c2, 12)[:reason]
+  end
+
+  # --- where the gift is asked from (a client that sends its position first) --------
+
+  PLACE = %w[gift_pos].freeze
+
+  def test_a_gift_is_refused_from_another_map
+    start_server
+    register("p1@t.co")
+    c, = login("p1@t.co", caps: PLACE)
+    stand(c, 5)
+    r = ask(c, 11)
+    assert_equal ["not_here", nil], [r[:reason], grant_state], "nothing granted, nothing recorded"
+    assert(logs.any? { |l| l.include?("DENY") && l.include?("TM80 asked from map 5") })
+    stand(c, 10)
+    assert_equal :gift_grant, ask(c, 12)[:type], "from the gym itself"
+  end
+
+  def test_a_gift_from_another_map_is_only_logged_in_shadow
+    start_server(gift: "shadow")
+    register("p2@t.co")
+    c, = login("p2@t.co", caps: PLACE)
+    stand(c, 5)
+    assert_equal :gift_grant, ask(c, 11)[:type]
+    assert_equal "granted", grant_state, "still paid once"
+    assert(logs.any? { |l| l.include?("WOULD-DENY") && l.include?("asked from map 5") })
+  end
+
+  # An event may move the player, then pay: the map just left still counts.
+  def test_the_map_just_left_still_counts
+    start_server
+    register("p3@t.co")
+    c, = login("p3@t.co", caps: PLACE)
+    stand(c, 10)
+    stand(c, 11)
+    assert_equal :gift_grant, ask(c, 11)[:type]
+  end
+
+  # Its reply was lost; the reconnected client asks again from wherever it now is.
+  def test_a_gift_asked_again_is_not_judged_by_place
+    start_server
+    register("p4@t.co")
+    c, lo = login("p4@t.co", caps: PLACE)
+    stand(c, 10)
+    ask(c, 11)
+    c.close
+    c2, = resume(lo[:token], caps: PLACE)
+    stand(c2, 5)
+    assert_equal :gift_grant, ask(c2, 11)[:type]
+  end
+
+  def test_a_giver_that_gives_whenever_asked_is_judged_by_place_too
+    start_server
+    register("p5@t.co")
+    c, = login("p5@t.co", caps: PLACE)
+    stand(c, 5)
+    assert_equal "not_here", ask(c, 11, event: 5, item: "POTION")[:reason]
+  end
+
+  # An older client may still be a map behind after a transfer: not judged by place.
+  def test_an_older_client_is_not_judged_by_place
+    start_server
+    register("p6@t.co")
+    c, = login("p6@t.co")
+    stand(c, 5)
+    assert_equal :gift_grant, ask(c, 11)[:type]
+    refute(logs.any? { |l| l.include?("asked from map") })
   end
 
   # A resume keeps the client's live state, so it voids nothing.

@@ -189,8 +189,9 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
    events (a memory or save edit) is put back to the server's. In `shadow` the log
    shows `WOULD-REPAIR` lines; honest play should produce none.
 4. `PEMK_GIFT_ENFORCE=shadow`, then `on` — events ask the server before they give an
-   item, and a one-shot gift (a gym leader's TM) is paid once per account. In
-   `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
+   item, and a one-shot gift (a gym leader's TM) is paid once per account, on its
+   event's own map. In `shadow` the log shows `WOULD-DENY` lines; honest play should
+   produce none.
 5. `PEMK_SHOP_ENFORCE=shadow`, then `on` — Mart purchases and sales are made by the
    server: it checks the clerk's stock and the price, and takes or pays the money
    itself. In `shadow` the log shows `WOULD-DENY` lines; honest play should produce none.
