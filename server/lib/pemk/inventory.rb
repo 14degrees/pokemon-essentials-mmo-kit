@@ -114,6 +114,13 @@ module PEMK
       out
     end
 
+    # Does the record's bag hold +qty+ of +item+? (A sale is only paid for items the
+    # server has seen.) An account with no record holds nothing.
+    def holds?(account_id, item, qty)
+      bag = @db[:inventory_snapshots].where(account_id: account_id).get(:bag)
+      bag.to_h[item.to_s].to_i >= qty
+    end
+
     # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record
     # never saw that Pokemon or is not whole. The snapshot lists every owned uid.
     def holder_item(account_id, uid)

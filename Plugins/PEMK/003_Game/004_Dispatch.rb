@@ -59,6 +59,8 @@ module PEMK
         PosCorrect.request(msg[:map], msg[:x], msg[:y])
       when :trade_redeliver
         TradeRedeliver.on_redeliver(msg)   # a traded Pokemon the save never got
+      when :shop_grant, :shop_deny
+        Shop.on_reply(msg)               # E3: the answer to a :shop_req
       when :gift_grant, :gift_deny
         GiftClaim.on_reply(msg)          # step 6: the answer to a :gift_req (keyed by nonce)
       when :pickup_grant, :pickup_deny, :pickups_reset_ok, :pickups_reset_deny

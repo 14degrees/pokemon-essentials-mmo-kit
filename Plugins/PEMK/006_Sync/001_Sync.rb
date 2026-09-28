@@ -53,6 +53,7 @@ module PEMK
       (PEMK::GiftClaim.reset rescue nil)  # ... and any gift reply + the advertised gift gate
       (PEMK::PeerPokemon.reset rescue nil) # ... and the advertised peer check
       (PEMK::TradeRedeliver.reset rescue nil)  # ... and any traded Pokemon still queued
+      (PEMK::Shop.reset rescue nil)       # ... and the advertised shop gate
       (PEMK::Encounter.reset rescue nil)  # ... and the advertised encounter mode (M4-D2)
       (PEMK::Catch.reset rescue nil)      # ... and the advertised catch mode (M4-D3)
       (PEMK::Reward.reset rescue nil)     # ... and the advertised reward mode (M4-D4)

@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-28T13:15:22",
+  "generated_at": "2026-09-28T17:37:35",
   "maps": {
     "1": {
       "name": "Intro",
@@ -177,7 +177,7 @@
       "width": 36,
       "height": 24,
       "objects": [
-        {"kind": "item", "item": "GREATBALL", "x": 26, "y": 14, "event_id": 11}
+        {"kind": "item", "item": "GREATBALL", "quantity": 1, "x": 26, "y": 14, "event_id": 11}
       ],
       "warps": [
         {"src_x": 11, "src_y": 6, "dest_map": 6, "dest_x": 6, "dest_y": 7, "dir": 8, "event_id": 1}
@@ -457,7 +457,7 @@
       "width": 20,
       "height": 15,
       "objects": [
-        {"kind": "item", "item": "OLDAMBER", "x": 11, "y": 6, "event_id": 5}
+        {"kind": "item", "item": "OLDAMBER", "quantity": 1, "x": 11, "y": 6, "event_id": 5}
       ],
       "warps": [
         {"src_x": 7, "src_y": 10, "dest_map": 7, "dest_x": 35, "dest_y": 28, "dir": 0, "event_id": 1}
@@ -588,7 +588,10 @@
       "name": "Cedolan Dept. 2F",
       "width": 20,
       "height": 17,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["POTION", "SUPERPOTION", "HYPERPOTION", "MAXPOTION", "FULLRESTORE", "REVIVE", "ANTIDOTE", "PARALYZEHEAL", "BURNHEAL", "ICEHEAL", "AWAKENING", "FULLHEAL"], "prices": {}, "dynamic": false, "x": 1, "y": 6, "event_id": 5},
+        {"kind": "mart", "items": ["POKEBALL", "GREATBALL", "ULTRABALL", "ESCAPEROPE", "REPEL", "SUPERREPEL", "MAXREPEL", "GRASSMAIL", "FLAMEMAIL", "BUBBLEMAIL", "SPACEMAIL"], "prices": {}, "dynamic": false, "x": 1, "y": 8, "event_id": 6}
+      ],
       "warps": [
         {"src_x": 6, "src_y": 1, "dest_map": 20, "dest_x": 2, "dest_y": 5, "dir": 8, "event_id": 1},
         {"src_x": 2, "src_y": 2, "dest_map": 14, "dest_x": 4, "dest_y": 2, "dir": 6, "event_id": 2},
@@ -618,7 +621,9 @@
       "name": "Cedolan Dept. 3F",
       "width": 20,
       "height": 17,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["TM21", "TM27", "TM87", "TM78", "TM12", "TM41", "TM20", "TM28", "TM76", "TM55", "TM72", "TM79"], "prices": {}, "dynamic": false, "x": 10, "y": 9, "event_id": 5}
+      ],
       "warps": [
         {"src_x": 6, "src_y": 1, "dest_map": 20, "dest_x": 2, "dest_y": 5, "dir": 8, "event_id": 1},
         {"src_x": 10, "src_y": 2, "dest_map": 15, "dest_x": 9, "dest_y": 2, "dir": 4, "event_id": 2},
@@ -648,7 +653,9 @@
       "name": "Cedolan Dept. 4F",
       "width": 20,
       "height": 17,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["POKEDOLL", "AIRMAIL", "TUNNELMAIL", "BLOOMMAIL", "FIRESTONE", "THUNDERSTONE", "WATERSTONE", "LEAFSTONE"], "prices": {}, "dynamic": false, "x": 3, "y": 13, "event_id": 5}
+      ],
       "warps": [
         {"src_x": 6, "src_y": 1, "dest_map": 20, "dest_x": 2, "dest_y": 5, "dir": 8, "event_id": 1},
         {"src_x": 2, "src_y": 2, "dest_map": 16, "dest_x": 3, "dest_y": 2, "dir": 6, "event_id": 2},
@@ -678,7 +685,10 @@
       "name": "Cedolan Dept. 5F",
       "width": 20,
       "height": 17,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["HPUP", "PROTEIN", "IRON", "CALCIUM", "ZINC", "CARBOS"], "prices": {}, "dynamic": false, "x": 1, "y": 6, "event_id": 5},
+        {"kind": "mart", "items": ["XATTACK", "XDEFENSE", "XSPEED", "XSPATK", "XSPDEF", "XACCURACY", "GUARDSPEC", "DIREHIT"], "prices": {}, "dynamic": false, "x": 1, "y": 7, "event_id": 6}
+      ],
       "warps": [
         {"src_x": 6, "src_y": 1, "dest_map": 20, "dest_x": 2, "dest_y": 5, "dir": 8, "event_id": 1},
         {"src_x": 10, "src_y": 2, "dest_map": 17, "dest_x": 9, "dest_y": 2, "dir": 4, "event_id": 2},
@@ -770,11 +780,11 @@
       "width": 39,
       "height": 77,
       "objects": [
-        {"kind": "item", "item": "GREATBALL", "x": 24, "y": 6, "event_id": 16},
-        {"kind": "item", "item": "RARECANDY", "x": 29, "y": 62, "event_id": 27},
-        {"kind": "item", "item": "RARECANDY", "x": 14, "y": 11, "event_id": 17},
-        {"kind": "item", "item": "POTION", "x": 25, "y": 12, "event_id": 18},
-        {"kind": "item", "item": "LEFTOVERS", "x": 27, "y": 36, "event_id": 15}
+        {"kind": "item", "item": "GREATBALL", "quantity": 1, "x": 24, "y": 6, "event_id": 16},
+        {"kind": "item", "item": "RARECANDY", "quantity": 2, "x": 29, "y": 62, "event_id": 27},
+        {"kind": "item", "item": "RARECANDY", "quantity": 1, "x": 14, "y": 11, "event_id": 17},
+        {"kind": "item", "item": "POTION", "quantity": 1, "x": 25, "y": 12, "event_id": 18},
+        {"kind": "item", "item": "LEFTOVERS", "quantity": 1, "x": 27, "y": 36, "event_id": 15}
       ],
       "passability": [
         "0000000fffff0f0000ffff0000f0000f000ffff",
@@ -929,6 +939,7 @@
       "width": 41,
       "height": 41,
       "objects": [
+        {"kind": "mart", "items": ["SILPHSCOPE", "GREATBALL", "ULTRABALL", "LEMONADE", "SODAPOP", "FRESHWATER", "MOOMOOMILK", "TIMERBALL", "REPEATBALL", "LAVACOOKIE"], "prices": {"GREATBALL": 450, "ULTRABALL": 600, "TIMERBALL": 750, "REPEATBALL": 750, "SILPHSCOPE": 5000}, "dynamic": false, "x": 12, "y": 21, "event_id": 7},
         {"kind": "gift", "item": "BICYCLE", "items": ["BICYCLE"], "x": 13, "y": 27, "event_id": 9, "once": false, "dynamic": false, "quantities": {"BICYCLE": 1}}
       ],
       "warps": [
@@ -1017,7 +1028,9 @@
       "name": "Lerucean Town Mart",
       "width": 20,
       "height": 15,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["POKEBALL", "GREATBALL", "ULTRABALL", "POTION", "SUPERPOTION", "HYPERPOTION", "MAXPOTION", "FULLRESTORE", "REVIVE", "ANTIDOTE", "PARALYZEHEAL", "AWAKENING", "BURNHEAL", "ICEHEAL", "FULLHEAL", "ESCAPEROPE", "REPEL", "SUPERREPEL", "MAXREPEL"], "prices": {}, "dynamic": false, "x": 2, "y": 3, "event_id": 2}
+      ],
       "warps": [
         {"src_x": 4, "src_y": 8, "dest_map": 23, "dest_x": 16, "dest_y": 14, "dir": 0, "event_id": 1}
       ],
@@ -1597,7 +1610,9 @@
       "name": "Pokémon League entrance",
       "width": 25,
       "height": 19,
-      "objects": [],
+      "objects": [
+        {"kind": "mart", "items": ["POKEBALL", "GREATBALL", "ULTRABALL", "POTION", "SUPERPOTION", "HYPERPOTION", "MAXPOTION", "FULLRESTORE", "REVIVE", "ANTIDOTE", "PARALYZEHEAL", "AWAKENING", "BURNHEAL", "ICEHEAL", "FULLHEAL", "ESCAPEROPE", "REPEL", "SUPERREPEL", "MAXREPEL"], "prices": {}, "dynamic": false, "x": 0, "y": 6, "event_id": 8}
+      ],
       "warps": [
         {"src_x": 11, "src_y": 17, "dest_map": 35, "dest_x": 17, "dest_y": 6, "dir": 0, "event_id": 2},
         {"src_x": 4, "src_y": 1, "dest_map": 37, "dest_x": 6, "dest_y": 12, "dir": 8, "event_id": 9}
@@ -2413,7 +2428,11 @@
       "name": "Battle Frontier Mart",
       "width": 20,
       "height": 15,
-      "objects": [],
+      "objects": [
+        {"kind": "bp_shop", "items": ["PROTEIN", "CALCIUM", "IRON", "ZINC", "CARBOS", "HPUP", "POWERBRACER", "POWERBELT", "POWERLENS", "POWERBAND", "POWERANKLET", "POWERWEIGHT", "CHOICEBAND", "CHOICESPECS", "CHOICESCARF", "FOCUSBAND", "FOCUSSASH"], "prices": {}, "dynamic": false, "x": 8, "y": 6, "event_id": 5},
+        {"kind": "bp_shop", "items": ["SCOPELENS", "WIDELENS", "ZOOMLENS", "WISEGLASSES", "MUSCLEBAND", "BINDINGBAND", "RAZORCLAW", "RAZORFANG", "AIRBALLOON", "IRONBALL", "TOXICORB", "FLAMEORB", "LIFEORB", "WHITEHERB", "POWERHERB", "ABSORBBULB", "CELLBATTERY", "REDCARD", "EJECTBUTTON", "RARECANDY"], "prices": {}, "dynamic": false, "x": 8, "y": 5, "event_id": 6},
+        {"kind": "mart", "items": ["POKEBALL", "GREATBALL", "ULTRABALL", "POTION", "SUPERPOTION", "HYPERPOTION", "MAXPOTION", "FULLRESTORE", "REVIVE", "ANTIDOTE", "PARALYZEHEAL", "AWAKENING", "BURNHEAL", "ICEHEAL", "FULLHEAL", "ESCAPEROPE", "REPEL", "SUPERREPEL", "MAXREPEL"], "prices": {}, "dynamic": false, "x": 2, "y": 3, "event_id": 2}
+      ],
       "warps": [
         {"src_x": 4, "src_y": 8, "dest_map": 52, "dest_x": 22, "dest_y": 13, "dir": 0, "event_id": 1}
       ],
