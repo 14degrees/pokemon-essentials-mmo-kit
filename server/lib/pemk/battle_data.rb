@@ -43,6 +43,7 @@ module PEMK
       @items        = {}
       @moves        = {}
       @species      = {}
+      @trainers     = {}   # [type, name, version] => frozen [[species, level], ...]
       @loaded       = false
       load!(path, expected_version)
     end
@@ -54,6 +55,12 @@ module PEMK
     # -> frozen species entry hash | nil. +id+ is a String key ("BULBASAUR", "VENUSAUR_1").
     def species(id);        @species[id];        end
     def species_known?(id); @species.key?(id);   end
+
+    # --- trainers (D4 rewards) --------------------------------------------------
+    # -> [[species, level], ...] | nil, for a trainer the export knows.
+    def trainer_party(type, name, version)
+      @trainers[[type.to_s, name.to_s, version.to_i]]
+    end
 
     # --- moves / abilities / natures / items (D1 legality) ---------------------
     def move(id);         @moves[id];          end
@@ -100,7 +107,8 @@ module PEMK
       return "absent (Layer D no-op — run the in-game 'PEMK: Export Battle Data')" unless @loaded
 
       "#{@species.size} species/forms, #{@moves.size} moves, #{@items.size} items, " \
-        "#{@abilities.size} abilities, #{@natures.size} natures (schema v#{SCHEMA_VERSION})"
+        "#{@abilities.size} abilities, #{@natures.size} natures, #{@trainers.size} trainers " \
+        "(schema v#{SCHEMA_VERSION})"
     end
 
     private
@@ -135,6 +143,7 @@ module PEMK
       @items        = freeze_hash(doc["items"])
       @moves        = freeze_hash(doc["moves"])
       @species      = freeze_hash(species)
+      @trainers     = load_trainers(doc["trainers"])   # optional (a pre-D4 export has none)
 
       @loaded = true
       @log.call("battle-data: loaded #{summary} from #{path}")
@@ -148,6 +157,20 @@ module PEMK
 
       h.each_value { |v| v.freeze }
       h.freeze
+    end
+
+    # [{type, name, version, party: [[species, level], ...]}, ...] -> keyed and frozen.
+    def load_trainers(list)
+      return {} unless list.is_a?(Array)
+
+      out = {}
+      list.each do |t|
+        next unless t.is_a?(Hash) && t["party"].is_a?(Array)
+
+        party = t["party"].select { |p| p.is_a?(Array) && p[0].is_a?(String) && p[1].is_a?(Integer) }
+        out[[t["type"].to_s, t["name"].to_s, t["version"].to_i]] = party.map(&:freeze).freeze
+      end
+      out.freeze
     end
 
     # ["OVERGROW", ...] -> { "OVERGROW" => true } for O(1) existence checks.

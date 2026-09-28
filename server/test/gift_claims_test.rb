@@ -50,6 +50,24 @@ class GiftClaimsTest < Minitest::Test
     assert(@logs.any? { |l| l.include?("SUSPECT re-farm") }, @logs.inspect)
   end
 
+  # A daily event (a lottery, a daily NPC) claimed every day for weeks is just play.
+  def test_a_repeatable_event_claimed_once_a_day_is_never_suspect
+    t = Time.now
+    verdicts = (0...20).map { |day| @gc.claim(@a, 13, 17, "ULTRABALL", 1, repeatable: true, now: t + day * 90_000) }
+    refute_includes verdicts, :suspect
+    assert_empty @logs.grep(/SUSPECT/)
+  end
+
+  # ... but re-armed and milked inside one day, it is the re-farm signature again.
+  def test_a_repeatable_event_milked_in_a_day_is_suspect
+    t = Time.now
+    verdicts = (0...PEMK::GiftClaims::REPEAT_MIN).map do |i|
+      @gc.claim(@a, 13, 17, "ULTRABALL", 1, repeatable: true, now: t + i * 60)
+    end
+    assert_equal :suspect, verdicts.last
+    assert(@logs.any? { |l| l.include?("in a day") }, @logs.inspect)
+  end
+
   def test_distinct_events_and_items_are_separate_one_shots
     @gc.claim(@a, 5, 12, "POTION", 1)
     @gc.claim(@a, 5, 13, "POTION", 1)   # different event

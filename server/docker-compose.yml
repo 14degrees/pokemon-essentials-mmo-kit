@@ -30,6 +30,22 @@ services:
       DATABASE_URL: postgres://pemk:${POSTGRES_PASSWORD:-pemk_dev}@db:5432/pemk
       PEMK_BIND: "0.0.0.0"
       PEMK_PORT: "9998"
+      # The protections, all off unless set (a .env file next to this one, or the
+      # shell: PEMK_FLAG_STATE=shadow docker compose up). The ramp is in
+      # docs/GETTING-STARTED.md.
+      PEMK_POS_ENFORCE: ${PEMK_POS_ENFORCE:-off}
+      PEMK_PICKUP_ENFORCE: ${PEMK_PICKUP_ENFORCE:-off}
+      PEMK_FLAG_STATE: ${PEMK_FLAG_STATE:-off}
+      PEMK_BATTLE_ENFORCE_TEAMS: ${PEMK_BATTLE_ENFORCE_TEAMS:-off}
+      PEMK_BATTLE_ENFORCE_ENCOUNTERS: ${PEMK_BATTLE_ENFORCE_ENCOUNTERS:-off}
+      PEMK_BATTLE_ENFORCE_CATCHES: ${PEMK_BATTLE_ENFORCE_CATCHES:-off}
+      PEMK_BATTLE_ENFORCE_REWARDS: ${PEMK_BATTLE_ENFORCE_REWARDS:-off}
+      PEMK_BATTLE_ENFORCE_EXP: ${PEMK_BATTLE_ENFORCE_EXP:-off}
+      PEMK_BATTLE_ENFORCE_RNG: ${PEMK_BATTLE_ENFORCE_RNG:-off}
+      PEMK_BATTLE_ENFORCE_RESIM: ${PEMK_BATTLE_ENFORCE_RESIM:-off}
+      PEMK_RESIM_MIN_STRIKES: ${PEMK_RESIM_MIN_STRIKES:-2}
+      PEMK_ANOMALY_DETECTION: ${PEMK_ANOMALY_DETECTION:-off}
+      PEMK_CORPUS_RETENTION_DAYS: ${PEMK_CORPUS_RETENTION_DAYS:-30}
     ports:
       - "${PEMK_PORT:-9998}:9998"
     stop_grace_period: 30s   # audit: give SIGTERM time to drain pending saves

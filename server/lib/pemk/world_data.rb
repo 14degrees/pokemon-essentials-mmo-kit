@@ -46,6 +46,7 @@ module PEMK
       @home         = nil   # [map,x,y,dir]
       @start        = nil   # [map,x,y]
       @encounters   = {}    # map_id => raw encounters hash
+      @trainers_by_map = {} # map_id => frozen Array of [type, name, version]
       @loaded       = false
       load!(path, expected_version)
     end
@@ -162,6 +163,23 @@ module PEMK
       near.call(@start) || near.call(@home) || @heal.each_value.any? { |d| near.call(d) }
     end
 
+    # Is event +event_id+ on +map_id+ a prize table (several rewards, one picked: the
+    # Game Corner lottery)? It pays out again and again by design.
+    def prize_event?(map_id, event_id)
+      @by_tile.any? { |(m, _x, _y), o| m == map_id && o["event_id"] == event_id && o["kind"] == "prize" }
+    end
+
+    # --- trainers (Layer D D4 rewards) --------------------------------------------
+    # Does this export say where trainer battles start? A pre-D4 export does not.
+    def trainers_known?
+      !@trainers_by_map.empty?
+    end
+
+    # Does a battle against this trainer start on +map_id+?
+    def trainer_on_map?(map_id, type, name, version)
+      (@trainers_by_map[map_id] || []).include?([type.to_s, name.to_s, version.to_i])
+    end
+
     # Coarse: are these two maps joined by ANY edge connection? Used to accept an
     # edge-cross transfer without (yet) modelling the exact seam geometry.
     def connected?(map_a, map_b)
@@ -231,6 +249,7 @@ module PEMK
       h = coord_array(m["heal"], 3)
       @heal[map_id] = h if h
       @encounters[map_id] = m["encounters"] if m["encounters"].is_a?(Hash)
+      load_trainers(map_id, m["trainers"])
 
       @maps[map_id] = { name: m["name"], width: width, height: height,
                         count: (m["objects"].is_a?(Array) ? m["objects"].size : 0) }.freeze
@@ -279,6 +298,18 @@ module PEMK
       @ledges[map_id] = set.freeze unless set.empty?
     end
 
+    # [{event_id, x, y, type, name, version}, ...] -> the trainers whose battles start here.
+    def load_trainers(map_id, list)
+      return unless list.is_a?(Array)
+
+      ids = list.filter_map do |t|
+        next unless t.is_a?(Hash) && t["type"] && t["name"]
+
+        [t["type"].to_s, t["name"].to_s, t["version"].to_i].freeze
+      end
+      @trainers_by_map[map_id] = ids.uniq.freeze unless ids.empty?
+    end
+
     def load_warps(map_id, warps)
       return unless warps.is_a?(Array)
 
@@ -323,6 +354,7 @@ module PEMK
       @warps_by_map.freeze
       @heal.freeze
       @encounters.freeze
+      @trainers_by_map.freeze
     end
   end
 end

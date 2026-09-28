@@ -106,6 +106,18 @@ class BattleDataTest < Minitest::Test
     assert_nil @bd.growth_rate_max_exp("Erratic")
   end
 
+  # D4: a trainer battle's EXP is bounded by the party the export gives the trainer.
+  def test_trainer_parties
+    bd = PEMK::BattleData.new(write_json(FIX.merge(
+      "trainers" => [{ "type" => "CAMPER", "name" => "Liam", "version" => 0,
+                       "party" => [["DIGLETT", 10], ["BONSLY", 11], ["BAD", "x"]] }]
+    )))
+    assert_equal [["DIGLETT", 10], ["BONSLY", 11]], bd.trainer_party("CAMPER", "Liam", 0)
+    assert_equal [["DIGLETT", 10], ["BONSLY", 11]], bd.trainer_party(:CAMPER, "Liam", 0)
+    assert_nil bd.trainer_party("CAMPER", "Liam", 1)
+    assert_nil @bd.trainer_party("CAMPER", "Liam", 0)   # a pre-D4 export has none
+  end
+
   def test_absent_export_is_a_no_op
     path = File.join(Dir.tmpdir, "pemk_absent_battle_data_#{Process.pid}.json")
     File.delete(path) if File.exist?(path)

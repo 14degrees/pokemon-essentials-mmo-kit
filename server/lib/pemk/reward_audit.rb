@@ -52,11 +52,13 @@ module PEMK
     def record_battle(account_id, foes, outcome, now: Time.now)
       @mutex.synchronize do
         w = window(account_id, now)
-        if [1, 4].include?(outcome)   # won / caught: exp + Pay Day gains possible
-          foes.each do |f|
-            per_foe = @calc.max_exp_per_foe(f[:species], f[:level])
-            w[:exp] += per_foe if per_foe
-          end
+        # EXP whatever the outcome: a battle lost to a trainer's second Pokemon still
+        # paid for knocking out the first.
+        foes.each do |f|
+          per_foe = @calc.max_exp_per_foe(f[:species], f[:level])
+          w[:exp] += per_foe if per_foe
+        end
+        if [1, 4].include?(outcome)   # won / caught: Pay Day gains possible
           w[:gain] += @calc.wild_money_gain_max
         elsif [2, 5].include?(outcome)   # lost / draw: blackout money loss possible
           w[:loss] += @calc.wild_money_loss_max

@@ -134,6 +134,18 @@ module PEMK
       }
     end
 
+    # Every trainer's party (species and level), so the server can bound the EXP a
+    # trainer battle gives (D4). A list, not a map: a name can hold any character.
+    def trainers_list
+      list = []
+      GameData::Trainer.each do |tr|
+        party = Array(tr.pokemon).map { |pk| [pk[:species].to_s, pk[:level].to_i] }
+        list << { "type" => tr.trainer_type.to_s, "name" => tr.real_name.to_s,
+                  "version" => tr.version.to_i, "party" => party }
+      end
+      list
+    end
+
     # --- assembly + write ------------------------------------------------------
 
     def build_document
@@ -154,7 +166,8 @@ module PEMK
         :abilities      => abilities_list,
         :items          => items,
         :moves          => moves,
-        :species        => species
+        :species        => species,
+        :trainers       => trainers_list
       }
     end
 

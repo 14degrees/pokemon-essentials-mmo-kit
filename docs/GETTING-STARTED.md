@@ -186,9 +186,9 @@ re-arms gym leaders, gifts and one-shot events. Ramp it like the others:
 2. `PEMK_FLAG_STATE=on` — saved progression comes back at every login.
 
 There is nothing to declare in RPG Maker: which switches count as progression is
-worked out from your own events. After updating the kit, delete
-`server/data/world.json` and do a debug launch, so the export picks up the new
-format. Details and limits: [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECURITY.md)
+worked out from your own events. After updating the kit, do one debug launch
+before restarting the server: the export picks up the new format on its own.
+Details and limits: [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECURITY.md)
 (section *Story state*).
 
 ## Understand what you're running (deeper docs)

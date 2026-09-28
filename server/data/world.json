@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-07-26T18:34:32",
+  "generated_at": "2026-09-28T09:57:58",
   "maps": {
     "1": {
       "name": "Intro",
@@ -446,6 +446,10 @@
         "f00000000000ffffffff",
         "ffffffffffffffffffff",
         "ffffffffffffffffffff"
+      ],
+      "trainers": [
+        {"event_id": 3, "x": 6, "y": 5, "type": "LEADER_Brock", "name": "Brock", "version": 0},
+        {"event_id": 4, "x": 3, "y": 8, "type": "CAMPER", "name": "Liam", "version": 0}
       ]
     },
     "11": {
@@ -1452,7 +1456,21 @@
             ]
           }
         }
-      }
+      },
+      "trainers": [
+        {"event_id": 5, "x": 7, "y": 14, "type": "CAMPER", "name": "Jeff", "version": 0},
+        {"event_id": 11, "x": 14, "y": 13, "type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0},
+        {"event_id": 6, "x": 7, "y": 17, "type": "PICNICKER", "name": "Susie", "version": 0},
+        {"event_id": 12, "x": 15, "y": 13, "type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0},
+        {"event_id": 7, "x": 10, "y": 13, "type": "BEAUTY", "name": "Bridget", "version": 0},
+        {"event_id": 8, "x": 9, "y": 14, "type": "HIKER", "name": "Ford", "version": 0},
+        {"event_id": 9, "x": 11, "y": 14, "type": "FISHERMAN", "name": "Andrew", "version": 0},
+        {"event_id": 15, "x": 22, "y": 13, "type": "RIVAL1", "name": "Blue", "version": 1},
+        {"event_id": 15, "x": 22, "y": 13, "type": "RIVAL1", "name": "Blue", "version": 2},
+        {"event_id": 15, "x": 22, "y": 13, "type": "RIVAL1", "name": "Blue", "version": 0},
+        {"event_id": 4, "x": 5, "y": 14, "type": "YOUNGSTER", "name": "Ben", "version": 0},
+        {"event_id": 10, "x": 13, "y": 17, "type": "LASS", "name": "Crissy", "version": 0}
+      ]
     },
     "34": {
       "name": "Ice Cave",
@@ -1635,6 +1653,9 @@
         "ffffff0fffffffffffff",
         "ffffffffffffffffffff",
         "ffffffffffffffffffff"
+      ],
+      "trainers": [
+        {"event_id": 3, "x": 6, "y": 6, "type": "CHAMPION", "name": "Blue", "version": 0}
       ]
     },
     "38": {
@@ -2147,7 +2168,11 @@
             ]
           }
         }
-      }
+      },
+      "trainers": [
+        {"event_id": 5, "x": 14, "y": 18, "type": "TEAMROCKET_M", "name": "Grunt", "version": 1},
+        {"event_id": 6, "x": 14, "y": 19, "type": "TEAMROCKET_F", "name": "Grunt", "version": 1}
+      ]
     },
     "49": {
       "name": "Rock Cave 1F",
@@ -2975,7 +3000,10 @@
             ]
           }
         }
-      }
+      },
+      "trainers": [
+        {"event_id": 5, "x": 22, "y": 17, "type": "SWIMMER2_F", "name": "Ariel", "version": 0}
+      ]
     },
     "70": {
       "name": "Route 8 underwater",

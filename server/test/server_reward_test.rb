@@ -26,7 +26,9 @@ class ServerRewardTest < Minitest::Test
   WORLD.write(JSON.generate(
     "schema_version" => 2,
     "maps" => { "5" => { "name" => "R", "width" => 20, "height" => 20,
-                         "encounters" => { "0" => { "Land" => { "step_chance" => 21, "slots" => [[100, "SPINARAK", 12, 12]] } } } } }
+                         "encounters" => { "0" => { "Land" => { "step_chance" => 21, "slots" => [[100, "SPINARAK", 12, 12]] } } },
+                         "trainers" => [{ "event_id" => 4, "x" => 3, "y" => 8, "type" => "CAMPER", "name" => "Liam", "version" => 0 }] },
+                "9" => { "name" => "Elsewhere", "width" => 20, "height" => 20 } }
   ))
   WORLD.flush
 
@@ -36,7 +38,8 @@ class ServerRewardTest < Minitest::Test
     "caps" => {}, "natures" => {}, "types" => {}, "abilities" => [], "items" => {}, "moves" => {},
     "growth_rates" => { "Parabolic" => { "max_exp" => 1_059_860, "curve" => (1..100).map { |n| n * 1000 } } },
     "species" => { "SPINARAK" => { "species" => "SPINARAK", "form" => 0, "base_stats" => { "HP" => 40 },
-                                   "base_exp" => 64, "growth_rate" => "Parabolic", "catch_rate" => 255 } }
+                                   "base_exp" => 64, "growth_rate" => "Parabolic", "catch_rate" => 255 } },
+    "trainers" => [{ "type" => "CAMPER", "name" => "Liam", "version" => 0, "party" => [["SPINARAK", 12], ["SPINARAK", 13]] }]
   ))
   BATTLE.flush
 
@@ -174,6 +177,30 @@ class ServerRewardTest < Minitest::Test
 
     send_env(c, party.call(8)); recv(c)   # two more levels, no candy used
     assert(@logs.any? { |l| l.include?("SUSPECT level jump") }, @logs.grep(/reward:/).inspect)
+    c.close
+  end
+
+  # A trainer battle opens a window from the trainer's exported party, so the EXP it
+  # gives is no SUSPECT level jump (autotest 044_trainer_exp).
+  def test_a_trainer_battle_on_the_trainers_map_opens_a_window
+    start_server
+    c, = authed_conn("rw9@t.co")
+    send_env(c, { type: :pos, map: 5, x: 3, y: 9 })
+    send_env(c, { type: :battle_end_report, outcome: 1, foes: [], trainers: [[:CAMPER, "Liam", 0]] })
+    sync(c)
+    assert(@logs.any? { |l| l.include?("outcome=1 foes=SPINARAK@12,SPINARAK@13") }, @logs.grep(/reward:/).inspect)
+    c.close
+  end
+
+  # Only where one of the trainer's battles starts, and only a trainer the export knows.
+  def test_a_trainer_claimed_elsewhere_or_unknown_opens_nothing
+    start_server
+    c, = authed_conn("rw10@t.co")
+    send_env(c, { type: :pos, map: 9, x: 1, y: 1 })
+    send_env(c, { type: :battle_end_report, outcome: 1, foes: [], trainers: [[:CAMPER, "Liam", 0]] })
+    send_env(c, { type: :battle_end_report, outcome: 1, foes: [], trainers: [[:CHAMPION, "Blue", 0]] })
+    sync(c)
+    refute(@logs.any? { |l| l.include?("reward: account") && l.include?("battle#") }, @logs.grep(/reward:/).inspect)
     c.close
   end
 
