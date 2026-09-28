@@ -6,13 +6,14 @@ module PEMK
   # Boot configuration from ENV + config/economy_caps.yml. Fails FAST on a missing
   # economy cap (the audit flagged the old `rescue 999_999` silent default).
   class Config
+    PEER_CLASSES = %w[Pokemon Pokemon::Move Pokemon::Owner Mail].freeze
     attr_reader :bind, :port, :database_url, :economy_caps, :badges_max, :inventory_caps,
                 :monster_caps, :world_path, :position_enforcement, :pickup_enforce,
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
-                :gift_enforce
+                :gift_enforce, :peer_check, :peer_classes
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -148,6 +149,16 @@ module PEMK
       # gift the world export knows is paid once per account.
       gmode = env.fetch("PEMK_GIFT_ENFORCE", "off").to_s.strip.downcase
       @gift_enforce = %w[off shadow on].include?(gmode) ? gmode.to_sym : :off
+
+      # A body one client sends another (a trade's escrow, a PvP team) is Marshal the
+      # receiver loads. off = relayed as before; shadow = a body naming a class outside
+      # the allow list is logged; on = it is dropped, and clients check it too before
+      # loading. PEMK_PEER_CLASSES adds a game's own classes (comma-separated) to the
+      # party's (Pokemon, Pokemon::Move, Pokemon::Owner, Mail).
+      pcheck = env.fetch("PEMK_PEER_CHECK", "off").to_s.strip.downcase
+      @peer_check = %w[off shadow on].include?(pcheck) ? pcheck.to_sym : :off
+      extra = env.fetch("PEMK_PEER_CLASSES", "").to_s.split(",").map(&:strip).reject(&:empty?)
+      @peer_classes = (PEER_CLASSES + extra).uniq.freeze
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

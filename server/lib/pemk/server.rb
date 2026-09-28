@@ -159,6 +159,7 @@ module PEMK
                 "(switches/variables#{@config.flag_state == :on ? '; facts materialized at login, grant-only' : ' — detection only'})")
       @log.call("server: flag enforcement = #{@config.flag_enforce} (owned values repaired to the mirror when on)")
       @log.call("server: gift enforcement = #{@config.gift_enforce} (one-shot gifts paid once when on)")
+      @log.call("server: peer body check = #{@config.peer_check} (relayed Pokemon may name #{@config.peer_classes.join(', ')})")
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -1294,6 +1295,7 @@ module PEMK
         flag_state: @config.flag_state.to_s,                                 # audit item 4: flags shadow
         flag_enforce: @config.flag_enforce.to_s,                             # step 5: owned values repaired
         gift_gate: @config.gift_enforce != :off,                             # step 6: ask before a gift
+        peer_check: @config.peer_check.to_s,                                 # a peer's Pokemon checked before loading
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
@@ -1445,8 +1447,25 @@ module PEMK
         return
       end
 
+      return unless peer_body_ok?(env[:type], body, from_account)
+
       note_peer_session(env[:type], from_account, env[:to])
       @reactor.send_frame(target, Wire.encode_split(relayed_envelope(env, from_account), body))
+    end
+
+    # The receiver Marshal-loads a relayed body, so one naming a class outside the
+    # allow list is not forwarded (PEMK_PEER_CHECK on): the bytes are read, never
+    # loaded (MarshalScan). An honest client only ever sends a party.
+    def peer_body_ok?(type, body, from_account)
+      return true if body.nil? || @config.peer_check == :off
+
+      why = MarshalScan.refusal(body, @config.peer_classes)
+      return true unless why
+
+      on = @config.peer_check == :on
+      @log.call("server: account #{from_account} #{type.inspect} body #{on ? 'REFUSED' : 'WOULD-REFUSE'} (#{why})")
+      flag_anomaly(from_account, :peer_body)
+      !on
     end
 
     # The envelope as the target receives it: the trusted sender, and a :name (the
