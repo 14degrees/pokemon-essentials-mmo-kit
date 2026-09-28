@@ -72,9 +72,21 @@ module PEMK
     def item_known?(id);  @items.key?(id);     end
 
     # Item authority E2: the engine rules that hand out items the server can bound -
-    # {"start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true}. Empty for
-    # an export that predates them.
+    # {"start_item_storage" => ["POTION"], "more_bonus_premier_balls" => true,
+    # "pickup_items" => [...], "honey_gather" => ["HONEY"], "mining_items" => [...]}.
+    # Empty for an export that predates them.
     def item_rules; @item_rules || {}; end
+
+    def item_ids; @items.keys; end
+
+    # Every item some wild Pokemon may hold (item authority E2b). nil when the export
+    # predates the field.
+    def wild_items
+      return @wild_items if defined?(@wild_items)
+
+      with = @species.values.select { |s| s.key?("wild_items") }
+      @wild_items = with.empty? ? nil : with.flat_map { |s| Array(s["wild_items"]) }.uniq.freeze
+    end
 
     # Can this item legally sit in a battler's held-item slot? Unknown item -> false
     # (a held item the export doesn't know about is not something we can vouch for).
