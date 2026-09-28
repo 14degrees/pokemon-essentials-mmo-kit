@@ -79,6 +79,36 @@ class ServerAuthTest < Minitest::Test
     c2.close
   end
 
+  def login(email, password)
+    c = open_conn
+    send_env(c, { type: :login, email: email, password: password })
+    [c, recv_env(c)]
+  end
+
+  # Two windows on one account took the session from each other every few seconds,
+  # each pushing its own save over the other's. The newest login wins for good: the
+  # window it replaces is told why, and its token no longer logs back in.
+  def test_a_second_login_ends_the_first_session_for_good
+    c = open_conn
+    send_env(c, { type: :register, email: "twice@t.co", password: "twice-pass1" })
+    recv_env(c)
+    c.close
+    first, lo1 = login("twice@t.co", "twice-pass1")
+    assert_equal :login_ok, lo1[:type]
+
+    second, lo2 = login("twice@t.co", "twice-pass1")
+    assert_equal :login_ok, lo2[:type]
+    assert_equal :session_replaced, recv_env(first)[:type]   # told, then closed
+    assert_nil recv_env(first)
+
+    back = open_conn
+    send_env(back, { type: :auth, token: lo1[:token] })      # the old window reconnecting
+    assert_equal :auth_err, recv_env(back)[:type]
+    send_env(back, { type: :auth, token: lo2[:token] })      # the newest token still works
+    assert_equal :auth_ok, recv_env(back)[:type]
+    [second, back].each(&:close)
+  end
+
   def test_bad_password_and_bad_token
     c = open_conn
     send_env(c, { type: :register, email: "blue@t.co", password: "blastoise1" })
