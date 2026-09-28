@@ -79,13 +79,20 @@ module PEMK
     # (possibly empty). Call once per frame from the main thread. On a dropped
     # link, returns a single { :type => DISCONNECTED } message and flips
     # #connected? to false.
+    # Frames a blocking wait read past (Auth.send_and_wait): the next poll hands them
+    # out first, so one that came in the same read as the awaited reply is not lost.
+    def requeue(msgs)
+      (@requeued ||= []).concat(msgs)
+    end
+
     def poll
+      held = @requeued && !@requeued.empty? ? @requeued.slice!(0..-1) : []
       unless @connected && @socket
         if @dropped                       # write-detected drop: report it exactly once
           @dropped = false
-          return [{ :type => DISCONNECTED }]
+          return held + [{ :type => DISCONNECTED }]
         end
-        return []
+        return held
       end
       msgs = []
       eof  = false
@@ -106,7 +113,7 @@ module PEMK
       # reset the state they apply to.
       extract_frames(msgs)
       msgs << { :type => DISCONNECTED } if eof && msgs.none? { |m| m[:type] == DISCONNECTED }
-      msgs
+      held + msgs
     end
 
     def close
