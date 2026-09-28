@@ -136,6 +136,14 @@ module PEMK
       end
     end
 
+    # Reactor-thread only. Close +conn+ as soon as what is queued for it is written.
+    def finish(conn)
+      return if conn.nil? || !@conns.key?(conn.io)
+
+      conn.closing = true
+      conn.outbuf.empty? ? close_conn(conn) : write_conn(conn)
+    end
+
     def shutdown
       (@server.close rescue nil) if @server
       @conns.values.each { |c| close_conn(c) }
@@ -194,7 +202,12 @@ module PEMK
     # the reactor thread from the existing tick — O(conns), no DB.
     def sweep_idle(now)
       @conns.values.each do |conn|
-        next if conn.closing
+        # A socket marked closing with nothing left to write closed only on its next
+        # read or write: a silent one (a replaced session) stayed open for good.
+        if conn.closing
+          close_conn(conn) if conn.outbuf.empty?
+          next
+        end
 
         opened = conn.data[:opened_at] || now
         if conn.data[:account_id].nil?

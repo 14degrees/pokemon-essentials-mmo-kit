@@ -38,6 +38,16 @@ module PEMK
       @shown.delete(key)
     end
 
+    # The server gave this account to a newer login (another window or device) and
+    # is closing this socket. Stay offline for good: reconnecting would take the
+    # account back, and the two would keep pushing their saves over each other.
+    def on_replaced
+      @terminal     = true
+      @reconnect_at = nil
+      PEMK.log("net: the account was logged in elsewhere -> offline for good")
+      notify(:replaced, _INTL("This account was just logged in from another window or device, so this one is now offline. Restart the game to play online here."))
+    end
+
     # Dispatch saw DISCONNECTED. Only meaningful once logged in (boot-time
     # offline is handled by Auth.login_blocking).
     def on_disconnect
