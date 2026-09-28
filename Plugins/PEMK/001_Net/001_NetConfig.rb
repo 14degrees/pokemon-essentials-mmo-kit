@@ -55,6 +55,10 @@ module PEMK
     # on LAN; a laggy link tops out here rather than hanging the pickup.
     PICKUP_GRANT_TIMEOUT = 2.5
 
+    # Step 6: seconds an event waits for the server to grant a gift. Past it the gift
+    # is owed and added once the grant comes (nothing is lost, nothing given unasked).
+    GIFT_GRANT_TIMEOUT = 3.0
+
     # M4 Layer D D2: max seconds to block for a server wild-encounter mint before falling
     # back to a local roll (encounters must keep happening on a laggy/dropped link). Short —
     # this stalls entering every wild battle in `on` mode, so keep it tight.

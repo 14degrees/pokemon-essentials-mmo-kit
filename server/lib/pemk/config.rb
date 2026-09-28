@@ -11,7 +11,8 @@ module PEMK
                 :pickup_reset_allowed, :battle_data_path, :battle_enforce_teams,
                 :battle_enforce_encounters, :battle_enforce_catches, :battle_enforce_rewards,
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
-                :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection
+                :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
+                :gift_enforce
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -140,6 +141,13 @@ module PEMK
       # PEMK_FLAG_STATE (the mirror only exists then), else it stays off.
       emode = env.fetch("PEMK_FLAG_ENFORCE", "off").to_s.strip.downcase
       @flag_enforce = %w[off shadow on].include?(emode) && @flag_state != :off ? emode.to_sym : :off
+
+      # Step 6: the payout gate. off = gifts are reported after the fact (detection,
+      # under PEMK_FLAG_STATE); shadow = the client asks before an event gives an item
+      # and the server logs what it WOULD refuse, granting everything; on = a one-shot
+      # gift the world export knows is paid once per account.
+      gmode = env.fetch("PEMK_GIFT_ENFORCE", "off").to_s.strip.downcase
+      @gift_enforce = %w[off shadow on].include?(gmode) ? gmode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

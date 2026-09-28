@@ -68,7 +68,7 @@ The honest counterweight to the ✅ column — these are the real remaining gaps
 
 | Surface | Status | Consequence |
 |---|---|---|
-| `$game_variables` / `$game_switches` / `$game_self_switches` | **server-shadowed** (`PEMK_FLAG_STATE`) | saved one-shot progression is restored at login in `on`; variable values and writes made during a session are still client-authored, so an NPC gift can be re-farmed within one session (detected, not prevented) |
+| `$game_variables` / `$game_switches` / `$game_self_switches` | **server-shadowed** (`PEMK_FLAG_STATE`), **held** (`PEMK_FLAG_ENFORCE`) | saved one-shot progression is restored at login in `on`, and a tracked value edited in session is repaired; a one-shot NPC gift is paid once per account with `PEMK_GIFT_ENFORCE` |
 | Per-mon stat block (IVs/EVs/moves/ability/nature) | **server first-sight lock** (detection, with `PEMK_BATTLE_ENFORCE_TEAMS`) | IVs, shiny and gender are locked the first time the server sees a mon, and a divergence is flagged (D5 `mon_counterfeit`); moves, EVs, ability and nature change in normal play, so they are recorded but not judged |
 | PC boxes, Pokédex, roamers, daycare, PC item store | **client-only** | not projected at all — "park it in a box" evades the party shadow |
 | Party composition | **server-shadowed** | detection-only; the save blob remains authoritative |
@@ -137,9 +137,42 @@ latch list, and `on` would restore self-switches the game clears on purpose). F9
 *PEMK: Export World* does the same by hand. Migrations run on their own when the
 server starts.
 
-Not covered yet: variable values stay client-authored, and a write made during a
-session is not checked against the server. Re-farming an NPC gift inside one
-session is detected, not prevented.
+#### The payout gate (`PEMK_GIFT_ENFORCE`)
+
+Off by default, and independent of the settings above. An event that gives an item
+(`pbReceiveItem`) asks the server first; the export tells it which events are
+one-shot gifts: a single payout, on a page that turns on a switch, self-switch or
+variable a later page waits for (Brock's TM in the demo). Found from your events,
+nothing to declare.
+
+- **`shadow`** — the client asks, the server grants everything and logs
+  `WOULD-DENY` where `on` would refuse.
+- **`on`** — a one-shot gift is paid once per account. Asked again (the event
+  re-armed by an edit, or a save that lost its self-switch), the server refuses:
+  the player reads *You already received the TM80.* and the event moves on as if
+  it had paid. An item the event's script never gives (an edited map) is refused
+  too (`not_this_gift`). Every other gift (a daily NPC, the lottery, one whose item
+  is computed) is granted and recorded as before.
+
+Nothing is lost on a bad link. When the server does not answer in time (3 s), the
+gift is *owed*: the event moves on, the owed gift is kept in the save, and the item
+is added as soon as the server grants it. It is never given without a grant, so
+cutting the connection does not skip the gate.
+
+A grant becomes final once the bag that holds it reaches the server (the bag is
+restored from the server at login). The client reports the item in its bag, holds
+its bag updates back until that report is out, and re-sends what it is owed before
+anything else on a new connection. A crash before the bag got through voids the
+grant at the next login, so the event, re-armed by the older save, pays it again.
+`DENY` is logged. With `PEMK_ANOMALY_DETECTION` on, the third refusal of one gift,
+or any item an event never gives, goes to the D5 review queue.
+
+Not covered yet: the gate bounds how many times a one-shot gift pays, not whether
+its event's conditions were met (a battle won, a switch on): those still run on the
+client. Variable values stay client-authored outside the tracked ids. A
+gift a map event gives through a common event it calls is not known to the export,
+so it is granted and recorded; one given outside any map event (a common event
+running on its own, or Ruby code) is not gated at all.
 
 ### The precise list of currently **unsecured** interactions
 
