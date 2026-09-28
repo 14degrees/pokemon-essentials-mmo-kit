@@ -230,6 +230,22 @@ class ServerItemEnforceTest < Minitest::Test
     assert_equal 1000, @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
   end
 
+  # A bag-only snapshot (a battle, the Bug Contest) is recorded, never judged: what it
+  # shows cannot be sold before a judged snapshot recognizes it.
+  def test_a_bag_the_ledger_never_judged_sells_nothing
+    start_server
+    s, lo = login("e5b@t.co")
+    send_env(s, { type: :econ, field: :money, value: 1000, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    inv(s, 1, {})
+    send_env(s, { type: :inv, bag: { XATTACK: 1 }, seq: 2 })   # the bag alone
+    recv_type(s, :inv_ack)
+    price = JSON.parse(File.read(BATTLE.path))["items"]["XATTACK"]["sell_price"]
+    send_env(s, { type: :shop_req, op: :sell, item: "XATTACK", quantity: 1, unit_price: price, map: 15, event: 5, seq: 1 })
+    assert_equal "not_held", recv_type(s, :shop_grant, :shop_deny)[:reason]
+    assert_equal 1000, @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
+  end
+
   # A Pokemon the registry gives the account drops out: its item's debt stays open, and its
   # return with that item is no increase.
   def test_a_vanished_pokemon_settles_nothing
