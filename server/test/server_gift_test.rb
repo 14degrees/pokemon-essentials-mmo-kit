@@ -355,4 +355,36 @@ class ServerGiftTest < Minitest::Test
     assert_equal "void", grant_state
     c2.close
   end
+
+  # A client that never reports the gift applied: the bag snapshot that shows it seals it
+  # all the same, so a fresh login cannot have the event pay a second time.
+  def test_a_snapshot_that_shows_the_gift_seals_it
+    start_server
+    register("g12@t.co")
+    c, = login("g12@t.co")
+    bag(c, 1, {})
+    ask(c, 11)
+    bag(c, 2)                                  # the TM, and no :gift_applied
+    assert_equal "sealed", grant_state
+    c.close
+    c2, = login("g12@t.co")
+    assert_equal "already_claimed", ask(c2, 12)[:reason]
+  end
+
+  # A crash may cost a payout once: voided, paid again. A second time it stays paid.
+  def test_a_payout_is_voided_only_once
+    start_server
+    register("g13@t.co")
+    c, = login("g13@t.co")
+    ask(c, 11)
+    c.close
+    c, = login("g13@t.co")
+    assert_equal "void", grant_state
+    assert_equal :gift_grant, ask(c, 12)[:type], "paid again after the first void"
+    c.close
+    c, = login("g13@t.co")
+    assert_equal "sealed", grant_state
+    assert_equal "already_claimed", ask(c, 13)[:reason]
+    assert(logs.any? { |l| l.include?("voided before: kept as paid") })
+  end
 end

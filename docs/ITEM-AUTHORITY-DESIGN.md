@@ -139,6 +139,29 @@ dupes, and that several honest paths had no credit. The rules below come from it
   so depositing them reads as using them and buys level credit. It moves to totals across all
   stores with E0.
 
+A second adversarial review, of the ledger and of a first draft of E4, found holes that
+were open already; they were closed before going on:
+
+- **A sale could be replayed.** The server paid for items its record still held, and a
+  client that kept them and sent no new bag could sell them again and again. A sale now
+  takes them out of the record in the same transaction as the money.
+- **A gift could be paid at every login.** A client that never reported a gift applied
+  kept its grant unsealed, and a fresh login voided it. A bag snapshot that shows the item
+  now seals the grant, and a grant is voided at most once.
+- **A holder could be invented.** The record named a Pokemon as holding an item the held
+  counts did not include, which a trade then confirmed. Such stores are refused.
+- **The judgment could be made to fail.** An item id too long for the ledger rolled back
+  every debt of the snapshot. Ids are checked, and a failed judgment is logged loudly.
+- **Bag-only snapshots were judged**, and a PC withdrawal during one read as an increase.
+  Only full snapshots are judged, against the last full one's totals, which the server's
+  own moves lower.
+- **A dropped link bypassed the gates**: a shop or an item ball under a gate fell back to
+  the engine's own when the link was down. They now refuse, or leave the ball.
+- **Twins**: the engine turns some items into one another (`$bag.replace_item`); they count
+  as one item.
+- **Races**: the trade swap takes both records' locks first, in account order, and the
+  snapshot takes its record's lock before the ledger's rows.
+
 ## 5. Steps
 
 Each step ships alone, with unit tests and an autotest scenario.

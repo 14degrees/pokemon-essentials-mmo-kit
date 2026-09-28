@@ -83,24 +83,24 @@ class ShopPluginTest < Minitest::Test
       def pbBuyScreen; $vanilla += 1; end
       def pbSellScreen; $vanilla += 1; end
     end
-class BPAdapter
-  def getName(i); i.to_s; end
-  def getNamePlural(i); "#{i}s"; end
-  def getPrice(_i); 16; end
-  def getBP; $player.battle_points; end
-  def setBP(v); $player.battle_points = v; end
-  def addItem(i); $bag.add(i); end
-end
-class BattlePointShopScreen
-  def initialize(scene, stock); @scene = scene; @stock = stock; @adapter = BPAdapter.new; end
-  def pbConfirm(m); @scene.pbConfirm(m); end
-  def pbDisplayPaused(m, &_b); @scene.pbDisplayPaused(m); end
-  def pbBuyScreen; $vanilla += 1; end
-end
+    class BPAdapter
+      def getName(i); i.to_s; end
+      def getNamePlural(i); "#{i}s"; end
+      def getPrice(_i); 16; end
+      def getBP; $player.battle_points; end
+      def setBP(v); $player.battle_points = v; end
+      def addItem(i); $bag.add(i); end
+    end
+    class BattlePointShopScreen
+      def initialize(scene, stock); @scene = scene; @stock = stock; @adapter = BPAdapter.new; end
+      def pbConfirm(m); @scene.pbConfirm(m); end
+      def pbDisplayPaused(m, &_b); @scene.pbDisplayPaused(m); end
+      def pbBuyScreen; $vanilla += 1; end
+    end
     module PEMK
       def self.enabled?; true; end
       def self.self_id; 7; end
-      def self.client; Struct.new(:c) { def connected?; true; end }.new(1); end
+      def self.client; Struct.new(:c) { def connected?; $up != false; end }.new(1); end
       def self.log(_m); end
       def self.send_message(m); $sent << m; end
       module Config; SHOP_TIMEOUT = 0.3; end
@@ -137,20 +137,26 @@ end
     PokemonMartScreen.new(Scene.new([:POTION], 2), []).pbSellScreen
     out[:sell] = [$bag.items.dup, $player.money, last_req.call[:op]]
 
-# the Battle Point exchange has its own gate: the Mart's alone leaves it vanilla
-$sent.clear; $msgs.clear; $vanilla = 0
-BattlePointShopScreen.new(Scene.new([:PROTEIN], 2), []).pbBuyScreen
-out[:bp_off] = [$vanilla, $sent.size]
-S.adopt_bp_gate(true)
-$bag = Bag.new
-$script = [-> { { :type => :shop_grant, :seq => last_req.call[:seq], :balance => 18 } }]
-BattlePointShopScreen.new(Scene.new([:PROTEIN], 2), []).pbBuyScreen
-r = last_req.call
-out[:bp_buy] = [$bag.items.dup, $player.battle_points, [r[:op], r[:item], r[:quantity], r[:unit_price], r[:bp]]]
-$msgs.clear
-$script = [-> { { :type => :shop_deny, :seq => last_req.call[:seq], :reason => "bp" } }]
-BattlePointShopScreen.new(Scene.new([:PROTEIN], 1), []).pbBuyScreen
-out[:bp_denied] = [$bag.items.dup, $player.battle_points, $msgs.dup]
+    # the Battle Point exchange has its own gate: the Mart's alone leaves it vanilla
+    $sent.clear; $msgs.clear; $vanilla = 0
+    BattlePointShopScreen.new(Scene.new([:PROTEIN], 2), []).pbBuyScreen
+    out[:bp_off] = [$vanilla, $sent.size]
+    S.adopt_bp_gate(true)
+    $bag = Bag.new
+    $script = [-> { { :type => :shop_grant, :seq => last_req.call[:seq], :balance => 18 } }]
+    BattlePointShopScreen.new(Scene.new([:PROTEIN], 2), []).pbBuyScreen
+    r = last_req.call
+    out[:bp_buy] = [$bag.items.dup, $player.battle_points, [r[:op], r[:item], r[:quantity], r[:unit_price], r[:bp]]]
+    $msgs.clear
+    $script = [-> { { :type => :shop_deny, :seq => last_req.call[:seq], :reason => "bp" } }]
+    BattlePointShopScreen.new(Scene.new([:PROTEIN], 1), []).pbBuyScreen
+    out[:bp_denied] = [$bag.items.dup, $player.battle_points, $msgs.dup]
+
+    # the link down: the clerks refuse, the engine's shops never run unasked
+    $up = false; $msgs.clear; $vanilla = 0
+    PokemonMartScreen.new(Scene.new([:POTION], 1), []).pbBuyScreen
+    BattlePointShopScreen.new(Scene.new([:PROTEIN], 1), []).pbBuyScreen
+    out[:offline] = [$bag.items.dup, $vanilla, $msgs.uniq]
     print out.inspect
   RUBY
 
@@ -166,8 +172,10 @@ out[:bp_denied] = [$bag.items.dup, $player.battle_points, $msgs.dup]
     assert_equal [{ :POTION => 3 }, 1000, ["You don't have enough money."]], o[:denied]
     assert_equal [{ :POTION => 3 }, 1000], o[:silence], "nothing bought unasked"
     assert_equal [{ :POTION => 1 }, 1300, :sell], o[:sell], "shadow: the vanilla money change"
-assert_equal [1, 0], o[:bp_off], "a server that only gates the Mart: the engine's exchange"
-assert_equal [{ :PROTEIN => 2 }, 18, [:buy, "PROTEIN", 2, 16, true]], o[:bp_buy], "the BP the server settled on"
-assert_equal [{ :PROTEIN => 2 }, 18, ["I'm sorry, you don't have enough BP."]], o[:bp_denied]
+    assert_equal [1, 0], o[:bp_off], "a server that only gates the Mart: the engine's exchange"
+    assert_equal [{ :PROTEIN => 2 }, 18, [:buy, "PROTEIN", 2, 16, true]], o[:bp_buy], "the BP the server settled on"
+    assert_equal [{ :PROTEIN => 2 }, 18, ["I'm sorry, you don't have enough BP."]], o[:bp_denied]
+    assert_equal [{ :PROTEIN => 2 }, 0, ["The shop can't reach the server right now. Please try again."]],
+                 o[:offline], "a dropped link refuses; it never falls back to the engine's shops"
   end
 end

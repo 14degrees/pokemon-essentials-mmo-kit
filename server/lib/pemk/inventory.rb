@@ -20,6 +20,7 @@ module PEMK
     DIVERGENCE_MIN = 8         # only log a blob-vs-record divergence this material (coarse tamper signal)
     SHIP_MAX_BYTES = 60_000    # never ship a login bag so large it pushes login_ok past the 64 KiB wire cap
     STORE_MAX      = 4096      # entries per store map (the wire's own per-container cap)
+    ITEM_ID        = /\A[A-Z0-9_]{1,64}\z/   # what an item id can be; anything else is not an item
 
     def initialize(db, caps, logger: nil)
       @db   = db
@@ -121,6 +122,22 @@ module PEMK
       bag.to_h[item.to_s].to_i >= qty
     end
 
+    # A sale the server makes: +qty+ of +item+ leave the record's bag (and the ledger's
+    # judged totals) in the same transaction as the money, so a client that keeps them
+    # cannot sell the same record twice. -> false when the bag record lacks them.
+    def take_sold(account_id, item, qty, now: Time.now)
+      row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
+      bag = (row && row[:bag]).to_h
+      return false unless bag[item.to_s].to_i >= qty
+
+      bag[item.to_s] -= qty
+      bag.delete(item.to_s) if bag[item.to_s] <= 0
+      fields = { bag: Sequel.pg_jsonb(bag), updated_at: now }
+      fields[:judged] = Sequel.pg_jsonb(lower(row[:judged], item, qty)) if row[:judged]
+      @db[:inventory_snapshots].where(account_id: account_id).update(fields)
+      true
+    end
+
     # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record
     # never saw that Pokemon or is not whole. The snapshot lists every owned uid.
     def holder_item(account_id, uid)
@@ -135,8 +152,10 @@ module PEMK
 
     # A Pokemon left this account in a trade: its held item leaves the record with it,
     # so a crash before the next snapshot cannot hand the item back at the next login.
+    # The row is locked: a snapshot of this account landing meanwhile (its own mailbox,
+    # while the swap runs on the pool) waits instead of being overwritten or overwriting.
     def drop_holder(account_id, uid, now: Time.now)
-      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
       return unless row && row[:holders]
 
       holders = row[:holders].to_h
@@ -151,15 +170,16 @@ module PEMK
       held = (row[:held] || {}).to_h
       held[item] = held[item].to_i - 1
       held.delete(item) if held[item] <= 0
-      @db[:inventory_snapshots].where(account_id: account_id)
-                               .update(holders: Sequel.pg_jsonb(holders), held: Sequel.pg_jsonb(held), updated_at: now)
+      fields = { holders: Sequel.pg_jsonb(holders), held: Sequel.pg_jsonb(held), updated_at: now }
+      fields[:judged] = Sequel.pg_jsonb(lower(row[:judged], item, 1)) if row[:judged]   # it left with the Pokemon
+      @db[:inventory_snapshots].where(account_id: account_id).update(fields)
     end
 
     # Headless STRUCTURAL checks -> array of reason strings. FLAG, never reject.
     # (No GameData::Item on a headless server, so item-id existence is out of reach.)
     def validate(bag)
       flags = []
-      flags << "bad_key"        unless bag.keys.all? { |k| k.is_a?(Symbol) }
+      flags << "bad_key"        unless bag.keys.all? { |k| k.is_a?(Symbol) && k.to_s.match?(ITEM_ID) }
       flags << "bad_qty"        unless bag.values.all? { |v| v.is_a?(Integer) && v >= 0 }
       flags << "over_item_cap"  if bag.values.any? { |v| v.is_a?(Integer) && v > @caps[:per_item] }
       flags << "too_many_items" if bag.size > @caps[:distinct]
@@ -171,13 +191,16 @@ module PEMK
     private
 
     # -> { pc: {"ITEM"=>n} | nil, mail:, held:, holders: {"uid"=>"ITEM"} } ready for jsonb, or nil.
+    # A holder names an item the held counts must include: more Pokemon holding an item
+    # than held of it would let a trade confirm an item the possession never counted.
     def clean_stores(s)
       return nil unless s.is_a?(Hash)
       return nil unless (s[:pc].nil? || counts?(s[:pc])) && counts?(s[:mail]) && counts?(s[:held])
 
       holders = s[:holders]
       return nil unless holders.is_a?(Hash) && holders.size <= STORE_MAX &&
-                        holders.all? { |u, i| u.is_a?(Integer) && u.positive? && (i.nil? || i.is_a?(Symbol)) }
+                        holders.all? { |u, i| u.is_a?(Integer) && u.positive? && (i.nil? || item_id?(i)) }
+      return nil if holders.values.compact.tally.any? { |i, n| n > s[:held][i].to_i }
 
       { pc: s[:pc] && strings(s[:pc]), mail: strings(s[:mail]), held: strings(s[:held]),
         holders: holders.each_with_object({}) { |(u, i), h| h[u.to_s] = i&.to_s } }
@@ -185,7 +208,19 @@ module PEMK
 
     def counts?(h)
       h.is_a?(Hash) && h.size <= STORE_MAX &&
-        h.all? { |k, v| k.is_a?(Symbol) && v.is_a?(Integer) && v.positive? && v <= @caps[:per_item] }
+        h.all? { |k, v| item_id?(k) && v.is_a?(Integer) && v.positive? && v <= @caps[:per_item] }
+    end
+
+    def item_id?(k)
+      k.is_a?(Symbol) && k.to_s.match?(ITEM_ID)
+    end
+
+    # +judged+ ({"ITEM" => n}) with +qty+ of +item+ gone.
+    def lower(judged, item, qty)
+      out = judged.to_h.dup
+      out[item.to_s] = out[item.to_s].to_i - qty
+      out.delete(item.to_s) if out[item.to_s] <= 0
+      out
     end
 
     def strings(h)

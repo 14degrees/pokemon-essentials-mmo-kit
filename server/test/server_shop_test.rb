@@ -107,22 +107,22 @@ class ServerShopTest < Minitest::Test
     recv_type(s, :shop_grant, :shop_deny)
   end
 
-def bp_player(points: 50)
-  s, lo = player
-  send_env(s, { type: :econ, field: :battle_points, value: points, seq: 1 })
-  recv_type(s, :econ_ack, :econ_rej)
-  [s, lo]
-end
+  def bp_player(points: 50)
+    s, lo = player
+    send_env(s, { type: :econ, field: :battle_points, value: points, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    [s, lo]
+  end
 
-def bp_ask(s, item, qty, unit, event: 7, seq: 1)
-  send_env(s, { type: :shop_req, op: :buy, item: item, quantity: qty, unit_price: unit, bp: true, map: 15,
-                event: event, seq: seq })
-  recv_type(s, :shop_grant, :shop_deny)
-end
+  def bp_ask(s, item, qty, unit, event: 7, seq: 1)
+    send_env(s, { type: :shop_req, op: :buy, item: item, quantity: qty, unit_price: unit, bp: true, map: 15,
+                  event: event, seq: seq })
+    recv_type(s, :shop_grant, :shop_deny)
+  end
 
-def bp(lo)
-  @db[:economy_balances].where(account_id: lo[:account_id], field: "battle_points").get(:balance)
-end
+  def bp(lo)
+    @db[:economy_balances].where(account_id: lo[:account_id], field: "battle_points").get(:balance)
+  end
 
   def money(lo)
     @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
@@ -159,6 +159,26 @@ end
     assert_equal 1300, money(lo)
   end
 
+  # A client that sells and keeps the items (no new snapshot) cannot sell the same
+  # record twice: the sale took them out of it with the money in.
+  def test_the_same_items_cannot_be_sold_twice
+    start_server
+    s, lo = player(bag: { POTION: 2 })
+    assert_equal :shop_grant, ask(s, :sell, "POTION", 2, 150)[:type]
+    assert_equal "not_held", ask(s, :sell, "POTION", 2, 150, seq: 2)[:reason]
+    assert_equal 1300, money(lo)
+    assert_nil @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
+  end
+
+  # Money the ledger cannot take (past its cap) moves nothing, the items neither.
+  def test_a_sale_the_ledger_refuses_keeps_the_items
+    start_server
+    s, lo = player(money: 999_900, bag: { POTION: 2 })
+    assert_equal "money", ask(s, :sell, "POTION", 2, 150)[:reason]
+    assert_equal 2, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
+    assert_equal 999_900, money(lo)
+  end
+
   def test_shadow_grants_and_moves_no_money
     start_server("shadow")
     s, lo = player
@@ -180,26 +200,26 @@ end
     assert_equal 2, @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:last_seq)
   end
 
-# The Battle Point exchange: the same, in BP.
-def test_a_bp_exchange_is_made_by_the_server
-  start_server
-  s, lo = bp_player
-  assert_equal true, lo[:bp_shop_gate]
-  r = bp_ask(s, "PROTEIN", 2, 16)
-  assert_equal [:shop_grant, 18], [r[:type], r[:balance]]
-  assert_equal [18, 1000], [bp(lo), money(lo)], "BP moved, no money"
-  assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], reason: "bpshop:buy:PROTEINx2").count
-  assert_equal "bp", bp_ask(s, "PROTEIN", 2, 16, seq: 2)[:reason], "18 BP buy one, not two"
-end
+  # The Battle Point exchange: the same, in BP.
+  def test_a_bp_exchange_is_made_by_the_server
+    start_server
+    s, lo = bp_player
+    assert_equal true, lo[:bp_shop_gate]
+    r = bp_ask(s, "PROTEIN", 2, 16)
+    assert_equal [:shop_grant, 18], [r[:type], r[:balance]]
+    assert_equal [18, 1000], [bp(lo), money(lo)], "BP moved, no money"
+    assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], reason: "bpshop:buy:PROTEINx2").count
+    assert_equal "bp", bp_ask(s, "PROTEIN", 2, 16, seq: 2)[:reason], "18 BP buy one, not two"
+  end
 
-def test_the_exchange_clerk_and_price_are_checked
-  start_server
-  s, = bp_player
-  assert_equal "not_a_shop", bp_ask(s, "POTION", 1, 300, event: 5)[:reason], "a Mart is not the exchange"
-  assert_equal "not_sold", bp_ask(s, "POTION", 1, 1, seq: 2)[:reason]
-  assert_equal "price", bp_ask(s, "PROTEIN", 1, 1, seq: 3)[:reason]
-  send_env(s, { type: :shop_req, op: :sell, item: "PROTEIN", quantity: 1, unit_price: 8, bp: true, map: 15,
-                event: 7, seq: 4 })
-  assert_equal "bad", recv_type(s, :shop_grant, :shop_deny)[:reason], "the exchange buys nothing back"
-end
+  def test_the_exchange_clerk_and_price_are_checked
+    start_server
+    s, = bp_player
+    assert_equal "not_a_shop", bp_ask(s, "POTION", 1, 300, event: 5)[:reason], "a Mart is not the exchange"
+    assert_equal "not_sold", bp_ask(s, "POTION", 1, 1, seq: 2)[:reason]
+    assert_equal "price", bp_ask(s, "PROTEIN", 1, 1, seq: 3)[:reason]
+    send_env(s, { type: :shop_req, op: :sell, item: "PROTEIN", quantity: 1, unit_price: 8, bp: true, map: 15,
+                  event: 7, seq: 4 })
+    assert_equal "bad", recv_type(s, :shop_grant, :shop_deny)[:reason], "the exchange buys nothing back"
+  end
 end

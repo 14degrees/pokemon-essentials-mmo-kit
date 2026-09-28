@@ -113,8 +113,11 @@ module PEMK
         obj = PEMK::PeerPokemon.load(msg[:_body], "trade escrow")
         obj = obj[0] if obj.is_a?(Array)
         # Cross-check the escrow object against the announced offer: same uid AND
-        # species -> a scammer can't lock a different/fabricated mon than offered.
-        unless obj.is_a?(Pokemon) && obj.pemk_uid == @session[:their_uid] && obj.species == @session[:their_species]
+        # species -> a scammer can't lock a different/fabricated mon than offered. And
+        # it holds what the lock says (the item the server checks against the sender's
+        # record): an item slipped into the body unsaid would reach this game unexplained.
+        unless obj.is_a?(Pokemon) && obj.pemk_uid == @session[:their_uid] && obj.species == @session[:their_species] &&
+               (!msg.key?(:item) || (obj.item_id rescue nil) == msg[:item])
           PEMK.log("trade: escrow cross-check failed -> abort")
           relay(:trade_cancel)
           finish(_INTL("Trade error — the offer did not match. Cancelled."))

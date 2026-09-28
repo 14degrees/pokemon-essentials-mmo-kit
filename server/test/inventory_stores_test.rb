@@ -29,6 +29,15 @@ class InventoryStoresTest < Minitest::Test
     { pc: pc, mail: mail, held: held, holders: holders }
   end
 
+  # More Pokemon holding an item than the held counts include: a record a trade could
+  # confirm an item from that the possession never counted. Not recorded.
+  def test_holders_the_held_counts_do_not_cover_are_refused
+    flags = @inv.apply_inv(@a, {}, 1, stores: stores(held: { LEFTOVERS: 1 }, holders: { 7 => :LEFTOVERS, 8 => :LEFTOVERS }))[1]
+    assert_includes flags, "bad_stores"
+    assert_nil @inv.snapshot(@a)[:stores]
+    assert_includes @inv.apply_inv(@a, { "potion": 1 }, 2)[1], "bad_key", "not an item id"
+  end
+
   def test_the_stores_ride_the_bag_and_come_back_at_login
     assert_equal :ack, @inv.apply_inv(@a, { ORANBERRY: 2 }, 1, stores: stores)[0]
     snap = @inv.snapshot(@a)

@@ -105,6 +105,21 @@ class TradeItemPluginTest < Minitest::Test
     # a parked and a fused Pokemon are removed where they are
     out[:day_care] = [M.remove_by_uid(3), $PokemonGlobal.day_care.slots[0].pokemon]
     out[:fusion] = [M.remove_by_uid(5), kyurem.fused, kyurem.form, $bag.items.key?(:DNASPLICERS)]
+
+    # a partner's escrow must hold what its lock says (the item the server checks)
+    module PEMK; module PeerPokemon; def self.load(body, _what); body; end; end; end
+    lock = lambda do |tid, said, held|
+      $sent.clear
+      T.instance_variable_set(:@session, { :trade_id => tid, :partner => 2, :partner_name => "Bob", :my_uid => 1,
+                                           :my_locked => false, :their_uid => 9, :their_species => :EEVEE,
+                                           :phase => :confirming })
+      T.on_message({ :type => :trade_lock, :from => 2, :to => 1, :trade_id => tid, :uid => 9, :item => said,
+                     :_body => Pokemon.new(:EEVEE, 9, held) })
+      s = T.instance_variable_get(:@session)
+      [$sent.map { |m| m[:type] }, s && s[:their_obj] && s[:their_obj].item_id]
+    end
+    out[:unsaid] = lock.call("t3", nil, :MASTERBALL)
+    out[:said]   = lock.call("t4", :MASTERBALL, :MASTERBALL)
     print out.inspect
   RUBY
 
@@ -118,5 +133,7 @@ class TradeItemPluginTest < Minitest::Test
     assert_equal [nil, 1, [4, 9]], o[:settled], "Oran Berry back, the Leftovers gone with the escrow"
     assert_equal [true, nil], o[:day_care]
     assert_equal [true, nil, 0, true], o[:fusion]
+    assert_equal [[:trade_cancel], nil], o[:unsaid], "a held item the lock did not declare cancels the trade"
+    assert_equal [[], :MASTERBALL], o[:said]
   end
 end
