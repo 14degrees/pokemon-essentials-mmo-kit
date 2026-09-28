@@ -14,7 +14,7 @@ Autotest.scenario "a clerk that sets its prices is paid them", flags: { PEMK_SHO
   ledger = -> { s.db[:economy_balances].where(account_id: id, field: "money").get(:balance) }
   held   = -> { (s.db[:inventory_snapshots].where(account_id: id).get(:bag) || {}).to_h["GREATBALL"].to_i }
   s.wait_for("the server has the Great Ball", seconds: 20) { held.call == 1 }
-  a.money!(6000)                           # the starting money never reaches the server by itself
+  a.money!(6000)                           # more than a new game starts with
   s.wait_for("the server has the money", seconds: 15) { ledger.call == 6000 }
   sell = Time.now.saturday? ? 450 : 300    # pbIsWeekday(0, 6): the stall's sale day
 
