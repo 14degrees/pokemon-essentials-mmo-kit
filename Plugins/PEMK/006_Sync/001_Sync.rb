@@ -21,6 +21,7 @@ module PEMK
     BLOB_MIN_INTERVAL = 30.0    # seconds between throttled (non-forced) blob pushes
 
     @econ        = {}           # field => latest absolute value (coalesced; badges ride here as a :badges bitmask)
+    @econ_sent   = {}           # field => [seq, value] of its latest frame (an answer to an older one is stale)
     @inv_dirty   = false        # bag changed since the last flush -> re-read the WHOLE bag once at flush
     @mon_dirty   = false        # monsters may need uids / the party projection may have changed
     @mon_last    = nil          # hash of the last-sent party projection (send only on change)
@@ -40,6 +41,7 @@ module PEMK
     # does not share must never keep stale dedup/seq baselines — see design §10).
     def reset
       @econ = {}
+      @econ_sent = {}
       @inv_dirty = false
       @inv_last = nil
       @mon_dirty = false
@@ -137,6 +139,23 @@ module PEMK
       (PEMK::Checkpoint.request(:t1) rescue nil)
     end
 
+    # What an :econ_ack / :econ_rej leaves +field+ at, or nil to leave it alone. Only the
+    # answer to the field's latest frame counts: an older one carries a balance a newer
+    # frame already moved past. While a newer change waits to go out, the answer lands as
+    # a delta on it - the change survives, corrected by what the server kept, and goes
+    # out corrected - and a bitmask (badges) waits for that frame's own answer.
+    def econ_reply(field, seq, value)
+      sent = @econ_sent[field]
+      return value unless sent
+      return nil unless seq == sent[0]
+
+      waiting = @econ[field]
+      return value if waiting.nil?
+      return nil if field == :badges
+
+      @econ[field] = waiting + (value - sent[1])
+    end
+
     # Story state (switches/variables/self-switches) moved. Flag-only: the whole
     # non-default set is re-read once at flush and hash-gated, exactly like the bag.
     def mark_flags
@@ -201,7 +220,9 @@ module PEMK
       return unless c && c.connected? && dirty?
 
       @econ.each do |field, value|
-        c.send_message({ :type => :econ, :field => field, :value => value, :seq => (@seq[:economy] += 1) })
+        seq = (@seq[:economy] += 1)
+        c.send_message({ :type => :econ, :field => field, :value => value, :seq => seq })
+        @econ_sent[field] = [seq, value]
       end
       # Switches/variables/self-switches: one whole-state read HERE (game thread),
       # sent as an absolute snapshot and hash-gated so an unchanged story costs

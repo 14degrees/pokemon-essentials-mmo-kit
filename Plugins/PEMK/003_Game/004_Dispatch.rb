@@ -81,13 +81,18 @@ module PEMK
       when :econ_ack, :econ_rej
         # Server's canonical economy balance: :econ_ack is the accepted value,
         # :econ_rej the current balance an over-cap/invalid change rolled back to.
-        # Either way the client reconciles to it via a trusted, non-notifying applier
-        # (no echo back). :badges is a bitmask -> decode it; money fields set directly.
+        # Only the answer to the field's latest frame counts, as a delta on a change
+        # still waiting to go out (Sync.econ_reply). The client reconciles to it via a
+        # trusted, non-notifying applier (no echo back). :badges is a bitmask -> decode
+        # it; money fields set directly.
         if $player && msg[:field] && msg[:value].is_a?(Integer)
-          if msg[:field] == :badges
-            $player.pokemmo_apply_badges_mask(msg[:value])
+          value = Sync.econ_reply(msg[:field], msg[:seq], msg[:value])
+          if value.nil?
+            nil
+          elsif msg[:field] == :badges
+            $player.pokemmo_apply_badges_mask(value)
           else
-            $player.pokemmo_apply_economy(msg[:field], msg[:value])
+            $player.pokemmo_apply_economy(msg[:field], value)
           end
         end
       when :inv_ack
