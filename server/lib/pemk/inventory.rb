@@ -19,6 +19,7 @@ module PEMK
   class Inventory
     DIVERGENCE_MIN = 8         # only log a blob-vs-record divergence this material (coarse tamper signal)
     SHIP_MAX_BYTES = 60_000    # never ship a login bag so large it pushes login_ok past the 64 KiB wire cap
+    STORE_MAX      = 4096      # entries per store map (the wire's own per-container cap)
 
     def initialize(db, caps, logger: nil)
       @db   = db
@@ -27,7 +28,10 @@ module PEMK
     end
 
     # -> [:ack, flags] | [:dup, []] | [:rej, ["bad_shape"]]
-    def apply_inv(account_id, bag, seq, now: Time.now)
+    # +stores+ (item authority E0): the other places the same snapshot counted,
+    # { pc:, mail:, held:, holders: }. Recorded in the bag's row with the bag's seq, or
+    # not at all (flagged bad_stores).
+    def apply_inv(account_id, bag, seq, stores: nil, now: Time.now)
       return [:rej, ["bad_shape"]] unless bag.is_a?(Hash) && seq.is_a?(Integer)
 
       result = nil
@@ -41,11 +45,19 @@ module PEMK
           stored   = bag.each_with_object({}) { |(k, v), h| h[k.to_s] = v }  # jsonb keys are strings
           distinct = bag.size
           total    = bag.values.sum { |v| v.is_a?(Integer) ? v : 0 }
-          fields = {
-            bag: Sequel.pg_jsonb(stored), last_seq: seq,
-            distinct_items: distinct, total_qty: total,
-            flagged: !flags.empty?, flags: Sequel.pg_jsonb(flags), updated_at: now
-          }
+          fields = { bag: Sequel.pg_jsonb(stored), last_seq: seq, distinct_items: distinct, total_qty: total,
+                     updated_at: now }
+          unless stores.nil?
+            clean = clean_stores(stores)
+            if clean
+              fields.merge!(stores_seq: seq, pc: clean[:pc] && Sequel.pg_jsonb(clean[:pc]),
+                            mailbox: Sequel.pg_jsonb(clean[:mail]), held: Sequel.pg_jsonb(clean[:held]),
+                            holders: Sequel.pg_jsonb(clean[:holders]))
+            else
+              flags << "bad_stores"
+            end
+          end
+          fields.merge!(flagged: !flags.empty?, flags: Sequel.pg_jsonb(flags))
           @db[:inventory_snapshots]
             .insert_conflict(target: :account_id, update: fields)  # adopt EVEN WHEN flagged, or the record drifts
             .insert(fields.merge(account_id: account_id))
@@ -71,7 +83,69 @@ module PEMK
       est = bag.sum { |k, _| k.to_s.bytesize + 14 }
       return { bag: nil, last_seq: row[:last_seq] } if est > SHIP_MAX_BYTES
 
-      { bag: bag.transform_keys(&:to_sym), last_seq: row[:last_seq] }
+      { bag: bag.transform_keys(&:to_sym), last_seq: row[:last_seq], stores: stores_for(row, est) }
+    end
+
+    # The other stores, as the login restores them: only while the last snapshot carried
+    # them all (an older client sends the bag alone, and its stores would be stale), and
+    # only if they still fit the login reply.
+    def stores_for(row, bag_bytes)
+      return nil unless row[:stores_seq] && row[:stores_seq] == row[:last_seq]
+
+      # Only the Pokemon that hold something matter to the restore. A save written before
+      # a Pokemon's uid arrived knows it by its mint nonce alone, so each comes with it.
+      holders = (row[:holders] || {}).to_h.each_with_object({}) { |(u, i), h| h[u.to_i] = i.to_sym if i }
+      nonces  = @db[:monsters].where(id: holders.keys, issuer_account_id: row[:account_id])
+                              .select_map(%i[id client_nonce]).to_h
+      out = { pc: row[:pc] && symbols(row[:pc]), mail: symbols(row[:mailbox] || {}), held: symbols(row[:held] || {}),
+              holders: holders, nonces: nonces }
+      est = bag_bytes + [out[:pc] || {}, out[:mail], out[:held]].sum { |m| m.sum { |k, _| k.to_s.bytesize + 14 } } +
+            (holders.size + nonces.size) * 24
+      est > SHIP_MAX_BYTES ? nil : out
+    end
+
+    # Every store's count of each item: what the reward audit reads Rare Candies from, so
+    # a deposit does not look like a use. Bag only for a client that sends no stores.
+    def self.totals(bag, stores)
+      out = Hash.new(0)
+      [bag, *(stores.is_a?(Hash) ? [stores[:pc], stores[:mail], stores[:held]] : [])].each do |m|
+        m.each { |k, v| out[k] += v if v.is_a?(Integer) } if m.is_a?(Hash)
+      end
+      out
+    end
+
+    # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record
+    # never saw that Pokemon or is not whole. The snapshot lists every owned uid.
+    def holder_item(account_id, uid)
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      return :unknown unless row && row[:stores_seq] && row[:stores_seq] == row[:last_seq]
+
+      holders = (row[:holders] || {}).to_h
+      return :unknown unless holders.key?(uid.to_s)
+
+      holders[uid.to_s]&.to_sym
+    end
+
+    # A Pokemon left this account in a trade: its held item leaves the record with it,
+    # so a crash before the next snapshot cannot hand the item back at the next login.
+    def drop_holder(account_id, uid, now: Time.now)
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      return unless row && row[:holders]
+
+      holders = row[:holders].to_h
+      return unless holders.key?(uid.to_s)
+
+      item = holders.delete(uid.to_s)
+      unless item
+        @db[:inventory_snapshots].where(account_id: account_id).update(holders: Sequel.pg_jsonb(holders), updated_at: now)
+        return
+      end
+
+      held = (row[:held] || {}).to_h
+      held[item] = held[item].to_i - 1
+      held.delete(item) if held[item] <= 0
+      @db[:inventory_snapshots].where(account_id: account_id)
+                               .update(holders: Sequel.pg_jsonb(holders), held: Sequel.pg_jsonb(held), updated_at: now)
     end
 
     # Headless STRUCTURAL checks -> array of reason strings. FLAG, never reject.
@@ -88,6 +162,32 @@ module PEMK
     end
 
     private
+
+    # -> { pc: {"ITEM"=>n} | nil, mail:, held:, holders: {"uid"=>"ITEM"} } ready for jsonb, or nil.
+    def clean_stores(s)
+      return nil unless s.is_a?(Hash)
+      return nil unless (s[:pc].nil? || counts?(s[:pc])) && counts?(s[:mail]) && counts?(s[:held])
+
+      holders = s[:holders]
+      return nil unless holders.is_a?(Hash) && holders.size <= STORE_MAX &&
+                        holders.all? { |u, i| u.is_a?(Integer) && u.positive? && (i.nil? || i.is_a?(Symbol)) }
+
+      { pc: s[:pc] && strings(s[:pc]), mail: strings(s[:mail]), held: strings(s[:held]),
+        holders: holders.each_with_object({}) { |(u, i), h| h[u.to_s] = i&.to_s } }
+    end
+
+    def counts?(h)
+      h.is_a?(Hash) && h.size <= STORE_MAX &&
+        h.all? { |k, v| k.is_a?(Symbol) && v.is_a?(Integer) && v.positive? && v <= @caps[:per_item] }
+    end
+
+    def strings(h)
+      h.each_with_object({}) { |(k, v), o| o[k.to_s] = v }
+    end
+
+    def symbols(h)
+      h.to_h.each_with_object({}) { |(k, v), o| o[k.to_sym] = v }
+    end
 
     # Coarse blob-vs-record divergence signal (a save-file edit that bypassed the
     # observers shows up as a large first-post-login diff). Small diffs are EXPECTED

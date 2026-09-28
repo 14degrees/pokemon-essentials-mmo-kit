@@ -73,6 +73,7 @@ module Game
         PEMK::Auth.reconcile_economy       # ledger snapshot (empty for a new account)
         PEMK::Auth.reconcile_inventory     # unseeded -> seed the fresh bag on the first flush
         PEMK::Auth.reconcile_monsters      # uid sweep + first party projection
+        (PEMK::Inventory.restore_stores rescue nil)  # PC, mailbox, held items (after evictions)
         (PEMK::TradeRedeliver.ask_owed rescue nil)   # traded Pokemon the save may lack
         (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
         # Server-authoritative: the local Game.rxdata is a disposable per-session
@@ -87,6 +88,7 @@ module Game
         PEMK::Auth.reconcile_economy       # ledger is the economy authority, over the blob
         PEMK::Auth.reconcile_inventory     # server bag overwrites the blob bag (or seeds if unseeded)
         PEMK::Auth.reconcile_monsters      # uid sweep (legacy-save adoption) + first party projection
+        (PEMK::Inventory.restore_stores rescue nil)  # PC, mailbox, held items (after evictions)
         (PEMK::TradeRedeliver.ask_owed rescue nil)   # traded Pokemon the save may lack
         (PEMK::Flags.reconcile rescue nil) # union the server's progression facts
         PEMK::Auth.clear_pending
