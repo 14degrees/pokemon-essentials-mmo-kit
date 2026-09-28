@@ -104,6 +104,32 @@ between an event and the next save never restores a switch without its payout.
 Banked progression belongs to the account, like pickups and badges: a fresh
 playthrough is a new account.
 
+#### Enforcement in session (`PEMK_FLAG_ENFORCE`)
+
+Off by default, and only meaningful with `PEMK_FLAG_STATE` on. The server keeps its
+own copy of every switch, variable and self-switch the manifest tracks, built from
+the writes the game's own code makes. A snapshot that disagrees with it means an id
+changed some other way (a memory or save edit, since those skip the game's setters).
+
+- **`shadow`** — logs `WOULD-REPAIR` with the ids and the values the server holds.
+- **`on`** — the server keeps its values and sends them back (`:flag_repair`); the
+  client applies them on the next free overworld frame. An id the game wrote again
+  since the snapshot is left alone (the next snapshot is judged instead), a
+  variable holding an object is never overwritten, and a repeatable event's
+  self-switch stays under its cooldown. A fact switch set by an edit is repaired off
+  and never banked. `REPAIR` is logged.
+
+Like the facts, this is judged against saved state: the server remembers its copy as
+it stood at each saved blob, and a new session is compared with the one the loaded
+blob was saved at. When that cannot be matched exactly, the session's first snapshot
+is trusted (`login state unverified` in the log) rather than risk repairing
+progress a crash lost. Only a client that announces it can apply a repair gets one;
+an older client is logged as `WOULD-REPAIR`.
+
+Limit: a modified client that writes through the game's own setters looks like the
+game to this layer. The rewards, pickups and battle layers bound what those writes
+can earn.
+
 **After updating the kit**, do one debug launch before restarting the server: the
 automatic export reruns when your maps and data change, and also when the kit's
 exporters do, so the server gets the current format (an older manifest lacks the
