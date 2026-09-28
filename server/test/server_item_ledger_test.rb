@@ -244,19 +244,19 @@ class ServerItemLedgerTest < Minitest::Test
     assert_empty credits(lo[:account_id])
   end
 
-def test_a_bp_exchange_explains_its_item
-  start_server("PEMK_SHOP_ENFORCE" => "on")
-  s, lo = login("il5b@t.co")
-  send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
-  recv_type(s, :econ_ack, :econ_rej)
-  inv(s, 1, {})
-  send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 2, unit_price: 16, bp: true, map: 15, event: 7,
-                seq: 1 })
-  assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
-  inv(s, 2, { PROTEIN: 2 })
-  assert_empty owing(lo[:account_id])
-  assert_empty credits(lo[:account_id])
-end
+  def test_a_bp_exchange_explains_its_item
+    start_server("PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login("il5b@t.co")
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    inv(s, 1, {})
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 2, unit_price: 16, bp: true, map: 15, event: 7,
+                  seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    inv(s, 2, { PROTEIN: 2 })
+    assert_empty owing(lo[:account_id])
+    assert_empty credits(lo[:account_id])
+  end
 
   def test_a_refused_purchase_explains_nothing
     start_server("PEMK_SHOP_ENFORCE" => "shadow")
@@ -278,13 +278,38 @@ end
     assert_empty owing(lo[:account_id])
   end
 
-  # An older client, or the Bug Contest: the bag alone, judged against the bag alone.
-  def test_a_snapshot_without_stores_is_judged_on_the_bag
+  # The Bug Contest, a collection too big to send, an older client: the bag alone is
+  # recorded, never judged; the next full snapshot is judged against the last full one.
+  def test_a_stretch_without_stores_neither_hides_nor_invents
     start_server
     s, lo = login("il8@t.co")
     inv(s, 1, {}, st(pc: { POTION: 3 }))
-    inv(s, 2, { POTION: 1 }, nil)
-    assert_equal [["POTION", -1]], owing(lo[:account_id])
+    inv(s, 2, { POTION: 1 }, nil)                            # withdrew one, as the bag alone says
+    inv(s, 3, { POTION: 3 }, st(pc: {}))                     # ... and the rest: a move, not an increase
+    assert_empty owing(lo[:account_id])
+    inv(s, 4, { POTION: 9 }, nil)                            # six from nowhere, during a stretch
+    inv(s, 5, { POTION: 9 }, st(pc: {}))
+    assert_equal [["POTION", -6]], owing(lo[:account_id])
+  end
+
+  # Something that is not an item id never reaches the ledger, and never costs it the rest.
+  def test_a_key_that_is_no_item_is_left_out
+    start_server
+    s, lo = login("il8b@t.co")
+    inv(s, 1, {}, st)
+    r = inv(s, 2, { RARECANDY: 1, :bogus_key => 5, :"#{'A' * 100}" => 1 })
+    assert_equal true, r[:flagged]
+    assert_equal [["RARECANDY", -1]], owing(lo[:account_id])
+  end
+
+  # The engine turns the DNA Splicers into their used form when they fuse two Pokemon.
+  def test_an_item_and_its_twin_count_as_one
+    start_server
+    s, lo = login("il8c@t.co")
+    inv(s, 1, { DNASPLICERS: 1 }, st)
+    inv(s, 2, { DNASPLICERSUSED: 1 }, st)
+    inv(s, 3, { DNASPLICERS: 1 }, st)
+    assert_empty owing(lo[:account_id])
   end
 
   def test_the_pc_start_items_are_explained_once
@@ -366,6 +391,8 @@ end
     a, la, b, lb, ua, ub = traders
     assert_equal true, trade(a, la, b, lb, ua, ub, a_says: :LEFTOVERS)[:ok]
     assert_equal "LEFTOVERS", @db[:trade_deliveries].where(account_id: lb[:account_id], uid: ua).get(:item)
+    assert_equal({}, @db[:inventory_snapshots].where(account_id: la[:account_id]).get(:judged).to_h,
+                 "the Leftovers left A's judged totals with the Pokemon")
     inv(b, 2, {}, st(holders: { ua => :LEFTOVERS }))
     assert_empty owing(lb[:account_id])
     assert_empty credits(lb[:account_id]), "bound to that Pokemon, not a credit anyone could use"

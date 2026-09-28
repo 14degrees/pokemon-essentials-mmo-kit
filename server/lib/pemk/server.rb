@@ -92,10 +92,13 @@ module PEMK
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @item_ledger = ItemLedger.new(@db) if @config.item_authority != :off   # item authority E2
+      @item_twins = {}
       if @item_ledger   # E2b: which items this game can produce unseen, under the gates that are on
         @item_tiers = ItemTiers.new(world: @world, battle: @battle, gifts: @config.gift_enforce != :off,
                                     claims: @config.flag_state != :off, shops: @config.shop_enforce != :off,
                                     repeatable: method(:repeatable_gift?), extra: @config.item_local)
+        @item_twins = item_twins
+        @judged_local = @item_tiers.local.map { |i| @item_twins.fetch(i, i) }.to_set.freeze
       end
       @last_item_sweep = nil
       @item_sweeping   = false
@@ -512,44 +515,83 @@ module PEMK
       @mailbox.submit(account_id) do
         status = nil
         @db.transaction do
-          prev = @item_ledger && @db[:inventory_snapshots].where(account_id: account_id).first
+          # The row stays locked to the end: a trade swap on the pool that takes a held
+          # item out of this record waits for this snapshot, or this one for it.
+          prev = (@item_ledger || @gift_grants) && @db[:inventory_snapshots].where(account_id: account_id).for_update.first
           status = @inventory.apply_inv(account_id, bag, seq, stores: stores)
-          # Step 6: a snapshot the record adopted holds every payout the client applied
-          # before it. One transaction, so a crash cannot keep the bag and lose the seal.
-          @gift_grants.seal(account_id, gift_conn) if gift_conn && status[0] == :ack
-          judge_items(account_id, prev, bag, stores, status[1]) if @item_ledger && status[0] == :ack
+          if status[0] == :ack
+            # Step 6: a snapshot the record adopted holds every payout the client applied
+            # before it. One transaction, so a crash cannot keep the bag and lose the seal.
+            @gift_grants&.seal(account_id, gift_conn) if gift_conn
+            # ... and a payout it shows has reached the record, reported applied or not.
+            @gift_grants&.seal_arrived(account_id, increases(prev, bag, stores, status[1]))
+            judge_items(account_id, prev, bag, stores, status[1]) if @item_ledger
+          end
         end
         @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
       end
     end
 
-    # Item authority E2: the possession this snapshot shows against the one before it,
-    # over the same stores - all of them when both carry them, else the bag alone - so a
-    # move between stores is never an increase. The first snapshot is the baseline. A
-    # savepoint: a failed judgment never costs the snapshot.
+    # Item authority E2: a snapshot that carries every store is judged against the totals
+    # of the last one judged (inventory_snapshots.judged), so a stretch of bag-only
+    # snapshots (the Bug Contest, a collection too big to send, an older client) neither
+    # reads a store move as an increase nor lets an increase slip in; a bag-only snapshot
+    # is recorded, never judged. The first full snapshot is the baseline. A savepoint: a
+    # failed judgment never costs the snapshot, and is logged loudly.
     def judge_items(account_id, prev, bag, stores, flags)
-      @db.transaction(savepoint: true) do
-        clean = stores && !flags.include?("bad_stores")
-        if prev.nil?
-          # A PC storage already there came with its start items long ago.
-          @db[:inventory_snapshots].where(account_id: account_id).update(pc_started: true) if clean && stores[:pc].is_a?(Hash)
-          next
-        end
+      return unless stores && !flags.include?("bad_stores")
 
-        whole  = clean && !prev[:stores_seq].nil?
-        before = Inventory.totals(prev[:bag].to_h, whole ? { pc: prev[:pc]&.to_h, mail: prev[:mailbox].to_h, held: prev[:held].to_h } : nil)
-        after  = Inventory.totals(bag, whole ? stores : nil)
-        allow  = whole ? arrivals(account_id, prev[:holders].to_h, stores[:holders]) : Hash.new(0)
-        if clean && stores[:pc].is_a?(Hash) && !prev[:pc_started]
-          # The PC item storage appeared: the engine put its start items in, once.
-          pc_start_items.each { |i, n| allow[i] += n } if whole && prev[:pc].nil?
-          @db[:inventory_snapshots].where(account_id: account_id).update(pc_started: true)
+      @db.transaction(savepoint: true) do
+        after = canonical(Inventory.totals(bag, stores))
+        base  = prev && prev[:judged] && prev[:judged].to_h
+        if base
+          allow = arrivals(account_id, prev[:holders].to_h, stores[:holders])
+          if stores[:pc].is_a?(Hash) && !prev[:pc_started] && prev[:pc].nil?
+            pc_start_items.each { |i, n| allow[i] += n }   # the PC item storage appeared, with its start items
+          end
+          @item_ledger.judge(account_id, base, after, allow: allow, local: @judged_local)
         end
-        @item_ledger.judge(account_id, before.transform_keys(&:to_s), after.transform_keys(&:to_s), allow: allow,
-                           local: @item_tiers&.local)
+        fields = { judged: Sequel.pg_jsonb(after) }
+        fields[:pc_started] = true if stores[:pc].is_a?(Hash)   # a storage already there got its items long ago
+        @db[:inventory_snapshots].where(account_id: account_id).update(fields)
       end
     rescue StandardError => e
-      @log.call("inv: item judgment failed #{e.class}: #{e.message}")
+      @log.call("inv: WARNING item judgment failed for account #{account_id} #{e.class}: #{e.message}")
+    end
+
+    # How much each item grew in this snapshot: over every store when it and the record
+    # both carry them, else over the bag. -> { "ITEM" => n }
+    def increases(prev, bag, stores, flags)
+      return {} unless prev
+
+      both = stores && !flags.include?("bad_stores") && prev[:stores_seq] == prev[:last_seq]
+      was = Inventory.totals(prev[:bag].to_h, both ? { pc: prev[:pc]&.to_h, mail: prev[:mailbox].to_h, held: prev[:held].to_h } : nil)
+      now = Inventory.totals(bag, both ? stores : nil)
+      now.each_with_object({}) do |(k, n), out|
+        up = n - was[k.to_s] - was[k.to_s.to_sym]
+        out[k.to_s] = up if up.positive?
+      end
+    end
+
+    # Item totals as the ledger judges them: real item ids only, and an item the engine
+    # swaps for its twin (the DNA Splicers and their used form) counted as one.
+    def canonical(totals)
+      totals.each_with_object(Hash.new(0)) do |(k, n), out|
+        id = k.to_s
+        next unless id.match?(Inventory::ITEM_ID) && n.is_a?(Integer) && n.positive?
+
+        out[@item_twins.fetch(id, id)] += n
+      end
+    end
+
+    # Items the engine turns into one another with $bag.replace_item: X and XUSED (the
+    # fusion items), and the Exp. All switched off. -> { twin => canonical }
+    def item_twins
+      ids = @battle.item_ids
+      twins = ids.select { |i| i.end_with?("USED") && @battle.item_known?(i.chomp("USED")) }
+                 .to_h { |i| [i, i.chomp("USED")] }
+      twins["EXPALLOFF"] = "EXPALL" if @battle.item_known?("EXPALLOFF") && @battle.item_known?("EXPALL")
+      twins.freeze
     end
 
     # The Pokemon that joined the possession holding an item: one the server delivered in
@@ -575,7 +617,8 @@ module PEMK
     def credit_item(account_id, item, qty, source, ref)
       return unless @item_ledger && item
 
-      @db.transaction(savepoint: true) { @item_ledger.credit(account_id, item.to_s, qty, source: source, ref: ref) }
+      id = @item_twins.fetch(item.to_s, item.to_s)
+      @db.transaction(savepoint: true) { @item_ledger.credit(account_id, id, qty, source: source, ref: ref) }
     rescue StandardError => e
       @log.call("inv: credit failed #{e.class}: #{e.message}")
     end
@@ -1159,8 +1202,11 @@ module PEMK
       shop  = bp ? "bpshop" : "shop"
       @mailbox.submit(account_id) do
         balance = nil
-        why ||= "not_held" if op == :sell && !@inventory.holds?(account_id, item, qty)
+        why ||= "not_held" if op == :sell && !on && !@inventory.holds?(account_id, item, qty)
         @db.transaction do
+          # A sale the server makes takes the items out of its record with the money in,
+          # so a client that keeps them cannot sell the same record again.
+          why ||= "not_held" if op == :sell && on && !@inventory.take_sold(account_id, item, qty)
           if why.nil? && on
             delta = op == :buy ? -(unit * qty) : unit * qty
             st, value, = @ledger.adjust(account_id, field, delta, reason: "#{shop}:#{op}:#{item}x#{qty}")
@@ -1168,6 +1214,7 @@ module PEMK
               balance = value
             else
               why = bp ? "bp" : "money"
+              raise Sequel::Rollback   # nothing moves: not the items either
             end
           end
           # E2: what the clerk sold - and the Premier Balls a Mart adds - is explained.
@@ -1421,6 +1468,9 @@ module PEMK
             [:abort, :item]
           else
             @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives) do
+              # Both item records first, in account order, before any ledger row - the order
+              # a snapshot takes too (its record, then the ledger), so the two never deadlock.
+              [a, b].sort.each { |acc| @db[:inventory_snapshots].where(account_id: acc).for_update.first }
               # E2: a traded Pokemon's held item is explained on the other side as the
               # sender's record knew it - by its delivery when there is one (bound to that
               # Pokemon), else by a credit. Read before the senders' records lose it.

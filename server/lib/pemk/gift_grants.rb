@@ -90,11 +90,31 @@ module PEMK
                        .update(state: "sealed", updated_at: now)
     end
 
-    # A fresh login loads the stored bag, which holds no unsealed payout. -> rows voided.
+    # A bag snapshot the record adopted grew by +increases+ ({ "ITEM" => n }): a payout of
+    # that size has reached the record, whatever the client reported - a client that never
+    # sends :gift_applied can no longer keep its payout unsealed. -> rows sealed.
+    def seal_arrived(account_id, increases, now: Time.now)
+      return 0 if increases.empty?
+
+      rows = @db[:gift_grants].where(account_id: account_id, state: %w[granted applied], item: increases.keys).all
+      arrived = rows.select { |r| increases[r[:item]].to_i >= r[:quantity].to_i }
+      arrived.each do |r|
+        @db[:gift_grants].where(account_id: account_id, map: r[:map], event: r[:event]).update(state: "sealed", updated_at: now)
+      end
+      arrived.size
+    end
+
+    # A fresh login loads the stored bag, which holds no unsealed payout: voided, so the
+    # event pays again - once. A payout voided before stays paid: a crash may cost it once,
+    # but a client cannot have it paid again at every login. -> rows voided.
     def void_unsealed(account_id, now: Time.now)
-      n = @db[:gift_grants].where(account_id: account_id, state: %w[granted applied])
-                           .update(state: "void", updated_at: now)
+      open = @db[:gift_grants].where(account_id: account_id, state: %w[granted applied])
+      kept = open.where { voids >= 1 }.update(state: "sealed", updated_at: now)
+      n = open.where(voids: 0).update(state: "void", voids: Sequel[:voids] + 1, updated_at: now)
       @log.call("gift: account #{account_id} — #{n} unsealed grant(s) void at login") if n.positive?
+      if kept.positive?
+        @log.call("gift: account #{account_id} — #{kept} unsealed grant(s) voided before: kept as paid")
+      end
       n
     end
 
