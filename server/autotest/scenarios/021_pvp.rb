@@ -3,8 +3,9 @@
 # Two players battle through the pause menu. The challenger hosts, the other
 # replays; each picks for its own side, and the choices cross through the server.
 # Both windows must see the same end, one win and one loss with no timeout, and the
-# battle is fought on copies: neither real party loses a hit point.
-Autotest.scenario "two players battle each other", budget: 420 do |s|
+# battle is fought on copies: neither real party loses a hit point. Each team is
+# checked on its way (PEMK_PEER_CHECK on): honest teams pass the server and the client.
+Autotest.scenario "two players battle each other", flags: { PEMK_PEER_CHECK: "on" }, budget: 420 do |s|
   a = s.player(:a)
   b = s.player(:b)
   s.together(-> { a.new_game("Alice") }, -> { b.new_game("Bob") })
@@ -54,4 +55,7 @@ Autotest.scenario "two players battle each other", budget: 420 do |s|
     end
   end
   s.check("both real parties are untouched") { [party.call(a), party.call(b)] == before }
+  s.check("neither team was refused, by the server or a client") do
+    s.server.grep(/REFUSE/).empty? && [a, b].none? { |p| logged.call(p, "peer:") }
+  end
 end
