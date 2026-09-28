@@ -33,7 +33,8 @@ module PEMK
                  :trainers => 0 }
 
       all_events = []   # [map_id, event] for the item sources (item authority E1b)
-      @common_events = nil   # read again: the dev may have edited them since the last export
+      @common_events = nil      # read again: the dev may have edited them since the last export
+      @trainer_versions = nil   # ... and the trainers
       mapinfos.keys.sort.each do |map_id|
         map = (load_data(sprintf("Data/Map%03d.rxdata", map_id)) rescue nil)
         next unless map && map.respond_to?(:events) && map.events
@@ -580,7 +581,9 @@ module PEMK
 
     # -> [[type, name, version], ...] for every TrainerBattle.start in the event's
     # scripts; a double battle names two trainers. Literal arguments only: a computed
-    # trainer would export a bogus id.
+    # trainer would export a bogus id. A phone rematch (Phone.battle) battles the
+    # contact's next version, which the engine picks at runtime: every version from the
+    # start one onwards is placed here, where the event calls it.
     def collect_trainers(event)
       return [] unless event && event.respond_to?(:pages) && event.pages
 
@@ -593,8 +596,23 @@ module PEMK
           found << [type, name, version.to_i]
         end
       end
+      script.scan(/Phone\.battle\(\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, start|
+        trainer_versions(type, name).each { |v| found << [type, name, v] if v >= start.to_i }
+      end
       found.uniq
     rescue
+      []
+    end
+
+    # The versions the trainer data holds for +type+ and +name+, read once per export.
+    def trainer_versions(type, name)
+      @trainer_versions ||= begin
+        all = Hash.new { |h, k| h[k] = [] }
+        GameData::Trainer.each { |tr| all[[tr.trainer_type.to_s, tr.real_name.to_s]] << tr.version.to_i }
+        all
+      end
+      @trainer_versions.fetch([type, name], []).sort
+    rescue StandardError
       []
     end
 

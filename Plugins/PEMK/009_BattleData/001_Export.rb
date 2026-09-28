@@ -160,16 +160,48 @@ module PEMK
       }
     end
 
-    # Every trainer's party (species and level), so the server can bound the EXP a
-    # trainer battle gives (D4). A list, not a map: a name can hold any character.
+    # Every trainer's party, so the server can bound the EXP a trainer battle gives (D4)
+    # and the prize it pays (money authority M0): [species, level, held item, moves] per
+    # Pokemon. A list, not a map: a name can hold any character.
     def trainers_list
       list = []
       GameData::Trainer.each do |tr|
-        party = Array(tr.pokemon).map { |pk| [pk[:species].to_s, pk[:level].to_i] }
+        party = Array(tr.pokemon).map do |pk|
+          [pk[:species].to_s, pk[:level].to_i, pk[:item] ? pk[:item].to_s : nil, trainer_moves(pk).map(&:to_s)]
+        end
         list << { "type" => tr.trainer_type.to_s, "name" => tr.real_name.to_s,
                   "version" => tr.version.to_i, "party" => party }
       end
       list
+    end
+
+    # The moves a trainer's Pokemon battles with: those its PBS entry names, else the last
+    # four it learned by its level (Pokemon#reset_moves). A foe that knows Happy Hour -
+    # or a move that can call it - can double the player's prize.
+    def trainer_moves(pk)
+      named = Array(pk[:moves]).compact
+      return named unless named.empty?
+
+      sp = GameData::Species.get_species_form(pk[:species], pk[:form] || 0)
+      learned = sp.moves.select { |lvl, _| lvl <= pk[:level].to_i }.map { |_, move| move }
+      learned.reverse.uniq.reverse.last(Pokemon::MAX_MOVES)
+    rescue StandardError
+      []
+    end
+
+    # Money authority M0: what each trainer type pays per level of its strongest Pokemon
+    # (Battle#pbGainMoney).
+    def trainer_types_map
+      out = {}
+      GameData::TrainerType.each { |t| out[t.id.to_s] = { "base_money" => t.base_money.to_i } }
+      out
+    end
+
+    # Money authority M0: the money a new game starts with (metadata; Player#initialize
+    # sets it without the setter, so the server seeds it at login).
+    def money_rules
+      meta = (GameData::Metadata.get rescue nil)
+      { "start_money" => meta ? meta.start_money.to_i : nil }
     end
 
     # --- assembly + write ------------------------------------------------------
@@ -194,7 +226,9 @@ module PEMK
         :item_rules     => item_rules,
         :moves          => moves,
         :species        => species,
-        :trainers       => trainers_list
+        :trainers       => trainers_list,
+        :trainer_types  => trainer_types_map,
+        :money_rules    => money_rules
       }
     end
 

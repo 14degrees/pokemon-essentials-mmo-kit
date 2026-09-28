@@ -23,6 +23,10 @@ module PEMK
   #   species       ID => {species, form, types, base_stats, evs, base_exp, growth_rate,
   #                        catch_rate, abilities, hidden_abilities, level_up_moves,
   #                        tutor_moves, egg_moves, prev_species, minimum_level}
+  #   trainers      [{type, name, version, party: [[species, level, item, [moves]], ...]}]
+  #                 (D4; the item and moves from money authority M0)
+  #   trainer_types TYPE => {base_money}             (money authority M0; optional)
+  #   money_rules   {start_money}                    (money authority M0; optional)
   # All IDs are Strings (JSON keys); callers normalize client-supplied ids with #to_s.
   #
   # Boot policy (same asymmetry as WorldData): ABSENT export -> tolerated (empty model +
@@ -44,6 +48,8 @@ module PEMK
       @moves        = {}
       @species      = {}
       @trainers     = {}   # [type, name, version] => frozen [[species, level], ...]
+      @trainer_types = {}  # type => {"base_money" => n} (money authority M0; optional)
+      @money_rules  = {}   # {"start_money" => n, "loss_multipliers" => [...], ...} (M0; optional)
       @loaded       = false
       load!(path, expected_version)
     end
@@ -61,6 +67,42 @@ module PEMK
     def trainer_party(type, name, version)
       @trainers[[type.to_s, name.to_s, version.to_i]]
     end
+
+    # --- money (money authority M0) ---------------------------------------------
+    # -> what a trainer type pays per level of its strongest Pokemon, or nil (an export
+    # from before M0, or a type it does not know).
+    def trainer_base_money(type)
+      money = (@trainer_types[type.to_s] || {})["base_money"]
+      money.is_a?(Integer) && money >= 0 ? money : nil
+    end
+
+    # -> a trainer's prize before the multipliers: its strongest Pokemon's level x its
+    # type's base money, as Battle#pbGainMoney pays it; nil when either is unknown.
+    def trainer_prize(type, name, version)
+      party = trainer_party(type, name, version)
+      base  = trainer_base_money(type)
+      return nil unless party && !party.empty? && base
+
+      party.map { |p| p[1] }.max * base
+    end
+
+    # -> whether any of the trainer's Pokemon knows one of +moves+, or nil when the export
+    # lists no moves for it. A foe's Happy Hour doubles the player's prize too.
+    def trainer_knows_any?(type, name, version, moves)
+      party = trainer_party(type, name, version)
+      return nil unless party && party.all? { |p| p[3].is_a?(Array) }
+
+      wanted = moves.map(&:to_s)
+      party.any? { |p| (p[3] & wanted).any? }
+    end
+
+    # The money a new game starts with (metadata), or nil.
+    def start_money
+      money = @money_rules["start_money"]
+      money.is_a?(Integer) && money >= 0 ? money : nil
+    end
+
+    def money_rules; @money_rules; end
 
     # --- moves / abilities / natures / items (D1 legality) ---------------------
     def move(id);         @moves[id];          end
@@ -124,8 +166,8 @@ module PEMK
       return "absent (Layer D no-op — run the in-game 'PEMK: Export Battle Data')" unless @loaded
 
       "#{@species.size} species/forms, #{@moves.size} moves, #{@items.size} items, " \
-        "#{@abilities.size} abilities, #{@natures.size} natures, #{@trainers.size} trainers " \
-        "(schema v#{SCHEMA_VERSION})"
+        "#{@abilities.size} abilities, #{@natures.size} natures, #{@trainers.size} trainers, " \
+        "#{@trainer_types.size} trainer types (schema v#{SCHEMA_VERSION})"
     end
 
     private
@@ -162,6 +204,8 @@ module PEMK
       @species      = freeze_hash(species)
       @trainers     = load_trainers(doc["trainers"])   # optional (a pre-D4 export has none)
       @item_rules   = freeze_hash(doc["item_rules"])   # optional (item authority E2)
+      @trainer_types = freeze_hash(doc["trainer_types"])   # optional (money authority M0)
+      @money_rules  = freeze_hash(doc["money_rules"])      # optional (money authority M0)
 
       @loaded = true
       @log.call("battle-data: loaded #{summary} from #{path}")
