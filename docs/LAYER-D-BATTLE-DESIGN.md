@@ -64,8 +64,13 @@
 > loss, scaled to the exported max level). Money `:econ` deltas then get a clean
 > ledger attribution (`battle:<n>` / `unattributed` — never a suspect label persisted),
 > and over-budget money or an impossible party level jump (checked via the newly
-> exported growth curves) is LOGGED. Detection-only (Rare Candies level mons outside
-> battle, so nothing rejects). `PEMK_BATTLE_ENFORCE_REWARDS` off/shadow/on, default
+> exported growth curves) is LOGGED. Detection-only, nothing rejects. Level items used
+> outside a battle (a Rare Candy pays for a level, an Exp. Candy for its EXP) are read
+> from the bag snapshots and credited first, so using them is not suspect; where the
+> items came from is the inventory audit's question. A catch keeps its mint stashed so
+> the battle's end report still opens the window for the catch's EXP, and the client
+> holds its flushes during a battle so the party projection follows that report.
+> `PEMK_BATTLE_ENFORCE_REWARDS` off/shadow/on, default
 > off; needs encounters=on for foe context. Adversarial review caught (and fixed
 > before commit) a persisted-false-accusation bug (a spend after a win labeled
 > suspect in the ledger), an inert-client bug (foes wiped before the report), and a

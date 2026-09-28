@@ -103,6 +103,9 @@ class FakeMap
   def valid?(x, y); x >= 0 && x < width && y >= 0 && y < height; end
   def wall?(x, y); !valid?(x, y) || MAP[y][x] == "#"; end
   def occupied?(x, y); @events.values.any? { |e| e.x == x && e.y == y }; end
+  # The bottom-right corner is tall grass.
+  Tag = Struct.new(:land_wild_encounters)
+  def terrain_tag(x, y); Tag.new(x >= 6 && y >= 4); end
 end
 
 class FakePlayer
@@ -386,6 +389,27 @@ check(results, "pick_answers_an_item_choice") do
   got = waiting.value
   queued == :HELIXFOSSIL && refused.is_a?(Hash) && refused["ok"] == false &&
     refused["allowed"] == %w[HELIXFOSSIL FOSSILIZEDBIRD] && got.nil?
+end
+
+check(results, "grass_lists_where_wild_battles_start") do
+  r = command("22 grass")
+  r && r["ok"] && r["tiles"].sort == [[6, 4], [6, 5], [7, 4], [7, 5]]
+end
+
+# A wild battle cuts a walk short: walk_to keeps off the grass when it can.
+check(results, "walk_to_keeps_off_the_grass_when_it_can") do
+  place(4, 5)
+  seen = []
+  $world_hook = -> { seen << [$game_player.x, $game_player.y] }
+  r = command("23 walk_to 7 3")
+  $world_hook = nil
+  r && r["ok"] && r["status"] == "arrived" && seen.none? { |x, y| x >= 6 && y >= 4 }
+end
+
+check(results, "walk_to_goes_through_grass_when_it_must") do
+  place(4, 5)
+  r = command("24 walk_to 7 5")   # both ways in are grass
+  r && r["ok"] && r["status"] == "arrived" && [$game_player.x, $game_player.y] == [7, 5]
 end
 
 check(results, "setters_refuse_before_a_game_is_loaded") do

@@ -9,19 +9,27 @@ require "pemk/position_audit"   # DB-free — no full pemk load / no Postgres
 class PositionAuditTest < Minitest::Test
   # Minimal world stub so this stays a pure unit (no filesystem / no WorldData).
   class FakeWorld
-    def initialize(walk: {}, warps: {}, spawns: [], conns: [], ledges: [], empty: false)
+    def initialize(walk: {}, warps: {}, spawns: [], conns: [], ledges: [], srcs: [], empty: false)
       @walk   = walk     # [map,x,y] => true/false  (absent key => nil = no grid)
       @warps  = warps    # [from,to,x,y] => true
       @spawns = spawns   # [[map,x,y], ...]
       @conns  = conns    # [[a,b], ...]
       @ledges = ledges   # [[map,x,y], ...]
+      @srcs   = srcs     # [[map,x,y], ...] warp event tiles (doors, stairs)
       @empty  = empty
     end
 
     def empty?;                @empty;                      end
     def walkable?(m, x, y);    @walk.fetch([m, x, y], nil); end
-    def warp_dest?(f, t, x, y); @warps[[f, t, x, y]] ? true : false; end
-    def spawn_tile?(m, x, y);  @spawns.include?([m, x, y]); end
+    def warp_src?(m, x, y);    @srcs.include?([m, x, y]);   end
+
+    def warp_dest?(f, t, x, y, reach: 0)
+      @warps.keys.any? { |ff, tt, dx, dy| ff == f && tt == t && (dx - x).abs <= reach && (dy - y).abs <= reach }
+    end
+
+    def spawn_tile?(m, x, y, reach: 0)
+      @spawns.any? { |sm, sx, sy| sm == m && (sx - x).abs <= reach && (sy - y).abs <= reach }
+    end
     def connected?(a, b);      @conns.any? { |c| (c[0] == a && c[1] == b) || (c[0] == b && c[1] == a) }; end
     def ledge?(m, x, y);       @ledges.include?([m, x, y]); end
   end
@@ -232,6 +240,58 @@ class PositionAuditTest < Minitest::Test
     w = FakeWorld.new(walk: { [5, 20, 20] => false }, warps: { [5, 5, 20, 20] => true })
     assert_equal :match, pa_mode(w, :on).check(1, env(map: 5, x: 20, y: 20), { last_pos: [5, 3, 3] })
     assert_empty @logs
+  end
+
+  # --- honest moves enforcement once snapped back (autotest 040_honest_walk) ---
+
+  def test_stepping_onto_stairs_over_a_wall_is_not_noclip
+    # The house stairs: an event on a tile the export marks as a wall.
+    w = FakeWorld.new(walk: { [3, 28, 2] => false }, srcs: [[3, 28, 2]])
+    cd = { last_pos: [3, 29, 2] }
+    assert_equal :match, pa_mode(w, :on).check(1, env(map: 3, x: 28, y: 2), cd)
+    assert_nil cd[:correct_to]
+    assert_empty @logs
+  end
+
+  def test_a_jump_onto_a_warp_tile_is_still_a_teleport
+    w = FakeWorld.new(walk: { [3, 28, 2] => false }, srcs: [[3, 28, 2]])
+    assert_equal :teleport, pa(w).check(1, env(map: 3, x: 28, y: 2), { last_pos: [3, 20, 2] })
+  end
+
+  def test_a_wall_that_holds_no_warp_is_still_noclip
+    w = FakeWorld.new(walk: { [3, 27, 2] => false }, srcs: [[3, 28, 2]])
+    assert_equal :noclip, pa(w).check(1, env(map: 3, x: 27, y: 2), { last_pos: [3, 26, 2] })
+  end
+
+  def test_arriving_a_step_past_the_warp_landing_is_legal
+    # Into the Pokemon Lab: the door lands on (6,12), the first frame says (6,11).
+    w = FakeWorld.new(warps: { [2, 4, 6, 12] => true })
+    cd = { last_pos: [2, 18, 13] }
+    assert_equal :match, pa_mode(w, :on).check(1, env(map: 4, x: 6, y: 11), cd)
+    assert_nil cd[:correct_to]
+    assert_empty @logs
+  end
+
+  def test_arriving_two_steps_past_the_landing_is_still_illegal
+    w = FakeWorld.new(warps: { [2, 4, 6, 12] => true })
+    assert_equal :illegal_warp, pa(w).check(1, env(map: 4, x: 6, y: 10), { last_pos: [2, 18, 13] })
+  end
+
+  def test_a_step_past_a_respawn_tile_is_legal
+    w = FakeWorld.new(spawns: [[9, 1, 1]])
+    assert_equal :match, pa(w).check(1, env(map: 9, x: 2, y: 1), { last_pos: [5, 3, 3] })
+  end
+
+  def test_a_step_past_a_same_map_warp_landing_is_not_a_teleport
+    # Down the house stairs to (9,2), and already a step on.
+    w = FakeWorld.new(warps: { [3, 3, 9, 2] => true })
+    assert_equal :match, pa(w).check(1, env(map: 3, x: 9, y: 3), { last_pos: [3, 28, 2] })
+    assert_empty @logs
+  end
+
+  def test_a_wall_next_to_a_warp_landing_is_still_noclip
+    w = FakeWorld.new(walk: { [3, 10, 2] => false }, warps: { [3, 3, 9, 2] => true })
+    assert_equal :noclip, pa(w).check(1, env(map: 3, x: 10, y: 2), { last_pos: [3, 11, 2] })
   end
 
   def test_empty_world_is_unchecked

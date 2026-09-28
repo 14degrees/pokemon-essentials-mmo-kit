@@ -11,12 +11,14 @@
 #   talk_to EVENT     walks next to the event (or across a counter from it), faces it
 #                     and taps USE; answers with the message that opened, if any
 #   events            the current map's events: id, name, position, trigger
+#   grass             the tiles where a step can start a wild battle
 #   warp MAP X Y      the debug menu's warp
 # Debug setters, for arranging a test quickly. They go through the engine's normal
 # setters, so the PEMK sync and interception see them like any other change:
 #   set_switch ID on|off   set_var ID VALUE   set_selfswitch MAP EVENT LETTER on|off
 #   add_item ITEM [QTY]    add_pokemon SPECIES LEVEL    heal    money AMOUNT
-# Readers: get_switch ID, get_var ID, get_selfswitch MAP EVENT LETTER. And save.
+# Readers: get_switch ID, get_var ID, get_selfswitch MAP EVENT LETTER, get_item ITEM
+# (how many the bag holds). And save.
 #===============================================================================
 module PEMK
   module Autopilot
@@ -34,7 +36,13 @@ module PEMK
       end
 
       # Breadth-first over the map with Game_Player#passable?. -> [dir, ...] or nil.
+      # Keeps off the grass when it can, as a player would: a wild battle cuts a walk
+      # short. Through it only when there is no other way (or the grass is the goal).
       def path_to(tx, ty)
+        search(tx, ty, avoid_grass: true) || search(tx, ty, avoid_grass: false)
+      end
+
+      def search(tx, ty, avoid_grass:)
         start = [$game_player.x, $game_player.y]
         return [] if start == [tx, ty]
 
@@ -46,6 +54,7 @@ module PEMK
             nxt = [x + dx, y + dy]
             next if prev.key?(nxt) || !$game_map.valid?(*nxt)
             next unless $game_player.passable?(x, y, d)
+            next if avoid_grass && nxt != [tx, ty] && grass?(*nxt)
 
             prev[nxt] = [x, y, d]
             return unwind(prev, nxt) if nxt == [tx, ty]
@@ -55,6 +64,11 @@ module PEMK
           end
         end
         nil
+      end
+
+      def grass?(x, y)
+        tag = ($game_map.terrain_tag(x, y) rescue nil)
+        tag ? tag.land_wild_encounters : false
       end
 
       def unwind(prev, tile)
@@ -285,6 +299,21 @@ module PEMK
         Autopilot.respond(id, "ok" => true, "map" => $game_map.map_id, "events" => list)
       end
 
+      # grass - the tiles of this map where a step can start a wild battle (tall
+      # grass and the like, by terrain tag), so a test knows where to walk.
+      def cmd_grass(id)
+        return Autopilot.respond(id, "ok" => false, "error" => "not on a map") unless on_map?
+
+        tiles = []
+        $game_map.width.times do |x|
+          $game_map.height.times do |y|
+            tag = ($game_map.terrain_tag(x, y) rescue nil)
+            tiles << [x, y] if tag && tag.land_wild_encounters
+          end
+        end
+        Autopilot.respond(id, "ok" => true, "map" => $game_map.map_id, "tiles" => tiles.first(500))
+      end
+
       # event_pages EVENT - an event's pages as the editor stores them: the conditions
       # that pick the live page and the command list (code, indent, parameters), so
       # the agent can read what an NPC waits for instead of guessing.
@@ -376,6 +405,9 @@ module PEMK
           when "get_selfswitch"
             key = [a[0].to_i, a[1].to_i, a[2].to_s.upcase]
             { "self_switch" => key.join(":"), "value" => $game_self_switches[key] ? true : false }
+          when "get_item"
+            item = a[0].to_s.upcase.to_sym
+            { "item" => item.to_s, "quantity" => ($bag ? $bag.quantity(item) : 0) }
           end
         Autopilot.respond(id, { "ok" => true }.merge(result))
       end
@@ -386,10 +418,11 @@ module PEMK
       Autopilot.verb("talk_to")  { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("enter")    { |id, rest| cmd_talk_to(id, rest) }
       Autopilot.verb("events")   { |id, _| cmd_events(id) }
+      Autopilot.verb("grass")    { |id, _| cmd_grass(id) }
       Autopilot.verb("event_pages") { |id, rest| cmd_event_pages(id, rest) }
       Autopilot.verb("warp")     { |id, rest| cmd_warp(id, rest) }
       %w[set_switch set_var set_selfswitch add_item add_pokemon heal money
-         get_switch get_var get_selfswitch].each do |name|
+         get_switch get_var get_selfswitch get_item].each do |name|
         Autopilot.verb(name) do |id, rest|
           next Autopilot.respond(id, "ok" => false, "error" => "no game loaded yet") unless $player
 

@@ -85,13 +85,21 @@ module PEMK
     end
 
     # --- warps (Layer B/C transfer legality) -----------------------------------
-    # Does a warp on +from_map+ land exactly on (+to_map+, x, y)? Used to decide a
-    # cross-map move is a legal known teleport.
-    def warp_dest?(from_map, to_map, x, y)
+    # Does a warp on +from_map+ land on (+to_map+, x, y), or within +reach+ tiles of
+    # it? Used to decide a cross-map move is a legal known teleport.
+    def warp_dest?(from_map, to_map, x, y, reach: 0)
       list = @warps_by_map[from_map]
       return false unless list
 
-      list.any? { |w| w["dest_map"] == to_map && w["dest_x"] == x && w["dest_y"] == y }
+      list.any? do |w|
+        w["dest_map"] == to_map && (w["dest_x"] - x).abs <= reach && (w["dest_y"] - y).abs <= reach
+      end
+    end
+
+    # Is (x, y) the tile of a warp event on +map+ (a door, stairs)? The player steps
+    # onto it to trigger the warp, even where the tile under the event is a wall.
+    def warp_src?(map_id, x, y)
+      (@warps_by_map[map_id] || []).any? { |w| w["src_x"] == x && w["src_y"] == y }
     end
 
     def warps_on(map_id)
@@ -147,12 +155,11 @@ module PEMK
 
     # A tile the player can legally be teleported TO without a warp event: the
     # new-game start, the global home (whiteout fallback), or any map's heal
-    # destination (Pokémon Center / Fly-heal return). Layer B transfer whitelist.
-    def spawn_tile?(map, x, y)
-      return true if @start && @start[0] == map && @start[1] == x && @start[2] == y
-      return true if @home  && @home[0]  == map && @home[1]  == x && @home[2]  == y
-
-      @heal.each_value.any? { |d| d[0] == map && d[1] == x && d[2] == y }
+    # destination (Pokémon Center / Fly-heal return), or within +reach+ tiles of one.
+    # Layer B transfer whitelist.
+    def spawn_tile?(map, x, y, reach: 0)
+      near = ->(d) { d && d[0] == map && (d[1] - x).abs <= reach && (d[2] - y).abs <= reach }
+      near.call(@start) || near.call(@home) || @heal.each_value.any? { |d| near.call(d) }
     end
 
     # Coarse: are these two maps joined by ANY edge connection? Used to accept an

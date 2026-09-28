@@ -26,6 +26,10 @@ module PEMK
   class PositionAudit
     SWIM_MODES  = %i[surf dive].freeze          # water flattens to blocked -> suppress no-clip
     ENFORCEABLE = %i[noclip illegal_warp].freeze # verdicts eligible for correction
+    # The first frame after a warp can come a step past the arrival tile: a player
+    # holding the arrow through a door, or a move route the arrival event starts (the
+    # Pokemon Lab's). Only the arrival gets this slack; a wall next to it is still a wall.
+    ARRIVAL_REACH = 1
 
     def initialize(world, logger: nil, mode: :off)
       @world = world
@@ -92,13 +96,17 @@ module PEMK
         # whitelist BEFORE noclip, mirroring the cross-map legal_transfer? ordering.
         return :match if @world.warp_dest?(map, map, x, y) || @world.spawn_tile?(map, x, y)
 
-        return :noclip if noclip?(map, x, y, env)
+        # A door or stairs event sits on a tile the export marks as a wall: stepping
+        # onto it is how its warp is taken. (A jump onto it is still a teleport.)
+        return :noclip if noclip?(map, x, y, env) && !@world.warp_src?(map, x, y)
 
         # Chebyshev distance: an orthogonal OR diagonal single step is legal; a jump
         # of 2+ tiles between consecutive per-step frames is a teleport/speedhack —
-        # UNLESS it is a LEDGE hop (a straight 2-tile jump over a ledge tile).
+        # UNLESS it is a LEDGE hop (a straight 2-tile jump over a ledge tile), or the
+        # step after landing from a same-map warp (stairs) or a respawn.
         if [(x - px).abs, (y - py).abs].max > 1
           return :match if ledge_hop?(map, px, py, x, y)
+          return :match if arrival?(map, map, x, y)
 
           return :teleport
         end
@@ -127,9 +135,15 @@ module PEMK
     end
 
     def legal_transfer?(pmap, map, x, y)
-      @world.warp_dest?(pmap, map, x, y) ||   # a known warp on the old map lands here
-        @world.spawn_tile?(map, x, y) ||      # start / home / heal (whiteout, Fly-return)
+      arrival?(pmap, map, x, y) ||            # a known warp from the old map, or a respawn
         @world.connected?(pmap, map)          # coarse edge-connection between the two maps
+    end
+
+    # On (or a step past) a tile a warp on +pmap+ lands on, or a start / home / heal
+    # tile (whiteout, Fly-return).
+    def arrival?(pmap, map, x, y)
+      @world.warp_dest?(pmap, map, x, y, reach: ARRIVAL_REACH) ||
+        @world.spawn_tile?(map, x, y, reach: ARRIVAL_REACH)
     end
 
     def log_violation(account_id, env, map, x, y, prev, verdict)
