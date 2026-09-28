@@ -34,7 +34,7 @@ is Milestone 4.
 | **Login / identity** | server | ✅ yes | can't — bcrypt + opaque session token, no client-claimed id |
 | **Money / coins / BP / soot** | client → **server ledger** | ⚠️ capped + audited, not authored | the VALUE is client-pushed; the ledger caps it, makes it append-only and idempotent, and M4-D4 bounds battle gains — but an in-cap lie is persisted |
 | **Badges** | client → **server ledger** | ⚠️ capped, not authored | the client computes the bitmask and pushes it on the `:econ` channel; the server enforces the cap, not the earning |
-| **Bag, PC item storage, held items** | client → **server record** | ⚠️ recorded and restored together (item authority E0); caps flagged, acquisitions not judged yet | a crash can no longer duplicate an item moved between them; what enters the possession is still the client's (see [`ITEM-AUTHORITY-DESIGN.md`](ITEM-AUTHORITY-DESIGN.md)) |
+| **Bag, PC item storage, held items** | client → **server record** | ⚠️ recorded and restored together (item authority E0); every increase judged against server-known sources (E2, `PEMK_ITEM_AUTHORITY=shadow`), not refused yet | a crash can no longer duplicate an item moved between them; an item from nowhere is logged `UNEXPLAINED` and reported, but still kept (see [`ITEM-AUTHORITY-DESIGN.md`](ITEM-AUTHORITY-DESIGN.md)) |
 | **Pokémon identity & ownership** | server (UIDs) | ✅ yes | can't dupe — UID registry + ownership |
 | **Trades** | server | ✅ yes | can't dupe/steal — atomic CAS swap, rollback; a Pokémon the receiver never saved (a crash, a lost result) is sent again |
 | **Where a Pokémon came from (pickup, gift, catch)** | **client** | ❌ no | can fabricate acquiring one (within UID rules) |
@@ -417,9 +417,38 @@ money off itself, and a sale turned any item in the bag - made up or not - into 
   ledger (`shop:buy:ITEMxN`); the client adopts the balance it answers with. Nothing is
   bought or sold without an answer.
 
-Items bought are not yet judged against the bag: that is the ledger step of the item
-authority design ([`ITEM-AUTHORITY-DESIGN.md`](ITEM-AUTHORITY-DESIGN.md)). The Battle
-Point shop is not gated yet.
+A purchase the server made or approved also explains its items (and the Premier Balls the
+engine adds) to the item ledger below. The Battle Point shop is not gated yet.
+
+### Where an item came from (`PEMK_ITEM_AUTHORITY`)
+
+Off by default. The possession is every place an item can be - the bag, the PC storage,
+the mailbox, the items Pokemon hold - recorded together (E0), so moving an item between
+them is never an increase. A decrease (an item used, sold, tossed, handed to an NPC) is
+always accepted. An increase must take a **credit** that a source the server knows left:
+
+- a pickup it granted (`PEMK_PICKUP_ENFORCE`), or one reported with the gate off - the
+  quantity from the world export;
+- a gift from an event the export reads literally: a one-shot one once, when the gate
+  pays it; another while the claims ledger sees no re-farm. A computed call names its own
+  item, so it explains nothing;
+- a Mart purchase the server made or approved, with its Premier Balls;
+- a traded Pokemon's held item, as the sender's record knew it: bound to that Pokemon's
+  arrival (once per delivery) when it can be delivered again, otherwise a credit;
+- the PC storage's start items, once per account.
+
+What no credit covers is owed for two minutes (a pickup is reported after its message
+closes, when the bag has already gone out); a source heard in that time pays it. Then it
+is logged `UNEXPLAINED +n ITEM` and counted for the review queue (D5 `item_unexplained`).
+A fresh login drops the credits still waiting: the record it loads never held their items.
+
+- **`shadow`** — judges and reports; the record adopts every snapshot.
+- **`on`** — enforcement (step E4) is not built yet: `on` runs as `shadow`.
+
+Sources the server does not model yet leave their items unexplained: berries, battle
+held items (Pickup, Thief, a caught Pokemon's item), the prize desk, vending machines,
+Mystery Gift, and anything added with the gates off. Read `UNEXPLAINED` lines with that
+list in mind until the tiers (E2b) sort those items out.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 

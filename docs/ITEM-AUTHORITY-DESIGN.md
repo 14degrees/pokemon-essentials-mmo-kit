@@ -152,10 +152,20 @@ Each step ships alone, with unit tests and an autotest scenario.
 - **E1 - the item catalogue and the tiers in the exports.** Buy, sell and BP prices, key and
   consumable flags, mart stocks per event (the union of their badge branches), vending events,
   item-ball quantities, and each item's tier. **Prices, flags, shop stocks (with the prices an
-  event sets) and item-ball quantities done 2026-09-28**; vending and the tiers come with E2.
+  event sets) and item-ball quantities done 2026-09-28**, then the engine's item rules (the
+  PC's start items, the Premier Ball bonus); vending and the tiers come with E2b.
 - **E2 - the ledger in shadow** (`PEMK_ITEM_AUTHORITY=shadow`). Possession, credits from the
   sources above that are already server-known, `UNEXPLAINED` logs and the `item_unexplained`
-  D5 kind. Every autotest scenario runs with it and must log nothing.
+  D5 kind. Every autotest scenario runs with it and must log nothing. **E2a done
+  2026-09-28**: credits from granted or reported pickups (the export's quantity), literal
+  gifts (a one-shot once, a request sent again is the same payout; a computed call never),
+  Mart purchases with their Premier Balls, and the PC's start items once per account. A
+  traded Pokemon's item counts only as the sender's record knew it, bound to that
+  Pokemon's arrival when it has a delivery (once per delivery, re-armed by a fresh login),
+  otherwise a credit. An increase no credit covers is a debt for two minutes (a pickup is
+  reported after its message closes, when the bag already went out), then `UNEXPLAINED`:
+  one line per account and item and one review count per account each sweep. Autotest 072
+  buys and picks up honestly and adds a Master Ball from nowhere. The tiers are E2b.
 - **E3 - shops as server transactions** (`PEMK_SHOP_ENFORCE`). The client asks to buy or sell;
   the server checks the stock, the price and the balance, moves the money and the credit in
   one transaction, and answers. A sale needs the item in the possession, so a made-up item can

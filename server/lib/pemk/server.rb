@@ -91,6 +91,9 @@ module PEMK
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
+      @item_ledger = ItemLedger.new(@db) if @config.item_authority != :off   # item authority E2
+      @last_item_sweep = nil
+      @item_sweeping   = false
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -163,6 +166,13 @@ module PEMK
       @log.call("server: gift enforcement = #{@config.gift_enforce} (one-shot gifts paid once when on)")
       @log.call("server: peer body check = #{@config.peer_check} (relayed Pokemon may name #{@config.peer_classes.join(', ')})")
       @log.call("server: shop enforcement = #{@config.shop_enforce} (Mart purchases and sales made server-side when on)")
+      @log.call("server: item authority = #{@config.item_authority} (item increases judged against server-known sources; logs only)")
+      if @config.item_authority == :on
+        @log.call("server: WARNING item authority 'on' (enforcement, E4) is not built yet - it runs as shadow")
+      end
+      if @item_ledger && !(@world.loaded? && @battle.loaded?)
+        @log.call("server: WARNING item authority is on but the world or battle export is missing - no pickup, gift or shop can explain an item")
+      end
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
@@ -486,12 +496,88 @@ module PEMK
       @mailbox.submit(account_id) do
         status = nil
         @db.transaction do
+          prev = @item_ledger && @db[:inventory_snapshots].where(account_id: account_id).first
           status = @inventory.apply_inv(account_id, bag, seq, stores: stores)
           # Step 6: a snapshot the record adopted holds every payout the client applied
           # before it. One transaction, so a crash cannot keep the bag and lose the seal.
           @gift_grants.seal(account_id, gift_conn) if gift_conn && status[0] == :ack
+          judge_items(account_id, prev, bag, stores, status[1]) if @item_ledger && status[0] == :ack
         end
         @reactor.post { reply(conn, type: :inv_ack, seq: seq, flagged: status[1].any?) }
+      end
+    end
+
+    # Item authority E2: the possession this snapshot shows against the one before it,
+    # over the same stores - all of them when both carry them, else the bag alone - so a
+    # move between stores is never an increase. The first snapshot is the baseline. A
+    # savepoint: a failed judgment never costs the snapshot.
+    def judge_items(account_id, prev, bag, stores, flags)
+      @db.transaction(savepoint: true) do
+        clean = stores && !flags.include?("bad_stores")
+        if prev.nil?
+          # A PC storage already there came with its start items long ago.
+          @db[:inventory_snapshots].where(account_id: account_id).update(pc_started: true) if clean && stores[:pc].is_a?(Hash)
+          next
+        end
+
+        whole  = clean && !prev[:stores_seq].nil?
+        before = Inventory.totals(prev[:bag].to_h, whole ? { pc: prev[:pc]&.to_h, mail: prev[:mailbox].to_h, held: prev[:held].to_h } : nil)
+        after  = Inventory.totals(bag, whole ? stores : nil)
+        allow  = whole ? arrivals(account_id, prev[:holders].to_h, stores[:holders]) : Hash.new(0)
+        if clean && stores[:pc].is_a?(Hash) && !prev[:pc_started]
+          # The PC item storage appeared: the engine put its start items in, once.
+          pc_start_items.each { |i, n| allow[i] += n } if whole && prev[:pc].nil?
+          @db[:inventory_snapshots].where(account_id: account_id).update(pc_started: true)
+        end
+        @item_ledger.judge(account_id, before.transform_keys(&:to_s), after.transform_keys(&:to_s), allow: allow)
+      end
+    rescue StandardError => e
+      @log.call("inv: item judgment failed #{e.class}: #{e.message}")
+    end
+
+    # The Pokemon that joined the possession holding an item: one the server delivered in
+    # a trade explains its own item, once per delivery. -> { "ITEM" => n }
+    def arrivals(account_id, before, holders)
+      allow = Hash.new(0)
+      return allow unless @trade_deliveries && holders.is_a?(Hash)
+
+      holders.each do |uid, item|
+        next if item.nil? || before.key?(uid.to_s)
+
+        allow[item.to_s] += 1 if @trade_deliveries.explain(account_id, uid, item)
+      end
+      allow
+    end
+
+    def pc_start_items
+      Array(@battle.item_rules["start_item_storage"]).each_with_object(Hash.new(0)) { |i, h| h[i.to_s] += 1 }
+    end
+
+    # A credit from a source the server decided or checked. Its own savepoint: a failed
+    # credit costs a later UNEXPLAINED line, never the source's own work.
+    def credit_item(account_id, item, qty, source, ref)
+      return unless @item_ledger && item
+
+      @db.transaction(savepoint: true) { @item_ledger.credit(account_id, item.to_s, qty, source: source, ref: ref) }
+    rescue StandardError => e
+      @log.call("inv: credit failed #{e.class}: #{e.message}")
+    end
+
+    # The quantity an item ball gives, as the world export read it from its event.
+    def pickup_qty(obj)
+      q = obj && obj["quantity"]
+      q.is_a?(Integer) && q.positive? ? q : 1
+    end
+
+    # The Premier Balls a Mart adds to a purchase of +qty+ +item+ (the engine's rule, as
+    # the battle export states it; the larger reading when the export predates it).
+    def premier_bonus(item, qty)
+      return 0 unless qty >= 10 && @battle.item_known?("PREMIERBALL")
+
+      if @battle.item_rules.fetch("more_bonus_premier_balls", true)
+        @battle.item(item)&.fetch("is_ball", false) ? qty / 10 : 0
+      else
+        item == "POKEBALL" ? 1 : 0
       end
     end
 
@@ -688,9 +774,14 @@ module PEMK
       return unless map.is_a?(Integer) && x.is_a?(Integer) && y.is_a?(Integer)
 
       item = env[:item]
+      obj  = @world.object_at(map, x, y)
       @mailbox.submit(account_id) do
         if @pickups.record(account_id, map, x, y) == :dup
           @log.call("audit: account #{account_id} already_taken item=#{item.to_s[0, 32]} at (#{map},#{x},#{y})")
+        else
+          # E2: the ball's first taking explains its item (reported after the fact, so
+          # its bag snapshot may have come first: the ledger's grace covers that).
+          credit_item(account_id, (obj && obj["item"]) || item, pickup_qty(obj), "pickup", "#{map}:#{x}:#{y}")
         end
       end
     end
@@ -720,6 +811,7 @@ module PEMK
       item = (obj && obj["item"]) || env[:item]   # server-authoritative item id
       @mailbox.submit(account_id) do
         status = @pickups.record(account_id, map, x, y)
+        credit_item(account_id, item, pickup_qty(obj), "pickup", "#{map}:#{x}:#{y}") if status == :new   # E2
         @reactor.post do
           next unless @reactor.alive?(conn)
 
@@ -935,10 +1027,24 @@ module PEMK
 
       map = env[:map]; event = env[:event]; item = env[:item].to_s; qty = env[:quantity]
       repeatable = repeatable_gift?(map, event)
+      # E2: an event the export reads literally explains its item the first time, and
+      # again while the claims ledger sees no re-farm, for one not known to pay once.
+      obj  = @item_ledger && literal_gift(map, event, item, qty)
+      once = obj && obj["once"] == true && !repeatable
       @mailbox.submit(account_id) do
         verdict = @gift_claims.claim(account_id, map, event, item, qty, repeatable: repeatable)
         flag_anomaly(account_id, :gift_refarm) if verdict == :suspect
+        credit_item(account_id, item, qty, "gift", "#{map}:#{event}") if obj && (verdict == :first || (verdict == :repeat && !once))
       end
+    end
+
+    # -> the export's entry for the event at +map+/+event+ when it gives +item+ x +qty+
+    # from a literal call (never a computed one, whose item the client chose), else nil.
+    def literal_gift(map, event, item, qty)
+      return nil unless map.is_a?(Integer) && event.is_a?(Integer) && qty.is_a?(Integer) && qty.positive?
+
+      obj = @world.gift_object(map, event)
+      obj && obj["dynamic"] == false && gift_item_ok?(obj, item.to_s, qty) ? obj : nil
     end
 
     # An event the world export says pays out again by design: one with a manifest
@@ -975,17 +1081,23 @@ module PEMK
       end
 
       unless obj && obj["once"] == true && !repeatable_gift?(map, event)
-        handle_gift_claim(env, account_id)   # not a one-shot: granted, and judged after the fact
+        # Not a one-shot: granted, and judged after the fact - which also decides whether
+        # it explains its item (E2), ahead of the bag snapshot the grant leads to.
+        handle_gift_claim(env, account_id)
         return reply(conn, type: :gift_grant, seq: seq)
       end
 
       token = gift_conn(conn)
+      literal = obj["dynamic"] == false   # the item was checked against the event's own list above
       @mailbox.submit(account_id) do
         verdict, reason, denied = @gift_grants.request(account_id, map, event, item, qty, nonce, conn: token)
         if verdict == :deny
           @log.call("gift: account #{account_id} #{gift_verdict_word} — map #{map} event #{event} " \
                     "#{item} already paid (#{denied} refusal#{denied == 1 ? '' : 's'})")
           flag_anomaly(account_id, :gift_refarm) if denied == GiftGrants::DENY_FLAG
+        elsif literal && reason.nil?
+          # E2: paid once, explained once (a request sent again is the same payout).
+          credit_item(account_id, item, qty, "gift", "#{map}:#{event}")
         end
         out = verdict == :deny && @config.gift_enforce == :on ? { type: :gift_deny, reason: reason } : { type: :gift_grant }
         @reactor.post { reply(conn, seq: seq, **out) if @reactor.alive?(conn) }
@@ -1012,13 +1124,22 @@ module PEMK
       @mailbox.submit(account_id) do
         balance = nil
         why ||= "not_held" if op == :sell && !@inventory.holds?(account_id, item, qty)
-        if why.nil? && on
-          delta = op == :buy ? -(unit * qty) : unit * qty
-          st, value, = @ledger.adjust(account_id, :money, delta, reason: "shop:#{op}:#{item}x#{qty}")
-          if st == :ack
-            balance = value
-          else
-            why = "money"
+        @db.transaction do
+          if why.nil? && on
+            delta = op == :buy ? -(unit * qty) : unit * qty
+            st, value, = @ledger.adjust(account_id, :money, delta, reason: "shop:#{op}:#{item}x#{qty}")
+            if st == :ack
+              balance = value
+            else
+              why = "money"
+            end
+          end
+          # E2: what the clerk sold - and the Premier Balls the engine adds - is explained.
+          if why.nil? && op == :buy
+            ref = "#{env[:map]}:#{env[:event]}"
+            credit_item(account_id, item, qty, "shop", ref)
+            bonus = premier_bonus(item, qty)
+            credit_item(account_id, "PREMIERBALL", bonus, "shop", ref) if bonus.positive?
           end
         end
         if why
@@ -1242,7 +1363,13 @@ module PEMK
             [:abort, :item]
           else
             @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives) do
+              # E2: a traded Pokemon's held item is explained on the other side as the
+              # sender's record knew it - by its delivery when there is one (bound to that
+              # Pokemon), else by a credit. Read before the senders' records lose it.
+              deliveries.each { |d| d[:item] = confirmed_item(d[:account_id] == a ? b : a, d[:uid], d[:item]) }
               @trade_deliveries.store(deliveries) unless deliveries.empty?
+              credit_traded(b, a, a_gives, trade_id) if deliveries.none? { |d| d[:account_id] == b }
+              credit_traded(a, b, b_gives, trade_id) if deliveries.none? { |d| d[:account_id] == a }
               # The given Pokemon take their held items out of the senders' records.
               a_gives.each { |u| @inventory.drop_holder(a, u) }
               b_gives.each { |u| @inventory.drop_holder(b, u) }
@@ -1318,6 +1445,24 @@ module PEMK
       end
     end
 
+    # The item the lock said +uid+ holds, when the sender's record agrees; else nil.
+    def confirmed_item(sender, uid, said)
+      known = @inventory.holder_item(sender, uid)
+      said && known != :unknown && known.to_s == said ? said : nil
+    end
+
+    # E2: the items the Pokemon +uids+ bring +receiver+, as the sender's record knows them
+    # (an escrow that said otherwise aborted the trade). One the record does not know
+    # explains nothing: a sender's word alone never credits another account.
+    def credit_traded(receiver, sender, uids, trade_id)
+      return unless @item_ledger
+
+      uids.each do |u|
+        item = @inventory.holder_item(sender, u)
+        credit_item(receiver, item, 1, "trade", trade_id) if item && item != :unknown
+      end
+    end
+
     # -> the account whose escrow said its Pokemon held something else than its record
     # says, or nil. Only judged when the escrow said it and the record knows the Pokemon.
     def held_item_mismatch(said, gives)
@@ -1348,6 +1493,46 @@ module PEMK
       sweep_trades
       maybe_anomaly_sweep
       maybe_resim_sweep
+      maybe_item_sweep
+    end
+
+    # E2: an increase still owing a source after its grace is unexplained. Same
+    # non-overlapping worker dispatch as the anomaly sweep.
+    ITEM_SWEEP_SEC = 10
+
+    def maybe_item_sweep
+      return unless @item_ledger
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @item_sweeping
+      return if @last_item_sweep && (now - @last_item_sweep) < ITEM_SWEEP_SEC
+
+      @last_item_sweep = now
+      @item_sweeping   = true
+      @pool.submit do
+        begin
+          settle_items
+        ensure
+          @reactor.post { @item_sweeping = false }
+        end
+      end
+    end
+
+    # One line per account and item, and one review count per account, each sweep: a
+    # source the server does not model yet (a berry tree picked twenty times) is one
+    # finding, not twenty.
+    def settle_items
+      found = @item_ledger.settle.group_by { |u| u[:account_id] }
+      found.each do |account_id, list|
+        list.group_by { |u| u[:item] }.each do |item, us|
+          since = us.map { |u| u[:since] }.min
+          @log.call("inv: account #{account_id} UNEXPLAINED +#{us.sum { |u| u[:qty] }} #{item} " \
+                    "(seen from #{since.strftime('%H:%M:%S')}, no source within #{ItemLedger::GRACE}s)")
+        end
+        flag_anomaly(account_id, :item_unexplained)
+      end
+    rescue StandardError => e
+      @log.call("inv: item sweep failed #{e.class}: #{e.message}")
     end
 
     # D8: same non-overlapping worker-dispatch shape as the anomaly sweep. Consumes
@@ -1430,6 +1615,7 @@ module PEMK
       # Step 6: the bag a fresh login loads holds no payout that was never sealed.
       @gift_grants&.void_unsealed(account_id) if fresh
       @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
+      @item_ledger&.drop_credits(account_id) if fresh # E2: nor any item a waiting credit was for
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       stores = @config.item_record == :full ? inv[:stores] : nil

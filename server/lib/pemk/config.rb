@@ -14,7 +14,7 @@ module PEMK
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
-                :shop_enforce
+                :shop_enforce, :item_authority
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -178,6 +178,15 @@ module PEMK
       # the money itself.
       smode = env.fetch("PEMK_SHOP_ENFORCE", "off").to_s.strip.downcase
       @shop_enforce = %w[off shadow on].include?(smode) ? smode.to_sym : :off
+
+      # Item authority E2: an increase of an item the player possesses (bag, PC, mailbox,
+      # held items together) takes a credit a source the server knows left: a pickup it
+      # granted, a gift it paid, a purchase it made, a traded Pokemon's item. off =
+      # nothing; shadow = an increase no credit covers is logged UNEXPLAINED and filed for
+      # review, and the record adopts it. on is enforcement (E4); until it exists, on
+      # runs as shadow.
+      imode = env.fetch("PEMK_ITEM_AUTHORITY", "off").to_s.strip.downcase
+      @item_authority = %w[off shadow on].include?(imode) ? imode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

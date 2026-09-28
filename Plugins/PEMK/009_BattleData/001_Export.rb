@@ -140,6 +140,17 @@ module PEMK
       }
     end
 
+    # Item authority: the engine rules that hand out items, so the server can tell them
+    # from items that came from nowhere - the PC item storage's start items, and the
+    # Premier Balls a Mart adds to a large ball purchase.
+    def item_rules
+      meta = (GameData::Metadata.get rescue nil)
+      {
+        "start_item_storage"       => (meta ? Array(meta.start_item_storage).map(&:to_s) : []),
+        "more_bonus_premier_balls" => !!Settings::MORE_BONUS_PREMIER_BALLS
+      }
+    end
+
     # Every trainer's party (species and level), so the server can bound the EXP a
     # trainer battle gives (D4). A list, not a map: a name can hold any character.
     def trainers_list
@@ -171,6 +182,7 @@ module PEMK
         :types          => type_matrix,
         :abilities      => abilities_list,
         :items          => items,
+        :item_rules     => item_rules,
         :moves          => moves,
         :species        => species,
         :trainers       => trainers_list
