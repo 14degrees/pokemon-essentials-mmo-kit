@@ -202,6 +202,12 @@ Each step ships alone, with unit tests and an autotest scenario.
   BP, advertised as its own gate): the server's own ledger rows take negative seqs, so the
   client's next money or BP frame is never taken for a replay. Autotest 071 buys a Poke
   Ball in the Cedolan department store, 073 a Protein for 1 BP in the Battle Frontier Mart.
+  Event prices (2026-09-28): the world export follows each clerk's event the way the
+  interpreter runs it and lists every price its Mart calls may use, so a price set on one
+  branch (the Lerucean stall's Saturday sale) and the catalogue's both pass, a Key Item the
+  event always prices never passes at its catalogue $0, and a sale is paid the clerk's own
+  buy-back price (setPrice's rule). Autotest 075 buys the stall's Silph Scope and sells it
+  a Great Ball.
 - **E4 - enforcement** (`PEMK_ITEM_AUTHORITY=on`). Unexplained increases of tracked items are
   not recorded and are corrected on the client. Detailed in section 7. **Done 2026-09-28**
   (migration 028 for the vanished holders); autotest 074 buys a Poke Ball and adds an X
