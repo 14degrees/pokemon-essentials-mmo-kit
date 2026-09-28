@@ -125,6 +125,23 @@ module PEMK
       open_debts(account_id, OWED)
     end
 
+    # The account's client was sent the correction for +items+: its owed debts that had
+    # not been sent yet remember when (ref "sent:<epoch>").
+    def mark_sent(account_id, items, now: Time.now)
+      @db[:item_credits].where(account_id: account_id, source: OWED, item: items.keys.map(&:to_s), ref: nil)
+                        .update(ref: "sent:#{now.to_i}")
+    end
+
+    # Owed debts whose correction went out before +cutoff+ and are still open: a client
+    # that does not apply them. Each is marked so it is reported once.
+    # -> { account_id => [items] }
+    def ignored_since(cutoff)
+      rows = @db[:item_credits].where(source: OWED).where(Sequel.like(:ref, "sent:%")).all
+      late = rows.select { |r| r[:ref].delete_prefix("sent:").to_i < cutoff.to_i }
+      late.each { |r| @db[:item_credits].where(id: r[:id]).update(ref: "ignored:#{r[:ref].delete_prefix('sent:')}") }
+      late.group_by { |r| r[:account_id] }.transform_values { |rs| rs.map { |r| r[:item] }.uniq }
+    end
+
     # Owed debts that are no longer to be corrected (an item local since, a key item).
     def drop_owed(account_id, items)
       return 0 if items.empty?

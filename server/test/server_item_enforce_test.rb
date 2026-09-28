@@ -159,6 +159,23 @@ class ServerItemEnforceTest < Minitest::Test
     assert(logs.any? { |l| l.include?("applied correction ##{fix2[:id]}") })
   end
 
+  # A client that never applies a correction it was sent is reported, once.
+  def test_a_correction_left_unapplied_is_reported
+    start_server(GATES.merge("PEMK_ANOMALY_DETECTION" => "on"))
+    s, lo = login("e1b@t.co")
+    id = lo[:account_id]
+    inv(s, 1, {})
+    inv(s, 2, { RARECANDY: 1 })
+    verdict!
+    recv_type(s, :inv_correct)
+    Timeout.timeout(5) { sleep 0.05 until @db[:item_credits].where(account_id: id).get(:ref).to_s.start_with?("sent:") }
+    @db[:item_credits].where(account_id: id).update(ref: "sent:#{Time.now.to_i - 31 * 60}")
+    2.times { @server.send(:settle_items) }
+    Timeout.timeout(5) { sleep 0.05 until @db[:player_flags].where(account_id: id, kind: "item_correction_ignored").get(:count) }
+    assert_equal 1, logs.grep(/account #{id} has not applied the correction for RARECANDY/).size
+    assert_equal 1, @db[:player_flags].where(account_id: id, kind: "item_correction_ignored").get(:count)
+  end
+
   # A report heard after the verdict (a gate that should have come first) pays nothing:
   # the correction may already be applied.
   def test_a_late_credit_never_pays_an_owed_debt
