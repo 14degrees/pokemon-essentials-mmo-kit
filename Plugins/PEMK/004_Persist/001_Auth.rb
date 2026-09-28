@@ -161,6 +161,7 @@ module PEMK
       @pending_state = state
       @pending_econ  = reply[:econ].is_a?(Hash) ? reply[:econ] : nil
       @pending_inv   = reply[:inv].is_a?(Hash) ? reply[:inv] : nil  # nil = unseeded (keep blob bag)
+      (PEMK::Inventory.note_stores(reply[:inv_stores]) rescue nil)  # E0: the other item stores
       @pending_mon_evict = reply[:mon_evict]                        # uids traded away (M3.2) -> evict at load
       @logged_in     = true
       PEMK.set_self_id(@account_id)

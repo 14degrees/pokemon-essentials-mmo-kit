@@ -475,14 +475,16 @@ module PEMK
       seq = env[:seq]
       # D4: level items this snapshot shows used credit the next level jumps (inline,
       # reactor thread, before the party projection of the same flush arrives).
+      stores = env[:stores].is_a?(Hash) ? env[:stores] : nil
       if @reward_audit
-        @reward_audit.note_items((conn.data[:item_credit] ||= RewardAudit.new_credit), bag)
+        # Every store, not the bag alone: a Rare Candy moved to the PC is not a used one.
+        @reward_audit.note_items((conn.data[:item_credit] ||= RewardAudit.new_credit), Inventory.totals(bag, stores))
       end
       gift_conn = gift_conn(conn) if @gift_grants
       @mailbox.submit(account_id) do
         status = nil
         @db.transaction do
-          status = @inventory.apply_inv(account_id, bag, seq)
+          status = @inventory.apply_inv(account_id, bag, seq, stores: stores)
           # Step 6: a snapshot the record adopted holds every payout the client applied
           # before it. One transaction, so a crash cannot keep the bag and lose the seal.
           @gift_grants.seal(account_id, gift_conn) if gift_conn && status[0] == :ack
@@ -1163,6 +1165,10 @@ module PEMK
       b = account_id;        b_conn = conn;           b_gives = give
       deliveries = escrow_deliveries(trade_id, a, a_conn, b_gives, b) +
                    escrow_deliveries(trade_id, b, b_conn, a_gives, a)
+      # What each escrow said its Pokemon holds, checked against the sender's record.
+      said = { a => @trade_bodies[a], b => @trade_bodies[b] }.transform_values do |h|
+        h && h[:trade_id] == trade_id && h[:item_said] ? h[:item] : :unsaid
+      end
       @trade_bodies.delete(a)
       @trade_bodies.delete(b)
       @pool.submit do
@@ -1170,8 +1176,16 @@ module PEMK
         # timeout, and Trade.busy? then suppresses everything else) — audit. The
         # transaction has already rolled back, so replying failure is always safe.
         st = begin
-          @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives) do
-            @trade_deliveries.store(deliveries) unless deliveries.empty?
+          if (bad = held_item_mismatch(said, a => a_gives, b => b_gives))
+            @log.call("server: trade #{trade_id} refused - account #{bad} locked a Pokemon holding what its record does not")
+            [:abort, :item]
+          else
+            @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives) do
+              @trade_deliveries.store(deliveries) unless deliveries.empty?
+              # The given Pokemon take their held items out of the senders' records.
+              a_gives.each { |u| @inventory.drop_holder(a, u) }
+              b_gives.each { |u| @inventory.drop_holder(b, u) }
+            end
           end
         rescue StandardError => e
           @log.call("server: trade #{trade_id} #{a}<->#{b} raised #{e.class}: #{e.message}")
@@ -1200,7 +1214,9 @@ module PEMK
     def hold_escrow(env, body, from_account)
       return unless @trade_deliveries && body && body.bytesize <= ESCROW_MAX && env[:uid].is_a?(Integer)
 
-      @trade_bodies[from_account] = { trade_id: env[:trade_id], uid: env[:uid], body: body, at: Time.now }
+      item = env[:item].is_a?(Symbol) && env[:item].length <= 64 ? env[:item] : nil
+      @trade_bodies[from_account] = { trade_id: env[:trade_id], uid: env[:uid], body: body, item: item,
+                                      item_said: env.key?(:item), at: Time.now }
     end
 
     # -> the delivery row for +receiver+, if its client can take one again and the uid
@@ -1211,7 +1227,7 @@ module PEMK
       held = @trade_bodies[sender]
       return [] unless held && held[:trade_id] == trade_id && uids == [held[:uid]]
 
-      [{ account_id: receiver, uid: held[:uid], trade_id: trade_id.to_s, body: held[:body] }]
+      [{ account_id: receiver, uid: held[:uid], trade_id: trade_id.to_s, body: held[:body], item: held[:item]&.to_s }]
     end
 
     # :trade_applied - the traded Pokemon is in the client's party or a box; the next
@@ -1239,6 +1255,19 @@ module PEMK
           @log.call("trade: account #{account_id} owed #{owed.size} traded Pokemon again") unless owed.empty?
         end
       end
+    end
+
+    # -> the account whose escrow said its Pokemon held something else than its record
+    # says, or nil. Only judged when the escrow said it and the record knows the Pokemon.
+    def held_item_mismatch(said, gives)
+      gives.each do |account, uids|
+        item = said[account]
+        next if item == :unsaid || uids.size != 1
+
+        record = @inventory.holder_item(account, uids.first)
+        return account unless record == :unknown || record == item
+      end
+      nil
     end
 
     def uid_list?(a, max)
@@ -1342,8 +1371,9 @@ module PEMK
       @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
+      stores = @config.item_record == :full ? inv[:stores] : nil
       { econ: snap[:balances], econ_seq: snap[:last_seq],
-        inv: inv[:bag], inv_seq: inv[:last_seq],
+        inv: inv[:bag], inv_seq: inv[:last_seq], inv_stores: stores,
         mon_seq: @monsters.mon_seq(account_id),
         mon_evict: @monsters.evictions(account_id),
         pickup_enforce: @config.pickup_enforce,     # M4 Layer C: client gates pickups only when on

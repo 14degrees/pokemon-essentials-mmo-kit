@@ -41,6 +41,7 @@ module PEMK
     def reset
       @econ = {}
       @inv_dirty = false
+      @inv_last = nil
       @mon_dirty = false
       @mon_last = nil
       @flag_last = nil
@@ -146,6 +147,7 @@ module PEMK
     # or a quit-without-save re-mints it as an orphan row (the VENUSAUR case).
     def mark_mon
       @mon_dirty = true
+      @inv_dirty = true   # a Pokemon that comes or goes brings or takes its held item
       touch
       (PEMK::Checkpoint.request(:t1) rescue nil)
     end
@@ -162,6 +164,7 @@ module PEMK
     # are covered by the latency aliases; this is the self-healing catch-all).
     def flush_event(_reason = nil)
       @mon_dirty = true
+      @inv_dirty = true   # every store, hash-gated: a held item or the PC can change alone
       flush_primitives
     end
 
@@ -225,7 +228,16 @@ module PEMK
         (PEMK::GiftClaim.before_bag_flush rescue nil)
         bag = PEMK::Inventory.full_bag
         if bag
-          c.send_message({ :type => :inv, :bag => bag, :seq => (@seq[:inv] += 1) })
+          # Item authority E0: the PC, the mailbox and held items ride the same snapshot,
+          # so the server records them together. Sent only when something changed.
+          stores = (PEMK::Inventory.stores rescue nil)
+          snap = [bag, stores].hash
+          if snap != @inv_last
+            msg = { :type => :inv, :bag => bag, :seq => (@seq[:inv] += 1) }
+            msg[:stores] = stores if stores
+            c.send_message(msg)
+            @inv_last = snap
+          end
           @inv_dirty = false
         end
       end

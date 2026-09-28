@@ -24,7 +24,8 @@ module PEMK
     # transaction, so the swap and its deliveries commit together.
     def store(rows, now: Time.now)
       rows.each do |r|
-        fields = { trade_id: r[:trade_id], body: Sequel.blob(r[:body]), acked: false, created_at: now }
+        fields = { trade_id: r[:trade_id], body: Sequel.blob(r[:body]), item: r[:item], acked: false,
+                   created_at: now }
         @db[:trade_deliveries]
           .insert_conflict(target: %i[account_id uid], update: fields)
           .insert(fields.merge(account_id: r[:account_id], uid: r[:uid]))
