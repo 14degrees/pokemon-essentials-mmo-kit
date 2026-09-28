@@ -15,8 +15,9 @@
 module PEMK
   module Auth
     # What this client can apply, told to the server at login: it only sends what a
-    # client says it can take (an older one never gets a :flag_repair).
-    CAPS = %w[flag_repair trade_redeliver].freeze
+    # client says it can take (an older one never gets a :flag_repair). gift_pos: it
+    # sends where it stands before it asks for a gift, so it can be judged by place.
+    CAPS = %w[flag_repair trade_redeliver gift_pos].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 

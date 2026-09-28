@@ -1022,14 +1022,14 @@ module PEMK
     # Audit item 4 (second half): an NPC gift / event-granted item. Fire-and-forget
     # DETECTION — the ledger records which one-shot event granted what, so a re-farm
     # (self-switch rewind -> the same event pays out again) leaves a trace naming it.
-    def handle_gift_claim(env, account_id)
+    def handle_gift_claim(env, account_id, credit: true)
       return unless @gift_claims
 
       map = env[:map]; event = env[:event]; item = env[:item].to_s; qty = env[:quantity]
       repeatable = repeatable_gift?(map, event)
       # E2: an event the export reads literally explains its item the first time, and
       # again while the claims ledger sees no re-farm, for one not known to pay once.
-      obj  = @item_ledger && literal_gift(map, event, item, qty)
+      obj  = credit && @item_ledger && literal_gift(map, event, item, qty)
       once = obj && obj["once"] == true && !repeatable
       @mailbox.submit(account_id) do
         verdict = @gift_claims.claim(account_id, map, event, item, qty, repeatable: repeatable)
@@ -1080,22 +1080,38 @@ module PEMK
         return reply(conn, type: :gift_grant, seq: seq)
       end
 
+      # A gift is asked from the map its event is on. Judged for a client that sends its
+      # position first (older ones could still be a map behind after a transfer).
+      where = gift_away(conn, map)
+
       unless obj && obj["once"] == true && !repeatable_gift?(map, event)
+        if where
+          note_gift_away(account_id, map, event, item, where)
+          return reply(conn, type: :gift_deny, seq: seq, reason: "not_here") if @config.gift_enforce == :on
+        end
         # Not a one-shot: granted, and judged after the fact - which also decides whether
         # it explains its item (E2), ahead of the bag snapshot the grant leads to.
-        handle_gift_claim(env, account_id)
+        handle_gift_claim(env, account_id, credit: where.nil?)
         return reply(conn, type: :gift_grant, seq: seq)
       end
 
       token = gift_conn(conn)
       literal = obj["dynamic"] == false   # the item was checked against the event's own list above
       @mailbox.submit(account_id) do
-        verdict, reason, denied = @gift_grants.request(account_id, map, event, item, qty, nonce, conn: token)
-        if verdict == :deny
+        # Only a new payout is judged by place: one asked again (its reply lost with a
+        # socket, re-sent after a reconnect) was judged when it was first asked.
+        remote = where && @gift_grants.first_time?(account_id, map, event)
+        note_gift_away(account_id, map, event, item, where) if remote
+        verdict, reason, denied = if remote && @config.gift_enforce == :on
+                                    [:deny, "not_here", 0]
+                                  else
+                                    @gift_grants.request(account_id, map, event, item, qty, nonce, conn: token)
+                                  end
+        if verdict == :deny && reason != "not_here"
           @log.call("gift: account #{account_id} #{gift_verdict_word} — map #{map} event #{event} " \
                     "#{item} already paid (#{denied} refusal#{denied == 1 ? '' : 's'})")
           flag_anomaly(account_id, :gift_refarm) if denied == GiftGrants::DENY_FLAG
-        elsif literal && reason.nil?
+        elsif verdict == :grant && literal && reason.nil? && !remote
           # E2: paid once, explained once (a request sent again is the same payout).
           credit_item(account_id, item, qty, "gift", "#{map}:#{event}")
         end
@@ -1173,6 +1189,27 @@ module PEMK
         return "price" unless unit == data["sell_price"]
       end
       nil
+    end
+
+    GIFT_LEFT_MAP_SEC = 120   # an event may move the player, then pay: the map just left still counts
+
+    # -> the map the server last saw the player on, when that is not +map+ (nor the one
+    # just left), for a client that sends its position before it asks; else nil.
+    def gift_away(conn, map)
+      return nil unless Array(conn.data[:caps]).include?("gift_pos")
+
+      cur = conn.data[:map_id] || (conn.data[:last_pos] || [])[0]
+      return nil if !cur.is_a?(Integer) || cur == map
+
+      left = conn.data[:left_map]
+      return nil if left && left[0] == map && Process.clock_gettime(Process::CLOCK_MONOTONIC) - left[1] <= GIFT_LEFT_MAP_SEC
+
+      cur
+    end
+
+    def note_gift_away(account_id, map, event, item, where)
+      @log.call("gift: account #{account_id} #{gift_verdict_word} — map #{map} event #{event} #{item} asked from map #{where}")
+      flag_anomaly(account_id, :gift_remote)
     end
 
     # :gift_applied - the item of request +nonce+ is in the client's bag.
@@ -1731,6 +1768,7 @@ module PEMK
         @zones[old].delete(conn)
         broadcast_zone(old, conn, Wire.encode_split({ type: :leave, id: account_id }))
         @zones.delete(old) if @zones[old].empty?   # reap AFTER the broadcast (audit: unbounded growth)
+        conn.data[:left_map] = [old, Process.clock_gettime(Process::CLOCK_MONOTONIC)]   # gift_place
       end
       @zones[map].add(conn)
       conn.data[:map_id] = map
