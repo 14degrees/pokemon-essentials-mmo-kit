@@ -163,6 +163,12 @@ module PEMK
       near.call(@start) || near.call(@home) || @heal.each_value.any? { |d| near.call(d) }
     end
 
+    # Is event +event_id+ on +map_id+ a prize table (several rewards, one picked: the
+    # Game Corner lottery)? It pays out again and again by design.
+    def prize_event?(map_id, event_id)
+      @by_tile.any? { |(m, _x, _y), o| m == map_id && o["event_id"] == event_id && o["kind"] == "prize" }
+    end
+
     # --- trainers (Layer D D4 rewards) --------------------------------------------
     # Does this export say where trainer battles start? A pre-D4 export does not.
     def trainers_known?

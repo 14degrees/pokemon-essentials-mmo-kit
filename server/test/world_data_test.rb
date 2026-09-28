@@ -120,6 +120,16 @@ class WorldDataTest < Minitest::Test
     refute load(sample).trainers_known?   # a pre-D4 export
   end
 
+  def test_prize_events
+    doc = sample
+    doc["maps"]["7"]["objects"] = [{ "kind" => "prize", "item" => "MASTERBALL", "items" => %w[MASTERBALL PPUP],
+                                     "x" => 1, "y" => 0, "event_id" => 17 }]
+    w = load(doc)
+    assert w.prize_event?(7, 17)
+    refute w.prize_event?(7, 18)
+    refute w.prize_event?(5, 3)   # the POTION item ball
+  end
+
   def test_spawns_and_connections
     w = load(sample)
     assert_equal [1, 5, 5], w.start

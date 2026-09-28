@@ -880,10 +880,17 @@ module PEMK
       return unless @gift_claims
 
       map = env[:map]; event = env[:event]; item = env[:item].to_s; qty = env[:quantity]
+      repeatable = repeatable_gift?(map, event)
       @mailbox.submit(account_id) do
-        verdict = @gift_claims.claim(account_id, map, event, item, qty)
+        verdict = @gift_claims.claim(account_id, map, event, item, qty, repeatable: repeatable)
         flag_anomaly(account_id, :gift_refarm) if verdict == :suspect
       end
+    end
+
+    # An event the world export says pays out again by design: one with a manifest
+    # cooldown (a daily NPC), or a prize table (the Game Corner lottery).
+    def repeatable_gift?(map, event)
+      manifest_repeatable.include?("#{map}:#{event}") || @world.prize_event?(map, event)
     end
 
     # M4 Layer D D7 part 1: a finished wild battle's capture record (fire-and-forget,
