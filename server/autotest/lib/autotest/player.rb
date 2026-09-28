@@ -6,6 +6,7 @@ module Autotest
   # account is created on first login through the config credentials.
   class Player
     PASSWORD = "autotest-password"
+    SETTLE   = 0.8   # seconds without a new line or question that end a conversation
     VERBS = %w[press hold release wait wait_until choose type pick dismiss walk_to talk_to enter
                face interact warp events event_pages grass battle decide fast advance screenshot save
                set_switch get_switch set_var get_var set_selfswitch get_selfswitch
@@ -129,10 +130,13 @@ module Autotest
         r = dismiss!(timeout: 90)
         stop = r["stopped"]
         if stop.nil?
+          next unless idle?(5)
+          # It can pick up again a moment later (a blackout's walk home, then the
+          # welcome there): only a quiet spell ends it.
+          next if ap("wait_until message|menu|text|item|battle within #{SETTLE}", timeout: 10)["ok"]
           raise Failure, "#{@name}: the conversation ended with answers left: #{queue.inspect}" unless queue.empty?
-          return r if idle?(5)
 
-          next
+          return r
         end
         # A battle starting ends it (an accepted challenge), once nothing is left to say.
         return r if stop == "battle" && queue.empty?
@@ -184,9 +188,9 @@ module Autotest
     end
 
     # Plays the wild battle: +warm_up+ turns of the lead's first move (the foe
-    # attacks meanwhile), then +ball+ at every turn until it ends. A fainted lead is
-    # replaced by the first able Pokemon; anything else takes its first choice.
-    # Bounded.
+    # attacks meanwhile), then +ball+ at every turn until it ends, or fights on once
+    # the bag has none left. A fainted lead is replaced by the first able Pokemon;
+    # anything else takes its first choice. Bounded.
     def catch_with(ball, warm_up: 0, seconds: 150)
       battle!("mode", "agent")
       deadline = Autotest.mono + seconds
@@ -199,8 +203,13 @@ module Autotest
         awaiting = state.dig("battle", "awaiting") || {}
         case awaiting["kind"]
         when "command"
-          decide!(turns < warm_up ? "fight" : "bag")
+          throw_one = turns >= warm_up && get_item!(ball)["quantity"].to_i.positive?
+          decide!(throw_one ? "bag" : "fight")
           turns += 1
+        when "fight"                                       # warm-up: the first move; then the strongest
+          moves = Array(awaiting["options"]).select { |o| o["usable"] }
+          pick = turns <= warm_up ? moves.first : moves.max_by { |o| [o["power"].to_i, -o["index"].to_i] }
+          decide!(pick ? pick["index"].to_s : "0")
         when "item" then decide!(ball)
         when "party"
           able = Array(awaiting["options"]).find { |o| o["able"] && !o["active"] }
