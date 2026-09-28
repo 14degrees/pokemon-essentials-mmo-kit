@@ -52,6 +52,8 @@ module PEMK
         NetStatus.on_replaced            # logged in elsewhere: this window stays offline
       when :flag_repair
         Flags.note_repair(msg)           # step 5: owned values back to the server's
+      when :inv_correct
+        ItemCorrect.receive(msg)         # E4: items the server could not account for, taken back
       when :pos_correct
         # M4 Layer B snap-back: server rejected our position -> return to the last-good
         # tile it sends. Applied on the next safe overworld frame. Only arrives when
