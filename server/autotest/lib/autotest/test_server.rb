@@ -16,11 +16,8 @@ module Autotest
     end
 
     def start
-      env = ENV.to_h.merge("PEMK_BIND" => "0.0.0.0", "PEMK_PORT" => @port.to_s)
-      @flags.each { |k, v| env[k.to_s] = v.to_s }
       @file = File.open(@log_path, "a")
-      @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: method(:log))
-      @server.start
+      boot
       self
     end
 
@@ -29,11 +26,27 @@ module Autotest
       @file&.close
     end
 
+    # A deploy, as the connected windows see it: the server stops, and a new one
+    # comes up on the same port, database and flags.
+    def restart
+      @server&.stop
+      log("autotest: the server restarts")
+      boot
+      self
+    end
+
     def grep(pattern)
       @mutex.synchronize { @lines.grep(pattern) }
     end
 
     private
+
+    def boot
+      env = ENV.to_h.merge("PEMK_BIND" => "0.0.0.0", "PEMK_PORT" => @port.to_s)
+      @flags.each { |k, v| env[k.to_s] = v.to_s }
+      @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: method(:log))
+      @server.start
+    end
 
     def log(message)
       line = "#{Time.now.strftime('%H:%M:%S.%L')} #{message}"

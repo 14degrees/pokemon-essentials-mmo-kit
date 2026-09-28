@@ -88,6 +88,7 @@ module PEMK
         return []
       end
       msgs = []
+      eof  = false
       loop do
         # exception: false -> :wait_readable (no data) or nil (EOF), no raise
         # (raising WaitReadable every frame was spamming the console).
@@ -95,12 +96,16 @@ module PEMK
         break if data == :wait_readable
         if data.nil?               # EOF or socket error
           @connected = false
-          msgs << { :type => DISCONNECTED }
+          eof = true
           break
         end
         @buffer << data
       end
+      # The frames that came before the EOF are read first: the server's last words
+      # (why it closed us, a trade's result) must not arrive after the disconnect has
+      # reset the state they apply to.
       extract_frames(msgs)
+      msgs << { :type => DISCONNECTED } if eof && msgs.none? { |m| m[:type] == DISCONNECTED }
       msgs
     end
 

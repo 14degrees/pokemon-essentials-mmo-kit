@@ -308,6 +308,10 @@ module PEMK
       @pool.submit do
         acct, err = @accounts.authenticate(email, pw)
         if acct
+          # A password login takes the account over: the sessions it replaces must not
+          # come back with their old tokens (an older client ignores :session_replaced
+          # and would reconnect, taking the account back).
+          @sessions.revoke_all(acct[:id])
           token = @sessions.issue(acct[:id], remote_addr: addr)
           # The state READ must serialize behind any in-flight :save/:econ/:inv for
           # this account (a login racing a pending save would hand back a stale
@@ -1367,9 +1371,15 @@ module PEMK
     end
 
     def bind(conn, account_id)
-      # A reconnect on a new socket takes over routing for the account.
+      # A reconnect on a new socket takes over routing for the account. The socket it
+      # replaces is told why before it closes, so a window whose account was logged in
+      # elsewhere stays offline instead of taking the account back: two windows trading
+      # the session every few seconds each pushed its own save over the other's.
       previous = @online[account_id]
-      previous.closing = true if previous && !previous.equal?(conn)
+      if previous && !previous.equal?(conn)
+        reply(previous, type: :session_replaced)
+        @reactor.finish(previous)
+      end
       conn.data[:account_id] = account_id
       @online[account_id] = conn
       @log.call("server: authed #{conn.addr} as account #{account_id}")

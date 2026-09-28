@@ -30,6 +30,7 @@ class ReactorTest < Minitest::Test
   end
 
   def handle(conn, payload)
+    @last_conn = conn
     dec = W.decode_envelope(payload, false)
     @received << dec
     @reactor.send_frame(conn, W.encode_split({ type: :pong, t: dec[:env][:t] })) if dec && dec[:env][:type] == :ping
@@ -57,6 +58,39 @@ class ReactorTest < Minitest::Test
     sock = TCPSocket.new("127.0.0.1", @reactor.port)
     sock.write(W.encode({ type: :ping })) # legacy whole-Marshal
     assert_nil Timeout.timeout(3) { @received.pop }
+    sock.close
+  end
+
+  def connected
+    sock = TCPSocket.new("127.0.0.1", @reactor.port)
+    sock.write(W.encode_split({ type: :hello }))
+    Timeout.timeout(3) { @received.pop }
+    sock
+  end
+
+  def eof?(sock)
+    Timeout.timeout(3) { sock.read(1).nil? }
+  end
+
+  # A replaced session is told why, then closed: what is queued goes out first.
+  def test_finish_writes_what_is_queued_then_closes
+    sock = connected
+    @reactor.post do
+      @reactor.send_frame(@last_conn, W.encode_split({ type: :bye }))
+      @reactor.finish(@last_conn)
+    end
+    assert_equal :bye, read_frame(sock)[:env][:type]
+    assert eof?(sock)
+    sock.close
+  end
+
+  # A socket marked closing with nothing left to write closed only on its next read
+  # or write; a silent one stayed open. The sweep closes it now.
+  def test_the_sweep_closes_a_silent_closing_socket
+    sock = connected
+    @reactor.post { @last_conn.closing = true }
+    @reactor.post { @reactor.send(:sweep_idle, Process.clock_gettime(Process::CLOCK_MONOTONIC)) }
+    assert eof?(sock)
     sock.close
   end
 

@@ -49,6 +49,11 @@ module PEMK
       @db[:sessions].where(token_sha256: Sequel.blob(digest(token))).update(revoked: true)
     end
 
+    # Ends every live session of the account (a new password login takes it over).
+    def revoke_all(account_id)
+      @db[:sessions].where(account_id: account_id, revoked: false).update(revoked: true)
+    end
+
     def digest(token)
       Digest::SHA256.digest(token.to_s)
     end
