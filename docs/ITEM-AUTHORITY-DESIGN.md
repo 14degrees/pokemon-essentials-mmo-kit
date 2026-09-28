@@ -203,11 +203,13 @@ Each step ships alone, with unit tests and an autotest scenario.
   client's next money or BP frame is never taken for a replay. Autotest 071 buys a Poke
   Ball in the Cedolan department store, 073 a Protein for 1 BP in the Battle Frontier Mart.
 - **E4 - enforcement** (`PEMK_ITEM_AUTHORITY=on`). Unexplained increases of tracked items are
-  not recorded and are corrected on the client.
+  not recorded and are corrected on the client. Detailed in section 7. **Done 2026-09-28**
+  (migration 028 for the vanished holders); autotest 074 buys a Poke Ball and adds an X
+  Attack from nowhere, which the game gives back on its own within the grace plus a sweep.
 - **Later:** battle allowances (a won wild battle credits its foe's possible held items, a
   Pickup Pokemon its table), berry plants, the prize desk, and fixes for the engine's own dupes
-  (a held item swapped for mail then cancelled; Trick or Bestow on a wild Pokemon that is then
-  caught).
+  (a held item swapped for mail then cancelled - done with E0; Trick or Bestow on a wild
+  Pokemon that is then caught - done with E2).
 
 ## 6. Limits we accept
 
@@ -217,3 +219,46 @@ Each step ships alone, with unit tests and an autotest scenario.
   where they land: levels by the reward audit, money by the ledger, and sales by E3.
 - Local items stay client-authored until their source is modelled. The tier table says which,
   so an operator knows exactly what is judged.
+
+
+## 7. Enforcement (E4)
+
+E2 records what it cannot explain; E4 takes it back. A first draft was reviewed
+adversarially before any code; the rules below are the result.
+
+**Preconditions.** `PEMK_ITEM_AUTHORITY=on` is honoured only with the pickup, gift and shop
+gates `on`, trade redelivery on, the full record (`PEMK_ITEM_RECORD=full`) and complete
+exports; otherwise the server says why at boot and runs `shadow`. A gate that is off, or a
+source reported after the fact, would turn honest items into corrections.
+
+**The recognized possession.** The record keeps adopting whole snapshots (its layout stays
+the client's); the ledger judges full snapshots against its judged totals. An open debt is
+an increase no credit covered. The recognized possession of an item is its judged total
+minus its open debts, and whatever relies on the possession uses it: a sale needs the
+recognized units (and lowers the judged total, never a debt), a trade confirms a held item
+only when the sender's record names it and recognizes it (else the swap is refused).
+
+**The verdict.** A debt unpaid after its grace becomes *owed*: logged `UNEXPLAINED`, counted
+for review, and kept until its units leave. A late credit pays a pending debt, never an owed
+one. A key item is never owed: its verdict goes to review only. Owed debts of an item that
+is local since the last boot are dropped, never corrected.
+
+**Corrections.** After each judged snapshot, and when a debt becomes owed, a client able to
+(capability `inv_correct`) is sent `:inv_correct { id, seq, items }`: the owed units, bound
+to the snapshot seq the server judged last. The client applies it only on a free overworld
+frame (no message, menu, battle, trade, box screen, Bug Contest or Frontier challenge),
+only while its last sent seq is that seq and nothing changed since, taking the units from
+the bag, then the PC, the mailbox and held items; its next `:inv` names the correction it
+applied. Anything else drops it, and the next judged snapshot brings a fresh one: a
+correction can neither apply twice nor lower a count the server recognizes. A login
+restores the record as always; the first judged snapshot after it brings the correction.
+
+**Decreases.** A decrease of an item settles its open debts first, owed then pending (a
+pending one spent before its verdict is still logged `UNEXPLAINED`). Except a Pokemon that
+drops out of the snapshot while the registry still gives it to the account (a save that
+lost a traded Pokemon, or a client hiding one): its item is noted as vanished; the drop
+settles no debt, and the same Pokemon coming back with the same item is not an increase.
+A released Pokemon simply never comes back.
+
+**Credits** from a gift live seven days (an owed gift may be applied long after its grant);
+the others thirty minutes. A fresh login drops them all, as in E2.

@@ -170,6 +170,14 @@ class ServerShopTest < Minitest::Test
     assert_nil @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
   end
 
+  # A sale refused for another reason (a wrong price) leaves the record as it was.
+  def test_a_refused_sale_keeps_the_items
+    start_server
+    s, lo = player(bag: { POTION: 2 })
+    assert_equal "price", ask(s, :sell, "POTION", 2, 999)[:reason]
+    assert_equal 2, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
+  end
+
   # Money the ledger cannot take (past its cap) moves nothing, the items neither.
   def test_a_sale_the_ledger_refuses_keeps_the_items
     start_server

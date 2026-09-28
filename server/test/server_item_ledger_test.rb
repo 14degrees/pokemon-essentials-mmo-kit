@@ -396,9 +396,14 @@ class ServerItemLedgerTest < Minitest::Test
     inv(b, 2, {}, st(holders: { ua => :LEFTOVERS }))
     assert_empty owing(lb[:account_id])
     assert_empty credits(lb[:account_id]), "bound to that Pokemon, not a credit anyone could use"
-    inv(b, 3, {}, st(holders: {}))                     # it leaves ...
-    inv(b, 4, {}, st(holders: { ua => :LEFTOVERS }))   # ... and comes back: not explained twice
-    assert_equal [["LEFTOVERS", -1]], owing(lb[:account_id])
+    assert_equal true, @db[:trade_deliveries].where(account_id: lb[:account_id], uid: ua).get(:explained), "once"
+    # It drops out of the snapshot (a save that lost it) while the registry gives it to B,
+    # and comes back with the same item: neither a decrease that settles nor an increase.
+    inv(b, 3, {}, st(holders: {}))
+    assert_equal({ ua.to_s => "LEFTOVERS" }, @db[:inventory_snapshots].where(account_id: lb[:account_id]).get(:vanished).to_h)
+    inv(b, 4, {}, st(holders: { ua => :LEFTOVERS }))
+    assert_empty owing(lb[:account_id])
+    assert_equal({}, @db[:inventory_snapshots].where(account_id: lb[:account_id]).get(:vanished).to_h)
   end
 
   # A client that cannot be redelivered to gets the item as a credit instead.
