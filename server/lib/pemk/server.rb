@@ -90,6 +90,7 @@ module PEMK
       end
       @gift_claims = GiftClaims.new(@db, logger: @log) if @config.flag_state != :off
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
+      @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @audit      = Audit.new(@world, logger: @log)
       @pos_audit  = PositionAudit.new(@world, logger: @log, mode: @config.position_enforcement)   # M4 Layer B
       @pickups    = Pickups.new(@db)   # M4 Layer C one-shot ledger
@@ -99,6 +100,7 @@ module PEMK
       @online   = {}                                    # account_id => conn; reactor-thread only
       @pending_trades = {}                              # trade_id => rendezvous; reactor-thread only
       @peer_sessions  = {}                              # account_id => partner id (mutual); reactor-thread only
+      @trade_bodies   = {}                              # sender => its last locked escrow; reactor-thread only
       @conn_buckets   = {}                              # conn => [tokens, last_refill]; reactor-thread only
       @reactor  = Reactor.new(
         host: @config.bind, port: @config.port,
@@ -236,7 +238,7 @@ module PEMK
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
       flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4], gift_req: [10, 1.0], gift_applied: [10, 1.0],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
-      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10],
+      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
     }.freeze
     FRAME_BUDGET_DEFAULT = [30, 10].freeze
@@ -280,6 +282,8 @@ module PEMK
       when :gift_req then handle_gift_req(conn, env, authed)
       when :gift_applied then handle_gift_applied(env, authed)
       when :trade_commit then handle_trade_commit(conn, env, authed)
+      when :trade_applied then handle_trade_applied(env, authed)
+      when :trade_owed then handle_trade_owed(conn, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, body, authed)
       else
@@ -426,6 +430,7 @@ module PEMK
         # crash here would restore a switch onto a save that lacks its payout.
         @flag_state&.commit_facts(account_id, fseq)
         @flag_state&.note_durable(account_id, fseq)
+        @trade_deliveries&.seal(account_id)   # traded Pokemon reported before this save are on disk
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
     end
@@ -1156,12 +1161,18 @@ module PEMK
 
       a = pending[:account]; a_conn = pending[:conn]; a_gives = pending[:give]
       b = account_id;        b_conn = conn;           b_gives = give
+      deliveries = escrow_deliveries(trade_id, a, a_conn, b_gives, b) +
+                   escrow_deliveries(trade_id, b, b_conn, a_gives, a)
+      @trade_bodies.delete(a)
+      @trade_bodies.delete(b)
       @pool.submit do
         # A raise here used to leave BOTH traders in :committing forever (no client
         # timeout, and Trade.busy? then suppresses everything else) — audit. The
         # transaction has already rolled back, so replying failure is always safe.
         st = begin
-          @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives)
+          @trades.execute_trade(trade_id, a: a, b: b, a_gives: a_gives, b_gives: b_gives) do
+            @trade_deliveries.store(deliveries) unless deliveries.empty?
+          end
         rescue StandardError => e
           @log.call("server: trade #{trade_id} #{a}<->#{b} raised #{e.class}: #{e.message}")
           [:err, "error"]
@@ -1176,6 +1187,56 @@ module PEMK
             reply(a_conn, type: :trade_result, trade_id: trade_id, ok: false, reason: reason) if @reactor.alive?(a_conn)
             reply(b_conn, type: :trade_result, trade_id: trade_id, ok: false, reason: reason) if @reactor.alive?(b_conn)
           end
+        end
+      end
+    end
+
+    # The escrow a :trade_lock carried, kept until its trade commits: the receiver loads
+    # it, and it is the only copy of the Pokemon until the receiver's next save lands.
+    # One per sender (a new lock replaces it), one Pokemon's worth, a few minutes.
+    ESCROW_TTL = 300
+    ESCROW_MAX = 32 * 1024
+
+    def hold_escrow(env, body, from_account)
+      return unless @trade_deliveries && body && body.bytesize <= ESCROW_MAX && env[:uid].is_a?(Integer)
+
+      @trade_bodies[from_account] = { trade_id: env[:trade_id], uid: env[:uid], body: body, at: Time.now }
+    end
+
+    # -> the delivery row for +receiver+, if its client can take one again and the uid
+    # that moved is the one it was shown.
+    def escrow_deliveries(trade_id, receiver, receiver_conn, uids, sender)
+      return [] unless @trade_deliveries && Array(receiver_conn.data[:caps]).include?("trade_redeliver")
+
+      held = @trade_bodies[sender]
+      return [] unless held && held[:trade_id] == trade_id && uids == [held[:uid]]
+
+      [{ account_id: receiver, uid: held[:uid], trade_id: trade_id.to_s, body: held[:body] }]
+    end
+
+    # :trade_applied - the traded Pokemon is in the client's party or a box; the next
+    # save that lands holds it.
+    def handle_trade_applied(env, account_id)
+      trade_id = env[:trade_id]
+      return unless @trade_deliveries && trade_id.is_a?(String) && trade_id.bytesize <= 64
+
+      @mailbox.submit(account_id) { @trade_deliveries.ack(account_id, trade_id) }
+    end
+
+    # :trade_owed - a client that finished loading asks for the traded Pokemon its save
+    # may lack. Each comes as its own :trade_redeliver with the locked body.
+    def handle_trade_owed(conn, account_id)
+      return unless @trade_deliveries
+
+      @mailbox.submit(account_id) do
+        owed = @trade_deliveries.pending(account_id)
+        @reactor.post do
+          next unless @reactor.alive?(conn)
+
+          owed.each do |d|
+            reply_body(conn, { type: :trade_redeliver, trade_id: d[:trade_id], uid: d[:uid] }, d[:body])
+          end
+          @log.call("trade: account #{account_id} owed #{owed.size} traded Pokemon again") unless owed.empty?
         end
       end
     end
@@ -1254,9 +1315,10 @@ module PEMK
     end
 
     def sweep_trades
+      now = Time.now
+      @trade_bodies.reject! { |_, v| now - v[:at] > ESCROW_TTL } unless @trade_bodies.empty?
       return if @pending_trades.empty?
 
-      now = Time.now
       @pending_trades.reject! do |tid, p|
         next false if (now - p[:at]) < TRADE_TTL
 
@@ -1277,6 +1339,7 @@ module PEMK
       @flag_state&.rebase_for_login(account_id, @characters.flags_seq(account_id)) if fresh
       # Step 6: the bag a fresh login loads holds no payout that was never sealed.
       @gift_grants&.void_unsealed(account_id) if fresh
+      @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       { econ: snap[:balances], econ_seq: snap[:last_seq],
@@ -1296,6 +1359,7 @@ module PEMK
         flag_enforce: @config.flag_enforce.to_s,                             # step 5: owned values repaired
         gift_gate: @config.gift_enforce != :off,                             # step 6: ask before a gift
         peer_check: @config.peer_check.to_s,                                 # a peer's Pokemon checked before loading
+        trade_redelivery: !@trade_deliveries.nil?,                           # ask for traded Pokemon a save lacks
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
@@ -1449,6 +1513,7 @@ module PEMK
 
       return unless peer_body_ok?(env[:type], body, from_account)
 
+      hold_escrow(env, body, from_account) if env[:type] == :trade_lock
       note_peer_session(env[:type], from_account, env[:to])
       @reactor.send_frame(target, Wire.encode_split(relayed_envelope(env, from_account), body))
     end

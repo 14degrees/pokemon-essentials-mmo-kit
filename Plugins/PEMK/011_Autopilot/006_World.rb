@@ -448,6 +448,15 @@ module PEMK
       end
 
       Autopilot.verb("save") { |id, _| cmd_save(id) }
+
+      # hold_saves on|off: the save blob stops reaching the server (every other
+      # channel still flows), as if the game died before its next save landed.
+      def cmd_hold_saves(id, rest)
+        SaveHold.on = on?(rest.strip)
+        Autopilot.respond(id, "ok" => true, "held" => SaveHold.on)
+      end
+
+      Autopilot.verb("hold_saves") { |id, rest| cmd_hold_saves(id, rest) }
     end
   end
 end

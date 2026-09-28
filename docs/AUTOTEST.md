@@ -95,6 +95,7 @@ Then, from Git Bash or WSL: `tools/autopilot/ap.sh autopilot/ap1 <verb> [args]`.
 | `walk_to`, `face`, `interact`, `talk_to`, `enter`, `warp` | move on the map, talk to an NPC, go through a door |
 | `battle mode keys\|agent\|auto`, `decide` | play a battle: by keys, one decision at a time, or with a plain built-in policy |
 | `set_switch`, `get_switch`, `add_item`, `add_pokemon`, `heal`, `money`, `save`... | set a scene up quickly and read it back |
+| `set_raw_var`, `set_raw_switch`, `hold_saves on\|off` | change a value the way a memory edit does; keep the save from reaching the server, to kill the game before it lands |
 | `fast`, `advance`, `abort` | skip animations and key-wait windows, cancel a running command |
 
 `verbs` lists them all.
