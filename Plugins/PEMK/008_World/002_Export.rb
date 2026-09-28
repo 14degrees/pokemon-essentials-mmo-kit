@@ -29,17 +29,23 @@ module PEMK
     def run
       mapinfos = load_data("Data/MapInfos.rxdata")
       maps  = {}
-      counts = { :objects => 0, :warps => 0, :passability => 0, :ledges => 0, :heal => 0, :encounters => 0 }
+      counts = { :objects => 0, :warps => 0, :passability => 0, :ledges => 0, :heal => 0, :encounters => 0,
+                 :trainers => 0 }
 
       mapinfos.keys.sort.each do |map_id|
         map = (load_data(sprintf("Data/Map%03d.rxdata", map_id)) rescue nil)
         next unless map && map.respond_to?(:events) && map.events
 
-        objects = []
-        warps   = []
+        objects  = []
+        warps    = []
+        trainers = []
         map.events.each_value do |event|
           o = classify_event(event); objects << o if o
           collect_warps(event).each { |w| warps << w }
+          collect_trainers(event).each do |type, name, version|
+            trainers << { :event_id => event.id, :x => event.x, :y => event.y,
+                          :type => type, :name => name, :version => version }
+          end
         end
         passability = map_passability(map)
         ledges      = map_ledges(map)
@@ -47,7 +53,8 @@ module PEMK
         enc         = map_encounters(map_id)
 
         # Emit a map only if it carries at least one useful fact.
-        next if objects.empty? && warps.empty? && passability.nil? && heal.nil? && enc.nil? && ledges.empty?
+        next if objects.empty? && warps.empty? && passability.nil? && heal.nil? && enc.nil? && ledges.empty? &&
+                trainers.empty?
 
         entry = { :name => map_name(mapinfos, map_id), :width => map.width, :height => map.height,
                   :objects => objects }
@@ -56,6 +63,7 @@ module PEMK
         entry[:ledges]      = ledges      unless ledges.empty?
         entry[:heal]        = heal        if heal
         entry[:encounters]  = enc         if enc
+        entry[:trainers]    = trainers    unless trainers.empty?
         maps[map_id.to_s] = entry
 
         counts[:objects]    += objects.size
@@ -64,6 +72,7 @@ module PEMK
         counts[:ledges]     += ledges.size
         counts[:heal]       += 1 if heal
         counts[:encounters] += 1 if enc
+        counts[:trainers]   += trainers.size
       end
 
       doc = { :schema_version => SCHEMA_VERSION, :generated_at => stamp, :maps => maps }
@@ -122,6 +131,28 @@ module PEMK
       end
     rescue
       nil
+    end
+
+    # === trainers (where each trainer battle starts) — Layer D D4 ================
+
+    # -> [[type, name, version], ...] for every TrainerBattle.start in the event's
+    # scripts; a double battle names two trainers. Literal arguments only: a computed
+    # trainer would export a bogus id.
+    def collect_trainers(event)
+      return [] unless event && event.respond_to?(:pages) && event.pages
+
+      script = event_script(event)
+      return [] unless script
+
+      found = []
+      script.scan(/TrainerBattle\.start\(([^)]*)\)/) do |(args)|
+        args.scan(/:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, version|
+          found << [type, name, version.to_i]
+        end
+      end
+      found.uniq
+    rescue
+      []
     end
 
     # Concatenate the searchable script text across all pages. RMXP stores item

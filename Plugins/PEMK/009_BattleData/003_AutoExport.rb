@@ -65,12 +65,18 @@ module PEMK
     # source name simply doesn't contribute (stale? checks File.exist?).
     def world_sources
       ["Data/MapInfos.rxdata", "Data/map_connections.dat", "Data/map_metadata.dat",
-       "Data/Tilesets.rxdata"] + (Dir.glob("Data/Map[0-9]*.rxdata") rescue [])
+       "Data/Tilesets.rxdata"] + (Dir.glob("Data/Map[0-9]*.rxdata") rescue []) + exporter_sources
     end
 
     # battle_data.json derives from the compiled GameData .dat files it walks.
     def battle_sources
-      %w[species moves abilities items types].map { |n| "Data/#{n}.dat" }
+      %w[species moves abilities items types trainers].map { |n| "Data/#{n}.dat" } + exporter_sources
+    end
+
+    # The exporters themselves: a kit update that changes what they write regenerates
+    # both files at the next debug launch, instead of shipping the old format.
+    def exporter_sources
+      (Dir.glob("Plugins/PEMK/008_World/*.rb") + Dir.glob("Plugins/PEMK/009_BattleData/*.rb")) rescue []
     end
   end
 end

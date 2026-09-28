@@ -540,24 +540,48 @@ module PEMK
       return unless @reward_audit
 
       outcome = env[:outcome]
-      claimed = env[:foes]
-      return unless outcome.is_a?(Integer) && claimed.is_a?(Array)
+      return unless outcome.is_a?(Integer)
 
-      stash = conn.data[:enc_mints] || []
-      foes  = []
-      claimed.first(2).each do |f|
-        next unless f.is_a?(Hash)
-
-        pid = f[:pid]
-        m = stash.find { |x| x["pid"] == pid }   # provable: an identity THIS conn was minted
-        foes << { species: m["species"], level: m["level"] } if m
-      end
+      foes = wild_foes(conn, env[:foes]) + trainer_foes(conn, env[:trainers])
       return if foes.empty?
 
       w = @reward_audit.record_battle(account_id, foes, outcome)
       @log.call("reward: account #{account_id} battle##{w[:id]} outcome=#{outcome} " \
                 "foes=#{foes.map { |f| "#{f[:species]}@#{f[:level]}" }.join(',')} " \
                 "budget exp=#{w[:exp]} gain=#{w[:gain]} loss=#{w[:loss]}")
+    end
+
+    # Wild foes count only as identities THIS connection was minted (matched by pid).
+    def wild_foes(conn, claimed)
+      return [] unless claimed.is_a?(Array)
+
+      stash = conn.data[:enc_mints] || []
+      claimed.first(2).filter_map do |f|
+        next unless f.is_a?(Hash)
+
+        m = stash.find { |x| x["pid"] == f[:pid] }
+        { species: m["species"], level: m["level"] } if m
+      end
+    end
+
+    # A trainer the client names counts with the party the battle data export gives
+    # it, and only if one of its battles starts on the map the server last saw the
+    # player on. An export that predates trainer placement accepts any known trainer.
+    def trainer_foes(conn, claimed)
+      return [] unless claimed.is_a?(Array) && @battle
+
+      map = (conn.data[:last_pos] || [])[0]
+      claimed.first(2).flat_map do |t|
+        next [] unless t.is_a?(Array) && t.length == 3 && t[2].is_a?(Integer)
+
+        type = t[0].to_s[0, 32]
+        name = t[1].to_s[0, 32]
+        party = @battle.trainer_party(type, name, t[2])
+        next [] unless party
+        next [] if @world.trainers_known? && !@world.trainer_on_map?(map, type, name, t[2])
+
+        party.map { |species, level| { species: species, level: level } }
+      end
     end
 
     # Level-jump exp bound (D4). Diffs the new projection vs the last one stashed on the

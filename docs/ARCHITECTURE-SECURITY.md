@@ -104,11 +104,12 @@ between an event and the next save never restores a switch without its payout.
 Banked progression belongs to the account, like pickups and badges: a fresh
 playthrough is a new account.
 
-**After updating the kit**, regenerate the export: delete `server/data/world.json`
-and do a debug launch, or use F9 → *PEMK: Export World*. The automatic export only
-reruns when your maps change, and an older manifest lacks the latch list, so `on`
-would restore self-switches the game clears on purpose. Migrations run on their own
-when the server starts.
+**After updating the kit**, do one debug launch before restarting the server: the
+automatic export reruns when your maps and data change, and also when the kit's
+exporters do, so the server gets the current format (an older manifest lacks the
+latch list, and `on` would restore self-switches the game clears on purpose). F9 →
+*PEMK: Export World* does the same by hand. Migrations run on their own when the
+server starts.
 
 Not covered yet: variable values stay client-authored, and a write made during a
 session is not checked against the server. Re-farming an NPC gift inside one

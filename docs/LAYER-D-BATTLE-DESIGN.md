@@ -67,7 +67,11 @@
 > exported growth curves) is LOGGED. Detection-only, nothing rejects. Level items used
 > outside a battle (a Rare Candy pays for a level, an Exp. Candy for its EXP) are read
 > from the bag snapshots and credited first, so using them is not suspect; where the
-> items came from is the inventory audit's question. A catch keeps its mint stashed so
+> items came from is the inventory audit's question. A trainer battle opens a window too:
+> the client names the trainers it loaded, and the server takes their parties from the
+> battle data export, only for a trainer whose battle starts on the player's map (the
+> world export places them). A battle lost after a knockout still bounds the EXP it
+> paid. A catch keeps its mint stashed so
 > the battle's end report still opens the window for the catch's EXP, and the client
 > holds its flushes during a battle so the party projection follows that report.
 > `PEMK_BATTLE_ENFORCE_REWARDS` off/shadow/on, default
