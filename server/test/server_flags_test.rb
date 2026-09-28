@@ -49,8 +49,8 @@ class ServerFlagsTest < Minitest::Test
     @db&.disconnect
   end
 
-  def start_server(mode = "on")
-    env = ENV.to_h.merge("PEMK_WORLD" => WORLD.path, "PEMK_FLAG_STATE" => mode)
+  def start_server(mode = "on", enforce: "off")
+    env = ENV.to_h.merge("PEMK_WORLD" => WORLD.path, "PEMK_FLAG_STATE" => mode, "PEMK_FLAG_ENFORCE" => enforce)
     @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(_m) {})
     @server.start
     @port = @server.port
@@ -101,6 +101,44 @@ class ServerFlagsTest < Minitest::Test
     send_env(c, env, Marshal.dump({ blob: flags_seq }))
     send_env(c, { type: :ping, t: 1 })
     assert_equal :pong, recv(c)[:type]
+  end
+
+  # A client that says it can apply a repair (step 5).
+  def repairing_session(email)
+    c = open_conn
+    send_env(c, { type: :login, email: email, password: "password1", caps: ["flag_repair"] })
+    lo = recv(c)
+    assert_equal :login_ok, lo[:type]
+    [c, lo]
+  end
+
+  # Step 5: a self-switch cleared some other way than the game's own writes (no delta
+  # said so) comes back through a :flag_repair, to a client that can apply one.
+  def test_an_edit_the_game_did_not_make_is_repaired
+    start_server("on", enforce: "on")
+    register("fl9@t.co")
+    c, lo = repairing_session("fl9@t.co")
+    assert_equal "on", lo[:flag_enforce]
+    snapshot(c, 1, self_switches: ["5:3:A"])
+    send_env(c, { type: :flags, seq: 2, switches: [], variables: {}, self_switches: [], event_times: {} })
+    assert_equal :flags_ack, recv(c)[:type]
+    rep = recv(c)
+    assert_equal :flag_repair, rep[:type]
+    assert_equal 2, rep[:seq]
+    assert_equal({ "5:3:A" => true }, rep[:self_switches])
+    c.close
+  end
+
+  # An older client cannot apply one: it is never sent a repair.
+  def test_an_older_client_is_not_sent_a_repair
+    start_server("on", enforce: "on")
+    register("fl10@t.co")
+    c, = session("fl10@t.co")
+    snapshot(c, 1, self_switches: ["5:3:A"])
+    snapshot(c, 2, self_switches: [])
+    send_env(c, { type: :ping, t: 2 })
+    assert_equal :pong, recv(c)[:type]   # nothing came between the ack and the pong
+    c.close
   end
 
   def test_a_save_promotes_only_the_facts_its_watermark_covers

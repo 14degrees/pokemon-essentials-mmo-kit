@@ -27,13 +27,21 @@ module PEMK
   class FlagState
     REWIND_MIN   = 3       # self-switches cleared in one snapshot before it is reportable
     MAX_ENTRIES  = 4_000   # per section; beyond it the snapshot is recorded but NOT judged
+    RECENT_MAX   = 32      # mirrors kept per online account, by snapshot seq (step 5)
 
     # policy: { switches: Set/Array of non-local ids, variables: ... }. The comparison
     # is only meaningful over ids the POLICY claims — a LOCAL id is legitimately absent
     # from the delta stream, and judging it would report our own scope as a divergence.
-    def initialize(db, policy: nil, facts: nil, repeatable: nil, latched: nil, logger: nil)
+    def initialize(db, policy: nil, facts: nil, repeatable: nil, latched: nil, enforce: :off, logger: nil)
       @db  = db
       @log = logger || ->(_m) {}
+      # Step 5: repair owned values the client changed some other way than through the
+      # game's own writes (off / shadow = log only / on). See repair_plan.
+      @enforce = enforce
+      # The mirror as it stood at each recent snapshot seq, per online account, so a
+      # saved blob can be matched to the exact server truth at the seq it carries.
+      @recent      = {}
+      @recent_lock = Mutex.new
       @owned_switches = to_id_set(policy && (policy[:switches] || policy["switches"]))
       @owned_vars     = to_id_set(policy && (policy[:variables] || policy["variables"]))
       # "map:event" of events the manifest found to be on a cooldown (berry plants,
@@ -268,7 +276,12 @@ module PEMK
 
     # payload: { switches: [id,...], variables: {id=>int}, self_switches: ["m:e:A",...] }
     # -> [:ack, flags] | [:dup, []] | [:rej, ["bad_shape"]]
-    def apply_flags(account_id, payload, seq, now: Time.now)
+    #
+    # repair: this client can apply a repair (it said so at login). With enforcement on
+    # and a repairing client, the stored state is the snapshot with the repair applied
+    # - the truth the client is about to hold - and the plan comes back for the caller
+    # to send. -> [:ack, flags, plan_or_nil] | [:dup, [], nil] | [:rej, [...], nil]
+    def apply_flags(account_id, payload, seq, now: Time.now, repair: false)
       return [:rej, ["bad_shape"]] unless payload.is_a?(Hash) && seq.is_a?(Integer)
 
       switches = int_list(payload[:switches])
@@ -283,22 +296,36 @@ module PEMK
       @db.transaction do
         row = @db[:flag_snapshots].where(account_id: account_id).first
         if row && seq <= row[:last_seq]
-          result = [:dup, []]   # replayed/stale absolute snapshot -> re-ack, no write
+          result = [:dup, [], nil]   # replayed/stale absolute snapshot -> re-ack, no write
         else
-          flags = truncated ? ["truncated"] : detect_rewind(account_id, row, switches, selfsw, vars)
-          # THE TRUST GATE measurement: does the delta-built mirror agree with the
-          # absolute truth? Reported, never enforced — a disagreement is evidence
-          # about OUR interception, not about the player.
-          drift = compare_mirror(account_id, row, switches, selfsw, vars)
-          unless drift.empty?
-            @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
+          plan = nil
+          if @enforce == :off || truncated
+            # THE TRUST GATE measurement: does the delta-built mirror agree with the
+            # absolute truth? Reported, never enforced — a disagreement is evidence
+            # about OUR interception, not about the player.
+            drift = compare_mirror(account_id, row, switches, selfsw, vars)
+            unless drift.empty?
+              @log.call("flags: account #{account_id} DELTA DRIFT — #{drift.join('; ')}")
+            end
+          else
+            plan  = repair_plan(row, switches, selfsw, vars)
+            drift = plan ? [describe_plan(plan)] : []
+            if plan && @enforce == :on && repair
+              @log.call("flags: account #{account_id} REPAIR — #{drift.first}")
+              switches, selfsw, vars = repaired(switches, selfsw, vars, plan)
+            elsif plan
+              @log.call("flags: account #{account_id} WOULD-REPAIR — #{drift.first}")
+              plan = nil
+            end
           end
+          flags = truncated ? ["truncated"] : detect_rewind(account_id, row, switches, selfsw, vars)
           keys = fact_keys(switches, selfsw)
           grant_facts(account_id, keys, seq: seq, now: now)
           drop_lost_facts(account_id, keys)
           note_cooldowns(account_id, payload[:event_times], now: now)
           store(account_id, switches, vars, selfsw, seq, truncated, flags, now, drift)
-          result = [:ack, flags]
+          remember(account_id, seq, mirror_from(switches, vars, selfsw)) unless @enforce == :off
+          result = [:ack, flags, plan]
         end
       end
       result
@@ -338,14 +365,22 @@ module PEMK
         # until the next absolute snapshot re-establishes it.
         mirror = row[:mirror].respond_to?(:to_h) ? row[:mirror].to_h : seed_mirror(row)
         if payload[:overflow] == true
-          @db[:flag_snapshots].where(account_id: account_id)
-                              .update(mirror_valid: false, updated_at: now)
-          return [:ok, []]
+          if @enforce == :on
+            # Under enforcement an overflow must not hand the next snapshot the power to
+            # rewrite the truth: honest play never writes 2,000 owned ids in one flush.
+            @log.call("flags: account #{account_id} SUSPECT delta overflow — mirror kept")
+          else
+            @db[:flag_snapshots].where(account_id: account_id)
+                                .update(mirror_valid: false, updated_at: now)
+            return [:ok, []]
+          end
         end
 
         sw.each     { |id, on| apply_set(mirror, "sw", id, on) }
         selfsw.each { |k, on|  apply_set(mirror, "ss", k, on) }
-        vars.each   { |id, v|  mirror["var/#{id}"] = v if v.is_a?(Integer) }
+        # A non-Integer write (a Pokemon parked in a variable) leaves the id untracked
+        # (nil): the snapshot cannot show it, so it must never be judged or repaired.
+        vars.each   { |id, v|  mirror["var/#{id}"] = (v.is_a?(Integer) ? v : nil) }
 
         @db[:flag_snapshots].where(account_id: account_id)
                             .update(mirror: Sequel.pg_jsonb(mirror), updated_at: now)
@@ -399,6 +434,118 @@ module PEMK
         drift << "var #{id} mirror=#{m.inspect} snapshot=#{v}"
       end
       drift.first(8)
+    end
+
+    # --- step 5: in-session enforcement -----------------------------------------
+    #
+    # The mirror is built from the writes the game's own code makes (the delta
+    # stream, complete by the trust gate). A snapshot that disagrees with it over an
+    # owned id changed that id some other way - a memory or save edit - so the mirror
+    # is the truth and the plan restores it. -> { switches: {id => bool},
+    # variables: {"id" => int}, self_switches: {"m:e:L" => bool} } holding the
+    # mirror's values, or nil when they agree (or the mirror cannot be judged).
+    #
+    # Left out: an untracked variable (it holds a non-Integer the snapshot cannot
+    # show) and repeatable events' self-switches (the login cooldown restore sets
+    # them without a delta on older clients; their timers are guarded separately).
+    def repair_plan(row, switches, selfsw, vars)
+      return nil unless @owned_switches && row && row[:mirror_valid] && row[:mirror].respond_to?(:to_h)
+
+      mirror = row[:mirror].to_h
+      plan   = { switches: {}, variables: {}, self_switches: {} }
+
+      have_sw = switches.select { |i| @owned_switches.include?(i) }.to_set
+      want_sw = mirror.select { |k, v| k.start_with?("sw/") && v }
+                      .keys.map { |k| k.split("/", 2)[1].to_i }.select { |i| @owned_switches.include?(i) }.to_set
+      (have_sw - want_sw).each { |i| plan[:switches][i] = false }
+      (want_sw - have_sw).each { |i| plan[:switches][i] = true }
+
+      have_ss = selfsw.reject { |k| repeatable?(k) }.to_set
+      want_ss = mirror.select { |k, v| k.start_with?("ss/") && v }.keys.map { |k| k[3..] }
+                      .reject { |k| repeatable?(k) }.to_set
+      (have_ss - want_ss).each { |k| plan[:self_switches][k] = false }
+      (want_ss - have_ss).each { |k| plan[:self_switches][k] = true }
+
+      ids = vars.keys.map(&:to_i) + mirror.keys.select { |k| k.start_with?("var/") }.map { |k| k[4..].to_i }
+      ids.uniq.each do |id|
+        next unless @owned_vars&.include?(id)
+
+        key = "var/#{id}"
+        next if mirror.key?(key) && mirror[key].nil?   # untracked
+
+        want = mirror[key] || 0
+        have = vars[id.to_s] || 0
+        plan[:variables][id.to_s] = want unless want == have
+      end
+      plan.values.all?(&:empty?) ? nil : plan
+    end
+
+    # The snapshot as it will be once the client holds the plan.
+    def repaired(switches, selfsw, vars, plan)
+      sw = switches.to_set
+      plan[:switches].each { |id, on| on ? sw << id : sw.delete(id) }
+      ss = selfsw.to_set
+      plan[:self_switches].each { |k, on| on ? ss << k : ss.delete(k) }
+      v = vars.dup
+      plan[:variables].each { |id, val| val.zero? ? v.delete(id) : v[id] = val }
+      [sw.to_a.sort, ss.to_a.sort, v]
+    end
+
+    def describe_plan(plan)
+      parts = plan[:switches].map { |id, on| "sw #{id}=#{on ? 'on' : 'off'}" } +
+              plan[:variables].map { |id, v| "var #{id}=#{v}" } +
+              plan[:self_switches].map { |k, on| "ss #{k}=#{on ? 'on' : 'off'}" }
+      shown = parts.first(8).join(", ")
+      parts.length > 8 ? "#{shown}, +#{parts.length - 8} more" : shown
+    end
+
+    def remember(account_id, seq, mirror)
+      @recent_lock.synchronize do
+        ring = (@recent[account_id] ||= [])
+        ring << [seq, mirror]
+        ring.shift while ring.size > RECENT_MAX
+      end
+    end
+
+    # A blob saved at flags seq +fseq+ reached the server: the mirror as it stood at
+    # that seq is now the durable truth the next login is judged against.
+    def note_durable(account_id, fseq, now: Time.now)
+      return if @enforce == :off || !fseq.is_a?(Integer)
+
+      entry = @recent_lock.synchronize { (@recent[account_id] || []).find { |s, _| s == fseq } }
+      return unless entry
+
+      @db[:flag_snapshots].where(account_id: account_id)
+                          .update(durable_mirror: Sequel.pg_jsonb(entry[1]), durable_seq: fseq, updated_at: now)
+    rescue StandardError => e
+      @log.call("flags: note_durable failed #{e.class}: #{e.message}")
+    end
+
+    def forget(account_id)
+      @recent_lock.synchronize { @recent.delete(account_id) }
+    end
+
+    # A session starts (a login that loads the stored blob, not a reconnect resuming a
+    # live one). Judge it against the durable mirror when that is exactly the state
+    # the blob was saved at; otherwise let the session's first snapshot re-establish
+    # the mirror, which can never repair wrongly.
+    def rebase_for_login(account_id, blob_seq, now: Time.now)
+      return if @enforce == :off
+
+      row = @db[:flag_snapshots].where(account_id: account_id).first
+      return unless row
+
+      if blob_seq.is_a?(Integer) && row[:durable_seq] == blob_seq && row[:durable_mirror].respond_to?(:to_h)
+        @db[:flag_snapshots].where(account_id: account_id)
+                            .update(mirror: Sequel.pg_jsonb(row[:durable_mirror].to_h), mirror_valid: true,
+                                    updated_at: now)
+      else
+        @db[:flag_snapshots].where(account_id: account_id).update(mirror_valid: false, updated_at: now)
+        @log.call("flags: account #{account_id} login state unverified (blob seq #{blob_seq.inspect}, " \
+                  "durable #{row[:durable_seq].inspect}) — its first snapshot is trusted")
+      end
+    rescue StandardError => e
+      @log.call("flags: rebase failed #{e.class}: #{e.message}")
     end
 
     def apply_set(mirror, prefix, key, on)

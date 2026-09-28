@@ -3,8 +3,11 @@
 # A progression fact the game earned but never saved must not come back. The switch
 # reaches the server with the flags snapshot on a map change, the game dies before
 # the checkpoint that would have saved it, and the next session loads a blob without
-# it. Neither that session's save nor any later login may restore it.
-Autotest.scenario "a fact lost in a crash is never restored", flags: { PEMK_FLAG_STATE: "on" } do |s|
+# it. Neither that session's save nor any later login may restore it - and with
+# enforcement on, the server must judge the new session against what was SAVED, not
+# repair the switch back from the state the crash lost.
+Autotest.scenario "a fact lost in a crash is never restored",
+                  flags: { PEMK_FLAG_STATE: "on", PEMK_FLAG_ENFORCE: "on" } do |s|
   fact   = "sw:visited_berth_island"   # switch 51, fact tier in the manifest
   a      = s.player(:a)
   a.new_game("Crash")
@@ -28,4 +31,5 @@ Autotest.scenario "a fact lost in a crash is never restored", flags: { PEMK_FLAG
 
   a.relaunch
   s.check("nor does it come back at the next login") { a.get_switch!(51)["value"] == false }
+  s.check("the server never repaired it back") { s.server.grep(/flags: account #{id} REPAIR/).empty? }
 end

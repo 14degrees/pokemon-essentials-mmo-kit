@@ -16,6 +16,11 @@ module PEMK
       blob&.to_s
     end
 
+    # The flags seq the stored blob was saved at (nil: unknown, an older client).
+    def flags_seq(account_id)
+      @db[:characters].where(account_id: account_id).get(:flags_seq)
+    end
+
     # The last SERVER-VALIDATED position [map,x,y] for an account, or nil if none yet
     # (M4 Layer B: seeds the position audit's last_pos at login).
     def load_position(account_id)
@@ -29,7 +34,8 @@ module PEMK
     # unique account_id. +position+ (a validated [map,x,y]) is persisted alongside;
     # a nil/invalid position is OMITTED from the write so it never overwrites a
     # previously-stored position with NULL.
-    def store(account_id, blob:, trainer_id: nil, save_version: nil, wire_version: nil, position: nil, now: Time.now)
+    def store(account_id, blob:, trainer_id: nil, save_version: nil, wire_version: nil, position: nil,
+              flags_seq: nil, now: Time.now)
       raise ArgumentError, "empty blob" unless blob.is_a?(String) && !blob.empty?
 
       row = {
@@ -38,6 +44,7 @@ module PEMK
         trainer_id:   trainer_id,
         save_version: save_version,
         wire_version: wire_version,
+        flags_seq:    (flags_seq.is_a?(Integer) ? flags_seq : nil),
         updated_at:   now
       }
       if position.is_a?(Array) && position.size == 3 && position.all? { |n| n.is_a?(Integer) }

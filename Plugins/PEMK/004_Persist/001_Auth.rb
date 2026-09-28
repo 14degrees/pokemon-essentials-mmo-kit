@@ -14,6 +14,9 @@
 #===============================================================================
 module PEMK
   module Auth
+    # What this client can apply, told to the server at login: it only sends what a
+    # client says it can take (an older one never gets a :flag_repair).
+    CAPS = ["flag_repair"].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 
@@ -101,13 +104,15 @@ module PEMK
     # Non-interactive login for the mmo_config.txt dev shortcut: log in the
     # configured email, registering it first if it does not exist yet.
     def self.config_login(c, email, pw)
-      reply = send_and_wait(c, { :type => :login, :email => email, :password => pw }, [:login_ok, :login_err])
+      reply = send_and_wait(c, { :type => :login, :email => email, :password => pw, :caps => CAPS },
+                            [:login_ok, :login_err])
       if reply && reply[:type] == :login_err && reply[:reason] == "not_found"
         PEMK.log("auth: config account #{email.inspect} not found -> registering")
         reg = send_and_wait(c, { :type => :register, :email => email, :password => pw }, [:register_ok, :register_err])
         return PEMK.log("auth: config register failed (#{reg && reg[:reason]})") unless reg && reg[:type] == :register_ok
 
-        reply = send_and_wait(c, { :type => :login, :email => email, :password => pw }, [:login_ok, :login_err])
+        reply = send_and_wait(c, { :type => :login, :email => email, :password => pw, :caps => CAPS },
+                              [:login_ok, :login_err])
       end
       if reply && reply[:type] == :login_ok
         apply_login(reply)
@@ -118,7 +123,7 @@ module PEMK
 
     # Reconnect with a stored session token; true on success.
     def self.try_auth(c, token)
-      reply = send_and_wait(c, { :type => :auth, :token => token }, [:auth_ok, :auth_err])
+      reply = send_and_wait(c, { :type => :auth, :token => token, :caps => CAPS }, [:auth_ok, :auth_err])
       if reply && reply[:type] == :auth_ok
         apply_login(reply)
         return true
@@ -188,7 +193,10 @@ module PEMK
       token = load_token
       return :auth_err unless token && @account_id   # nothing to retry with
 
-      reply = send_and_wait(c, { :type => :auth, :token => token }, [:auth_ok, :auth_err], 3.0)
+      # :resume: this session goes on (nothing reloads), so the server keeps judging it
+      # as it was instead of starting over from the stored blob.
+      reply = send_and_wait(c, { :type => :auth, :token => token, :caps => CAPS, :resume => true },
+                            [:auth_ok, :auth_err], 3.0)
       return :net unless reply                        # timeout / transport — retry
       return :auth_err unless reply[:type] == :auth_ok && reply[:account_id] == @account_id
 

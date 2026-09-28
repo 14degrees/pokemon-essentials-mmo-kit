@@ -5,7 +5,8 @@
 # latch as a progression fact replayed the collection at every login (and crashed
 # the client on the combiner). A latch must never reach the ledger, and after a
 # relaunch both NPCs must behave as before, with no second Pokemon from a replay.
-Autotest.scenario "the fossil NPCs' latch is never banked", flags: { PEMK_FLAG_STATE: "on" } do |s|
+Autotest.scenario "the fossil NPCs' latch is never banked",
+                  flags: { PEMK_FLAG_STATE: "on", PEMK_FLAG_ENFORCE: "on" } do |s|
   institute = [11, 7, 9]   # map, then the tile inside the door
   a = s.player(:a)
   a.new_game("Fossil")
@@ -56,4 +57,7 @@ Autotest.scenario "the fossil NPCs' latch is never banked", flags: { PEMK_FLAG_S
   s.check("no NPC replays a collection") { lines.none? { |t| t.include?("finished reviving") || t.include?("obtained") } }
   species = a.party_species
   s.check("still one Omanyte and one Dracozolt") { species.count("OMANYTE") == 1 && species.count("DRACOZOLT") == 1 }
+  s.check("the game's own latch toggles were never repaired") do
+    s.server.grep(/flags: account #{s.account_id(a)} REPAIR/).empty?
+  end
 end
