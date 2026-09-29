@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-28T23:58:41",
+  "generated_at": "2026-09-29T02:18:12",
   "caps": {
     "max_level": 100,
     "iv_stat_limit": 31,
@@ -170944,25 +170944,246 @@
     }
   },
   "trainers": [
-    {"type": "CAMPER", "name": "Liam", "version": 0, "party": [["DIGLETT", 10], ["BONSLY", 11]]},
-    {"type": "LEADER_Brock", "name": "Brock", "version": 0, "party": [["GEODUDE", 12], ["ONIX", 14]]},
-    {"type": "TEAMROCKET_M", "name": "Grunt", "version": 1, "party": [["WEEPINBELL", 21]]},
-    {"type": "TEAMROCKET_F", "name": "Grunt", "version": 1, "party": [["BURMY", 19], ["WINGULL", 19], ["ELECTABUZZ", 20]]},
-    {"type": "YOUNGSTER", "name": "Ben", "version": 0, "party": [["RATTATA", 11], ["EKANS", 11]]},
-    {"type": "CAMPER", "name": "Jeff", "version": 0, "party": [["SPEAROW", 16], ["SENTRET", 16]]},
-    {"type": "CAMPER", "name": "Jeff", "version": 1, "party": [["FEAROW", 29], ["FURRET", 29]]},
-    {"type": "PICNICKER", "name": "Susie", "version": 0, "party": [["MEOWTH", 18]]},
-    {"type": "PICNICKER", "name": "Susie", "version": 1, "party": [["PERSIAN", 32]]},
-    {"type": "HIKER", "name": "Ford", "version": 0, "party": [["MACHOP", 19]]},
-    {"type": "FISHERMAN", "name": "Andrew", "version": 0, "party": [["MAGIKARP", 14], ["MAGIKARP", 18]]},
-    {"type": "BEAUTY", "name": "Bridget", "version": 0, "party": [["SKITTY", 18]]},
-    {"type": "LASS", "name": "Crissy", "version": 0, "party": [["PLUSLE", 17], ["MINUN", 17]]},
-    {"type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0, "party": [["TURTWIG", 19], ["CHIMCHAR", 19]]},
-    {"type": "POKEMONTRAINER_May", "name": "May", "version": 0, "party": [["COMBUSKEN", 19]]},
-    {"type": "SWIMMER2_F", "name": "Ariel", "version": 0, "party": [["STARYU", 15], ["GOLDEEN", 11]]},
-    {"type": "RIVAL1", "name": "Blue", "version": 0, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["BULBASAUR", 18]]},
-    {"type": "RIVAL1", "name": "Blue", "version": 1, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["CHARMANDER", 18]]},
-    {"type": "RIVAL1", "name": "Blue", "version": 2, "party": [["PIDGEOTTO", 17], ["RATTATA", 15], ["SQUIRTLE", 18]]},
-    {"type": "CHAMPION", "name": "Blue", "version": 0, "party": [["VENUSAUR", 63], ["CHARIZARD", 63], ["BLASTOISE", 63]]}
-  ]
+    {"type": "CAMPER", "name": "Liam", "version": 0, "party": [["DIGLETT", 10, null, ["SANDATTACK", "SCRATCH", "GROWL", "ASTONISH"]], ["BONSLY", 11, null, ["FAKETEARS", "COPYCAT", "FLAIL", "ROCKTHROW"]]]},
+    {"type": "LEADER_Brock", "name": "Brock", "version": 0, "party": [["GEODUDE", 12, null, ["DEFENSECURL", "HEADSMASH", "ROCKPOLISH", "ROCKTHROW"]], ["ONIX", 14, "SITRUSBERRY", ["HEADSMASH", "ROCKTHROW", "RAGE", "ROCKTOMB"]]]},
+    {"type": "TEAMROCKET_M", "name": "Grunt", "version": 1, "party": [["WEEPINBELL", 21, null, ["WRAP", "SLEEPPOWDER", "POISONPOWDER", "STUNSPORE"]]]},
+    {"type": "TEAMROCKET_F", "name": "Grunt", "version": 1, "party": [["BURMY", 19, null, ["PROTECT", "TACKLE", "BUGBITE"]], ["WINGULL", 19, null, ["WATERGUN", "QUICKATTACK", "SUPERSONIC", "WINGATTACK"]], ["ELECTABUZZ", 20, null, ["CHARGE", "SWIFT", "SHOCKWAVE", "THUNDERWAVE"]]]},
+    {"type": "YOUNGSTER", "name": "Ben", "version": 0, "party": [["RATTATA", 11, null, ["TAILWHIP", "QUICKATTACK", "FOCUSENERGY", "BITE"]], ["EKANS", 11, null, ["WRAP", "LEER", "POISONSTING", "BITE"]]]},
+    {"type": "CAMPER", "name": "Jeff", "version": 0, "party": [["SPEAROW", 16, null, ["LEER", "ASSURANCE", "FURYATTACK", "AERIALACE"]], ["SENTRET", 16, null, ["DEFENSECURL", "QUICKATTACK", "FURYSWIPES", "HELPINGHAND"]]]},
+    {"type": "CAMPER", "name": "Jeff", "version": 1, "party": [["FEAROW", 29, null, ["AERIALACE", "WINGATTACK", "TAKEDOWN", "AGILITY"]], ["FURRET", 29, null, ["FURYSWIPES", "HELPINGHAND", "FOLLOWME", "SLAM"]]]},
+    {"type": "PICNICKER", "name": "Susie", "version": 0, "party": [["MEOWTH", 18, null, ["FEINT", "SCRATCH", "PAYDAY", "BITE"]]]},
+    {"type": "PICNICKER", "name": "Susie", "version": 1, "party": [["PERSIAN", 32, null, ["BITE", "TAUNT", "ASSURANCE", "FURYSWIPES"]]]},
+    {"type": "HIKER", "name": "Ford", "version": 0, "party": [["MACHOP", 19, null, ["FOCUSENERGY", "REVENGE", "LOWSWEEP", "KNOCKOFF"]]]},
+    {"type": "FISHERMAN", "name": "Andrew", "version": 0, "party": [["MAGIKARP", 14, null, ["SPLASH"]], ["MAGIKARP", 18, null, ["SPLASH", "TACKLE"]]]},
+    {"type": "BEAUTY", "name": "Bridget", "version": 0, "party": [["SKITTY", 18, null, ["SING", "ATTRACT", "DISARMINGVOICE", "FURYSWIPES"]]]},
+    {"type": "LASS", "name": "Crissy", "version": 0, "party": [["PLUSLE", 17, null, ["SPARK", "ENCORE", "SKILLSWAP", "SWIFT"]], ["MINUN", 17, null, ["SPARK", "ENCORE", "SWITCHEROO", "SWIFT"]]]},
+    {"type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0, "party": [["TURTWIG", 19, null, ["LEAFAGE", "GROWTH", "RAZORLEAF", "CURSE"]], ["CHIMCHAR", 19, null, ["TAUNT", "POWERUPPUNCH", "FURYSWIPES", "FLAMEWHEEL"]]]},
+    {"type": "POKEMONTRAINER_May", "name": "May", "version": 0, "party": [["COMBUSKEN", 19, null, ["QUICKATTACK", "FLAMECHARGE", "DETECT", "SANDATTACK"]]]},
+    {"type": "SWIMMER2_F", "name": "Ariel", "version": 0, "party": [["STARYU", 15, null, ["HARDEN", "WATERGUN", "CONFUSERAY", "RAPIDSPIN"]], ["GOLDEEN", 11, null, ["PECK", "TAILWHIP", "SUPERSONIC", "WATERPULSE"]]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 0, "party": [["PIDGEOTTO", 17, null, ["SANDATTACK", "GUST", "QUICKATTACK", "WHIRLWIND"]], ["RATTATA", 15, null, ["QUICKATTACK", "FOCUSENERGY", "BITE", "LASERFOCUS"]], ["BULBASAUR", 18, null, ["RAZORLEAF", "POISONPOWDER", "SLEEPPOWDER", "SEEDBOMB"]]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 1, "party": [["PIDGEOTTO", 17, null, ["SANDATTACK", "GUST", "QUICKATTACK", "WHIRLWIND"]], ["RATTATA", 15, null, ["QUICKATTACK", "FOCUSENERGY", "BITE", "LASERFOCUS"]], ["CHARMANDER", 18, null, ["EMBER", "SMOKESCREEN", "DRAGONBREATH", "FIREFANG"]]]},
+    {"type": "RIVAL1", "name": "Blue", "version": 2, "party": [["PIDGEOTTO", 17, null, ["SANDATTACK", "GUST", "QUICKATTACK", "WHIRLWIND"]], ["RATTATA", 15, null, ["QUICKATTACK", "FOCUSENERGY", "BITE", "LASERFOCUS"]], ["SQUIRTLE", 18, null, ["RAPIDSPIN", "BITE", "WATERPULSE", "PROTECT"]]]},
+    {"type": "CHAMPION", "name": "Blue", "version": 0, "party": [["VENUSAUR", 63, "SITRUSBERRY", ["SYNTHESIS", "WORRYSEED", "DOUBLEEDGE", "SOLARBEAM"]], ["CHARIZARD", 63, "SITRUSBERRY", ["SCARYFACE", "FIRESPIN", "INFERNO", "FLAREBLITZ"]], ["BLASTOISE", 63, "SITRUSBERRY", ["SHELLSMASH", "IRONDEFENSE", "HYDROPUMP", "SKULLBASH"]]]}
+  ],
+  "trainer_types": {
+    "POKEMONTRAINER_Red": {
+      "base_money": 60
+    },
+    "POKEMONTRAINER_Leaf": {
+      "base_money": 60
+    },
+    "POKEMONTRAINER_Brendan": {
+      "base_money": 60
+    },
+    "POKEMONTRAINER_May": {
+      "base_money": 60
+    },
+    "RIVAL1": {
+      "base_money": 16
+    },
+    "RIVAL2": {
+      "base_money": 36
+    },
+    "AROMALADY": {
+      "base_money": 32
+    },
+    "BEAUTY": {
+      "base_money": 56
+    },
+    "BIKER": {
+      "base_money": 32
+    },
+    "BIRDKEEPER": {
+      "base_money": 32
+    },
+    "BUGCATCHER": {
+      "base_money": 16
+    },
+    "BURGLAR": {
+      "base_money": 88
+    },
+    "CHANNELER": {
+      "base_money": 32
+    },
+    "CUEBALL": {
+      "base_money": 24
+    },
+    "ENGINEER": {
+      "base_money": 48
+    },
+    "FISHERMAN": {
+      "base_money": 32
+    },
+    "GAMBLER": {
+      "base_money": 72
+    },
+    "GENTLEMAN": {
+      "base_money": 72
+    },
+    "HIKER": {
+      "base_money": 32
+    },
+    "JUGGLER": {
+      "base_money": 32
+    },
+    "LADY": {
+      "base_money": 160
+    },
+    "PAINTER": {
+      "base_money": 16
+    },
+    "POKEMANIAC": {
+      "base_money": 64
+    },
+    "POKEMONBREEDER": {
+      "base_money": 48
+    },
+    "PROFESSOR": {
+      "base_money": 100
+    },
+    "ROCKER": {
+      "base_money": 24
+    },
+    "RUINMANIAC": {
+      "base_money": 48
+    },
+    "SAILOR": {
+      "base_money": 32
+    },
+    "SCIENTIST": {
+      "base_money": 48
+    },
+    "SUPERNERD": {
+      "base_money": 48
+    },
+    "TAMER": {
+      "base_money": 40
+    },
+    "BLACKBELT": {
+      "base_money": 32
+    },
+    "CRUSHGIRL": {
+      "base_money": 24
+    },
+    "CAMPER": {
+      "base_money": 16
+    },
+    "PICNICKER": {
+      "base_money": 16
+    },
+    "COOLTRAINER_M": {
+      "base_money": 60
+    },
+    "COOLTRAINER_F": {
+      "base_money": 60
+    },
+    "YOUNGSTER": {
+      "base_money": 16
+    },
+    "LASS": {
+      "base_money": 16
+    },
+    "POKEMONRANGER_M": {
+      "base_money": 60
+    },
+    "POKEMONRANGER_F": {
+      "base_money": 60
+    },
+    "PSYCHIC_M": {
+      "base_money": 32
+    },
+    "PSYCHIC_F": {
+      "base_money": 32
+    },
+    "SWIMMER_M": {
+      "base_money": 16
+    },
+    "SWIMMER_F": {
+      "base_money": 16
+    },
+    "SWIMMER2_M": {
+      "base_money": 16
+    },
+    "SWIMMER2_F": {
+      "base_money": 16
+    },
+    "TUBER_M": {
+      "base_money": 4
+    },
+    "TUBER_F": {
+      "base_money": 4
+    },
+    "TUBER2_M": {
+      "base_money": 4
+    },
+    "TUBER2_F": {
+      "base_money": 4
+    },
+    "COOLCOUPLE": {
+      "base_money": 72
+    },
+    "CRUSHKIN": {
+      "base_money": 48
+    },
+    "SISANDBRO": {
+      "base_money": 16
+    },
+    "TWINS": {
+      "base_money": 24
+    },
+    "YOUNGCOUPLE": {
+      "base_money": 60
+    },
+    "TEAMROCKET_M": {
+      "base_money": 32
+    },
+    "TEAMROCKET_F": {
+      "base_money": 32
+    },
+    "ROCKETBOSS": {
+      "base_money": 100
+    },
+    "LEADER_Brock": {
+      "base_money": 100
+    },
+    "LEADER_Misty": {
+      "base_money": 100
+    },
+    "LEADER_Surge": {
+      "base_money": 100
+    },
+    "LEADER_Erika": {
+      "base_money": 100
+    },
+    "LEADER_Koga": {
+      "base_money": 100
+    },
+    "LEADER_Sabrina": {
+      "base_money": 100
+    },
+    "LEADER_Blaine": {
+      "base_money": 100
+    },
+    "LEADER_Giovanni": {
+      "base_money": 100
+    },
+    "ELITEFOUR_Lorelei": {
+      "base_money": 100
+    },
+    "ELITEFOUR_Bruno": {
+      "base_money": 100
+    },
+    "ELITEFOUR_Agatha": {
+      "base_money": 100
+    },
+    "ELITEFOUR_Lance": {
+      "base_money": 100
+    },
+    "CHAMPION": {
+      "base_money": 100
+    }
+  },
+  "money_rules": {
+    "start_money": 3000
+  }
 }

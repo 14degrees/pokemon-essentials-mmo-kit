@@ -186,16 +186,19 @@ These are live today and are fixed first.
 ## 7. Steps
 
 - **M0 - exports.**
-  - Each trainer type's base money, and each trainer version's party: levels, held items
-    and moves, for the foes and the partner.
-  - Per event: the battle rules (no money, can lose) and the phone rematch versions
-    (`Phone.battle` computes them at runtime; the export reads the rematch tables).
+  - Done 2026-09-29:
+    - the prices a clerk's Mart calls can see;
+    - each trainer type's base money;
+    - each trainer version's party with levels, held items and moves (the PBS moves, else
+      the engine's last four by level), for the foes and the partner;
+    - the phone rematch versions (every version from the start one, placed where
+      `Phone.battle` is called);
+    - the start money.
+  - Per event: the battle rules (no money, can lose).
   - Per event and common event: the money sources no request names (Change Gold with its
     sign and a constant or variable amount, money scripts, the minigame calls, the
     Frontier's BP awards) and whether each pays once.
   - Whether a plugin registers an `:on_trainer_load` handler (named as unbounded).
-  - The start money.
-  - Done: the prices a clerk's Mart calls can see.
 - **M0.5 - protocol safety.** Done 2026-09-29:
   - the starting money seed;
   - seq-bound replies applied as deltas;

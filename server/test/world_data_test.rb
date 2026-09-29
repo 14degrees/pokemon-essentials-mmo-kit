@@ -224,6 +224,18 @@ class WorldDataTest < Minitest::Test
     assert_nil w.start
     assert_nil w.home
     assert_empty w.connections
+    assert_nil w.money_sources, "an export from before money authority M0"
+  end
+
+  # Money authority M0: the events that raise a balance without a request.
+  def test_money_sources_pass_through
+    doc = sample.merge("money_sources" => { "events" => [
+      { "map" => 5, "event" => 1, "calls" => ["change_gold"], "fields" => ["money"], "amounts" => [500],
+        "computed" => false }
+    ] })
+    src = load(doc).money_sources
+    assert_equal [5, [500], false], src["events"].first.values_at("map", "amounts", "computed")
+    assert src.frozen? && src["events"].first.frozen?
   end
   # --- v3: the optional flag manifest ------------------------------------------
 
