@@ -146,7 +146,9 @@ module PEMK
     # under +canon+'s names) in the same transaction as the money, as a sale's leave it.
     # A client that lost the answer and logs in again gets both sides of the deal back
     # from the server. +items+ { item => qty }. -> false when there is no record yet (the
-    # first snapshot brings them).
+    # first snapshot brings them), or no judged totals yet: the first judgment may start
+    # from nothing (a new account), so a credit must explain them there - the bag and the
+    # counts still take them.
     # +paid+: bought with money, so a resale draws on money the server received (M1d).
     # Battle points are the client's word until BP authority: what they buy is counted
     # apart (bp_bought), units that never sell for money.
@@ -168,7 +170,7 @@ module PEMK
       fields = { bag: Sequel.pg_jsonb(bag), column => Sequel.pg_jsonb(count), updated_at: now }
       fields[:judged] = Sequel.pg_jsonb(judged) if judged
       @db[:inventory_snapshots].where(account_id: account_id).update(fields)
-      true
+      judged ? true : false
     end
 
     # A traded Pokemon's held item that battle points bought: the receiver's count takes it

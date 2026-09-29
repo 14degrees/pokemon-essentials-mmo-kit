@@ -104,17 +104,24 @@ class ServerItemLedgerTest < Minitest::Test
     end
   end
 
-  # +older+: an account from before item authority ran, its first snapshot the baseline
-  # (these tests' own premise); false - one the server saw born, judged from nothing.
+  # +older+: an account from before item authority ran, with a save - its first snapshot
+  # the baseline (these tests' own premise); false - one the server saw born, judged from
+  # nothing.
   def login(email, register: true, caps: %w[trade_redeliver], older: true)
     s = TCPSocket.new("127.0.0.1", @port)
     if register
       send_env(s, { type: :register, email: email, password: "password1" })
       recv_type(s, :register_ok, :register_err)
-      @db[:accounts].where(email: email).update(items_from_zero: false) if older
+      older_account(email) if older
     end
     send_env(s, { type: :login, email: email, password: "password1", caps: caps })
     [s, recv_type(s, :login_ok)]
+  end
+
+  def older_account(email)
+    id = @db[:accounts].where(email: email).get(:id)
+    @db[:accounts].where(id: id).update(items_from_zero: false)
+    PEMK::Characters.new(@db).store(id, blob: "\x04\b0".b) if @db[:characters].where(account_id: id).empty?
   end
 
   def st(pc: {}, mail: {}, held: nil, holders: {})
@@ -258,6 +265,29 @@ class ServerItemLedgerTest < Minitest::Test
     # The purchase joined the record: no credit is left over to explain ten more.
     inv(s, 3, { POKEBALL: 20, PREMIERBALL: 1 })
     assert_equal [["POKEBALL", -10]], owing(lo[:account_id])
+  end
+
+  # A new account buys before its first full snapshot: judged from nothing, the purchase
+  # is explained by a credit - the record had no judged totals to join.
+  def test_a_new_accounts_first_purchase_is_explained
+    start_server("PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login("il5n@t.co", older: false)
+    send_env(s, { type: :econ, field: :money, value: 5000, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    inv(s, 1, {}, nil)   # bag-only: nothing judged yet
+    send_env(s, { type: :shop_req, op: :buy, item: "POKEBALL", quantity: 10, unit_price: 200, map: 15, event: 5, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    inv(s, 2, { POKEBALL: 10, PREMIERBALL: 1 })
+    assert_empty owing(lo[:account_id])
+  end
+
+  # An older account that never saved has no history to trust: judged from nothing too.
+  def test_an_account_that_never_saved_starts_from_nothing
+    start_server
+    s, lo = login("il5s@t.co", older: false)
+    @db[:accounts].where(id: lo[:account_id]).update(items_from_zero: false)   # registered before it ran
+    inv(s, 1, { NUGGET: 1, RARECANDY: 3 })
+    assert_equal [["RARECANDY", -3]], owing(lo[:account_id]), "the Nugget is a local tier"
   end
 
   def test_a_bp_exchange_explains_its_item

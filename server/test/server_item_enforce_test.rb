@@ -103,7 +103,9 @@ class ServerItemEnforceTest < Minitest::Test
     if register
       send_env(s, { type: :register, email: email, password: "password1" })
       recv_type(s, :register_ok, :register_err)
-      @db[:accounts].where(email: email).update(items_from_zero: false)
+      id = @db[:accounts].where(email: email).get(:id)
+      @db[:accounts].where(id: id).update(items_from_zero: false)
+      PEMK::Characters.new(@db).store(id, blob: "\x04\b0".b) if @db[:characters].where(account_id: id).empty?
     end
     send_env(s, { type: :login, email: email, password: "password1", caps: caps })
     [s, recv_type(s, :login_ok)]

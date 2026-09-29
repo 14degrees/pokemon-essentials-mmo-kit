@@ -571,5 +571,14 @@ A second review of those fixes found, all fixed too:
 - One claim named all three of the rival's branches. The export now records the battle
   calls naming each trainer; the trainers a claim names from one event must share one.
 - A failed void no longer ends a login: the claims wait for the next.
+Its verification then found, fixed as well:
+- Dropping conjured units lowered the BP count (the decrease also settled their debts):
+  the units the server never recognized - the item's open debts - now leave first.
+- An account that never saved gets no trusted baseline either, whenever it registered.
+- A purchase before a new account's first judgment is credited (the record had no judged
+  totals to join), so judging it from nothing owes nothing for it.
+- The boot names an export that does not say which trainers share a battle.
 Left as they are: a claim that waited past the save holding its battle can be voided by
-a crash before the next frame (narrow); the daily allowances count voided claims.
+a crash before the next frame (narrow); the daily allowances count voided claims; an
+older account with a save keeps one trusted baseline, whenever its first full snapshot
+comes.

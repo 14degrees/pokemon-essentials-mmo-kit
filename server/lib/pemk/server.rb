@@ -621,8 +621,9 @@ module PEMK
             pc_start_items.each { |i, n| allow[i] += n }   # the PC item storage appeared, with its start items
           end
           @item_ledger.judge(account_id, base, after, allow: allow, local: @judged_local)
+          owed = @item_ledger.open_debts(account_id)   # before this decrease settles any
           settle_spent(account_id, base, after, hidden) if @item_enforce
-          lower_bp(account_id, base, after, hidden)
+          lower_bp(account_id, base, after, hidden, owed)
           fields[:vanished] = Sequel.pg_jsonb(vanished)
         end
         fields[:pc_started] = true if stores[:pc].is_a?(Hash)   # a storage already there got its items long ago
@@ -655,22 +656,29 @@ module PEMK
     end
 
     # {} for an account registered while item authority ran (its inventory starts from
-    # nothing the server did not see), nil for an older one.
+    # nothing the server did not see), or one that never saved (no history to trust, when
+    # it was registered does not matter); nil for an older one with a save.
     def from_zero(account_id)
-      @db[:accounts].where(id: account_id).get(:items_from_zero) ? {} : nil
+      return {} if @db[:accounts].where(id: account_id).get(:items_from_zero)
+
+      @db[:characters].where(account_id: account_id).empty? ? {} : nil
     end
 
     # Money authority: the units battle points bought leave their count only as the
     # possession really loses units - used, tossed, given away - never as a Pokemon holding
     # one drops out of a snapshot for a while: it may come back, or arrive elsewhere
-    # carrying the mark.
-    def lower_bp(account_id, base, after, hidden)
+    # carrying the mark. And the units the server never recognized (+owed+, the item's open
+    # debts) leave first: dropping conjured units frees no BP unit.
+    def lower_bp(account_id, base, after, hidden, owed)
       row = @db[:inventory_snapshots].where(account_id: account_id).first
       bp = (row && row[:bp_bought]).to_h
       return if bp.empty?
 
-      left = bp.to_h { |item, n| [item, n.to_i - [base[item].to_i - after[item].to_i - hidden[item].to_i, 0].max] }
-               .select { |_, n| n.positive? }
+      left = bp.to_h do |item, n|
+        lost = base[item].to_i - after[item].to_i - hidden[item].to_i - owed[item].to_i
+        [item, n.to_i - [lost, 0].max]
+      end
+      left = left.select { |_, n| n.positive? }
       @db[:inventory_snapshots].where(account_id: account_id).update(bp_bought: Sequel.pg_jsonb(left)) unless left == bp
     end
 
@@ -1981,6 +1989,7 @@ module PEMK
       gaps << "no wild mints (D2 not on), so a wild battle's Pay Day is only bounded" unless @config.battle_enforce_encounters == :on
       again = @world.repeatable_trainers
       gaps << "the exports do not say which trainer battles can be fought again" if again.nil?
+      gaps << "the exports do not say which trainers share a battle" unless @world.battle_calls_known?
       @log.call("server: money claims cannot rely on: #{gaps.join('; ')}") unless gaps.empty?
       return if again.nil? || again.empty?
 
@@ -2011,6 +2020,7 @@ module PEMK
       end
       out << "the exports place no trainer battle" unless @world.trainers_known?
       out << "the exports do not say which trainer battles can be fought again" if @world.repeatable_trainers.nil?
+      out << "the exports do not say which trainers share a battle" unless @world.battle_calls_known?
       out << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
       out << "the battle data has no start money" unless @battle.start_money.is_a?(Integer)
       sources = unbounded_money_sources

@@ -235,6 +235,11 @@ module PEMK
         "versions" => versions }
     end
 
+    # Does the export say which trainers share a battle (the calls naming each)?
+    def battle_calls_known?
+      @trainer_places.any? { |_, events| events.any? { |_, list| list.any? { |t| t[7] } } }
+    end
+
     # Does any placement battle a phone rematch?
     def rematches_placed?
       @trainer_places.any? { |_, events| events.any? { |_, list| list.any? { |t| t[3] } } }

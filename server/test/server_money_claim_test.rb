@@ -794,9 +794,12 @@ class ServerMoneyClaimTest < Minitest::Test
     @db[:inventory_snapshots].insert(account_id: acc, bag: Sequel.pg_jsonb({}), last_seq: 1, updated_at: Time.now,
                                      bp_bought: Sequel.pg_jsonb({ "PROTEIN" => 3 }))
     count = -> { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
-    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, Hash.new(0).merge("PROTEIN" => 2))
+    none = Hash.new(0)
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, none.merge("PROTEIN" => 2), none)
     assert_equal({ "PROTEIN" => 3 }, count.call, "two went with Pokemon that dropped out: not spent")
-    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, Hash.new(0))
+    @server.send(:lower_bp, acc, { "PROTEIN" => 6 }, { "PROTEIN" => 3 }, none, none.merge("PROTEIN" => 3))
+    assert_equal({ "PROTEIN" => 3 }, count.call, "three conjured units dropped: the ones never recognized leave first")
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, none, none)
     assert_equal({ "PROTEIN" => 1 }, count.call, "two used")
   end
 
