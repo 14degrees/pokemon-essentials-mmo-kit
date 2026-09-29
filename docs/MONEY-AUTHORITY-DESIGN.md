@@ -295,6 +295,11 @@ at `:on_start_battle`, and marking the trainers beaten before M1 as paid.
 
 ### M1b - the shadow balance
 
+Built 2026-09-29 (`money_shadow`), with two simplifications: a boot with the setting off
+empties the table (no epoch), and the claim's econ seq is not checked against the seed yet.
+The reseed ordering (claims and a position before the reseed frame) comes with the facts
+flush.
+
 - Two numbers per account: S, the balance M2 would keep, and C, the client's balance as
   the server last knew it (`money_shadow`). Only fresh, acked frames of the account's
   current connection count: replays, rejected frames and frames of a replaced session

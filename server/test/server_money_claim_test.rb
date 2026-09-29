@@ -189,6 +189,26 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal ["void", 0], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "the voided one, asked again"
   end
 
+  def money(s, value, seq)
+    send_env(s, { type: :econ, field: :money, value: value, seq: seq })
+    recv_type(s, :econ_ack, :econ_rej)
+  end
+
+  # M1b: the shadow balance explains a claimed prize, and names money nothing explains.
+  def test_the_shadow_balance
+    start_server
+    s, lo = login
+    money(s, 3000, 1)                      # a new account's starting money, seeded at login
+    claim(s, 1, [ANNA], 400)
+    money(s, 3400, 2)                      # the prize
+    money(s, 4000, 3)                      # 600 from nowhere
+    money(s, 4000, 4)                      # carried, not new
+    sleep 0.3
+    lines = logs.grep(/money: account #{lo[:account_id]} UNEXPLAINED/)
+    assert_equal ["UNEXPLAINED +600"], lines.map { |l| l[/UNEXPLAINED \+\d+/] }
+    assert_equal [3400, 4000], @db[:money_shadow].where(account_id: lo[:account_id]).get(%i[s c])
+  end
+
   def test_the_login_says_how_claims_are_judged
     start_server
     _, lo = login

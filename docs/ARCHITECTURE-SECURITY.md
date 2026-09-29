@@ -582,6 +582,15 @@ cadence) or `SUSPECT` (over the bound), and the boot names what the claims canno
 in this configuration. Autotest 077 fights Camper Liam and finds his claim paid for exactly
 what the engine paid.
 
+The server also keeps, per account, the balance enforcement would keep (S: the prizes it
+would pay, its own deals, the spends) next to the client's balance as it last knew it (C).
+A money frame above S logs what no claim or deal explains and was not already above S -
+`money: ... UNEXPLAINED +N` - so money carried from frame to frame is logged once, and
+money conjured again after a spend is logged again. A purchase S cannot cover is logged
+`BOUGHT-UNEXPLAINED`. A new account starts from the exported start money, a fresh login
+adopts the ledger's balance, and a boot with the setting off drops the measurement, so a
+stretch without it never counts.
+
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
 On by default (`off` turns it off). The swap is the server's, but the Pokemon itself

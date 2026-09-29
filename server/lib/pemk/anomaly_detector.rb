@@ -47,8 +47,9 @@ module PEMK
                                       # (E4): an honest client applies it on its next free frame
       "money_suspect"       => 2,    # a prize claimed over the bound its trainers and facts
                                      # allow (money authority M1)
-      "money_claim"         => 3     # prizes claimed away from their trainers, for trainers the
+      "money_claim"         => 3,    # prizes claimed away from their trainers, for trainers the
                                      # exports do not place, or rematches out of order or cadence
+      "money_unexplained"   => 3     # money a frame shows that no claim or deal explains (M1b)
     }.freeze
 
     FABRICATED_WILD_MIN = 5   # >= this many client-origin wild-table mons to report
