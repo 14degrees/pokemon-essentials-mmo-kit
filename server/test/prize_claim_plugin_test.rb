@@ -101,10 +101,19 @@ class PrizeClaimPluginTest < Minitest::Test
     $sent.clear
     WildBattle.new([], [], { 1 => false, 2 => false, 3 => 0 }).pbGainMoney
     out[:no_coins] = claims.call.length
+    # before a battle, the facts a claim is judged by go out
+    module PEMK
+      module Inventory; def self.mark; $sent << :inv; end; end
+      module Sync; def self.mark_mon; $sent << :mon; end; def self.flush_primitives; $sent << :flush; end; end
+    end
+    $sent.clear
+    P.before_battle
+    out[:facts] = $sent.dup
     # off: nothing is claimed
     P.adopt_mode("off"); $sent.clear
     b.pbGainMoney
-    out[:off] = claims.call.length
+    P.before_battle
+    out[:off] = claims.call.length + ($sent - [:engine_paid]).length
     print out.inspect
   RUBY
 
@@ -127,6 +136,7 @@ class PrizeClaimPluginTest < Minitest::Test
     assert_equal [:payday, [4242], 120, nil], o[:wild], "the coins scattered, doubled by Happy Hour"
     assert_equal [:payday, true, 50], o[:trainer_payday]
     assert_equal 0, o[:no_coins]
+    assert_equal %i[pos inv mon flush], o[:facts], "position, bag, party, then the flush"
     assert_equal 0, o[:off]
   end
 end

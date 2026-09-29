@@ -142,6 +142,19 @@ module PEMK
       PEMK.log("prize: claim #{n} judged #{msg[:verdict]} (#{msg[:accepted]})")
     end
 
+    # :on_start_battle, before the battle sets in_battle (which holds every flush): the
+    # facts a claim is judged by reach the server now - where the player stands, the bag
+    # and the Pokemon holding items (an Amulet Coin given just before), the party and its
+    # moves (Happy Hour, Pay Day). Unchanged channels send nothing.
+    def before_battle
+      return unless active? && online?
+
+      (PEMK::Presence.emit_now(:pos) rescue nil)
+      (PEMK::Inventory.mark rescue nil)
+      (PEMK::Sync.mark_mon rescue nil)
+      (PEMK::Sync.flush_primitives rescue nil)
+    end
+
     # A new connection's reseed: every claim still unanswered goes out now, before the
     # money frame that shows it.
     def flush
@@ -221,4 +234,7 @@ if defined?(Battle) && !Battle.method_defined?(:pemk_orig_pbGainMoney)
   end
 end
 
-EventHandlers.add(:on_frame_update, :pemk_prize_claims, proc { PEMK::PrizeClaim.tick }) if defined?(EventHandlers)
+if defined?(EventHandlers)
+  EventHandlers.add(:on_frame_update, :pemk_prize_claims, proc { PEMK::PrizeClaim.tick })
+  EventHandlers.add(:on_start_battle, :pemk_battle_facts, proc { PEMK::PrizeClaim.before_battle })
+end
