@@ -373,3 +373,89 @@ only behind a server flag.
   their position first, the gate can judge every client.
 - A partner trainer's version is lost: `partner[2]` holds the trainer's random ID and is
   read back as a version.
+
+
+## 10. M3 in detail (revised 2026-09-29 after its review)
+
+The first draft made the shadow balance S the ceiling: a money frame above S refused. Its
+review showed that the premise - an honest frame is always at or below S - is false:
+
+- S only falls and never catches up with the ledger L. A sale of a local tier moves L and
+  not S, and in the demo the local tiers include ordinary Mart stock (Potions, Great
+  Balls, Repels, stones). A Potion bought at a Mart then resold is an unowned source.
+- A claim first judged on a new connection is judged before that connection's team
+  report, so Pay Day and Happy Hour are bounded at nothing.
+- A frame can be judged before its claim (a "wait", a claim over its frame budget).
+- Two demo trainers are fought again by design: Champion Blue (the win sets only a
+  temporary switch) and a Shadow Grunt (self-switch A only under a condition).
+
+It also found two ways to fill S without a battle, fixed in shadow before anything else
+(2026-09-29):
+- a trainer battle's Pay Day could cite one paid prize any number of times (a prize now
+  backs one Pay Day claim: money_claims.payday_at);
+- a wild Pay Day needed only a mint, handed out on request (a claim is now bounded by one
+  use per second since its mint, and by a daily allowance, `PEMK_MONEY_PAYDAY_DAILY`,
+  default $20,000, until the battle records prove each use).
+
+And that rematches were exported for a game whose phone never offers one (now exported
+only when the settings or an event can turn rematches on), and that REPEAT used the
+client's stated amount (now the server's bound).
+
+### The revised model: one balance
+
+- Under `on`, an accepted claim is a `Ledger#adjust` in the same transaction as its
+  verdict (reason `prize:...` / `payday:...`); a void is the reverse adjust. The server
+  pays, and L is the only balance. S stays a shadow-only measurement.
+- A fresh money frame above L is refused with L; the client adopts it through the
+  seq-bound, delta-applying reply path. A frame at or below L is a spend, as today.
+- A refusal is recorded under its seq with `last_seq` advanced, so the next frame is not
+  taken for a replay of it.
+- A frame is never judged ahead of its claims: no money frame leaves while a prize claim
+  is unanswered (a hold like the shop doubt's), `Shop.ask` waits for them too, and a claim
+  over its frame budget gets "wait" instead of silence.
+- A Pay Day claim, or one stating Happy Hour, gets "wait" until the connection's first
+  team report; a reconnect's reseed sends position, bag and team before re-sending claims.
+- Claims made while disconnected are flagged by the client and judged without the place
+  check (logged); the once-per-battle rule still binds. A resume does not seed the
+  position from the save, and the last map of each account is kept across restarts.
+- `handle_save` seals the claims recorded before it, as gifts are sealed, so a crash
+  after a checkpoint does not void a prize the save holds.
+- Under `on`, a login without the money-claims capability is refused with an update
+  message: an older client claims nothing, and every prize would be refused.
+
+### Sales under `on`
+
+- A sale of units the server itself sold to the account (a per-item bought count, as for
+  battle points) is owned: a resale of a Mart Potion is not an unowned source.
+- A sale of other local-tier units uses the daily allowance `PEMK_MONEY_LOCAL_DAILY`;
+  beyond it the clerk refuses the sale before any unit leaves (no lost items). Unset, the
+  allowance is 0 and the blocker stands.
+
+### Blockers (the boot names each, and runs as shadow while one is left)
+
+1. D2 on, and Pay Day proven by battle records (D7), or its daily allowance set.
+2. The shop gate on; item authority on.
+3. Local sales: the allowance set, or every local item modelled.
+4. Money sources the exports name that no request bounds: Change Gold increases and money
+   scripts (until the event money gate), Triple Triad sales (until they are server
+   transactions), battle points (until BP authority, or BP-bought units unsellable).
+5. Repeatable trainer placements: the export marks a placement repeatable when its
+   winning branch does not set its self-switch unconditionally; each is a blocker until
+   the server can bound its repeats (Champion Blue, the Shadow Grunt in the demo).
+6. The exports: trainer placements, base money and the start money.
+7. `PEMK_POS_ENFORCE=on` is not a blocker: a battle already pays once, and placement only
+   makes "being there" cost a walk.
+
+In the demo, 3, 4 (Triple Triad, battle points) and 5 block `on`; the rest are settings.
+
+### Cutover
+
+The first `on` boot takes L as every account's balance and seals every unsealed claim.
+Money conjured before is kept; a D5 review of large unattributed histories is the answer
+to that. The trainers an account beat before M1 can be claimed once more (one sum of
+one-shot prizes per existing account) until the flag mirror marks them paid.
+
+### Tests
+
+The `on` autotest needs a test-only waiver for blockers 3 and 4, and the harness grant
+must run on the account's mailbox and set the balance exactly.
