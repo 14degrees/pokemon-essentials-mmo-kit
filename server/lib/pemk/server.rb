@@ -84,7 +84,10 @@ module PEMK
       @resim_sweeping   = false
       # M4 Layer D D7 part 1: the battle-record corpus ingest (shadow + on).
       if @config.battle_enforce_rng != :off
-        @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log)
+        # Trainer proof P2: under `on` a trainer battle is seeded too, one seed per placement.
+        @trainer_battles = TrainerBattles.new(@db) if @config.battle_enforce_rng == :on
+        @battle_records = BattleRecords.new(@db, mode: @config.battle_enforce_rng, logger: @log,
+                                                 trainer_battles: @trainer_battles)
       end
       # Audit item 4: switches/variables/self-switches detection shadow.
       if @config.flag_state != :off
@@ -300,7 +303,7 @@ module PEMK
       # honest client and bounds a flood to the blob cap per second.
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
       flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4], gift_req: [10, 1.0], gift_applied: [10, 1.0],
-      encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
+      encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2], trainer_battle_req: [10, 2],
       team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2], shop_req: [10, 2], money_claim: [10, 2],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
     }.freeze
@@ -339,6 +342,7 @@ module PEMK
       when :catch_report then handle_catch_report(conn, env, authed)
       when :battle_end_report then handle_battle_end(conn, env, authed)
       when :battle_record then handle_battle_record(env, body, authed)
+      when :trainer_battle_req then handle_trainer_battle_req(conn, env, authed)
       when :flags then handle_flags(conn, env, authed)
       when :flag_delta then handle_flag_delta(env, authed)
       when :gift_claim then handle_gift_claim(env, authed)
@@ -2300,6 +2304,35 @@ module PEMK
     # no reply — instrumentation, never adjudicates). The opaque body is stored
     # verbatim for part 2's headless replay; ingest runs on the account mailbox so the
     # seed's roll row (recorded there) is guaranteed visible.
+    # Trainer proof P2 (docs/TRAINER-PROOF-DESIGN.md): the seed of a trainer battle about
+    # to start. The placement must be one the export knows, on the map the player stands
+    # on; the answer is that placement's open seed - the same however often it is asked.
+    # Anything else is denied, and the battle runs unseeded (recorded in shadow).
+    def handle_trainer_battle_req(conn, env, account_id)
+      nonce = env[:nonce]
+      deny = ->(why) { reply(conn, type: :trainer_battle_deny, nonce: nonce, reason: why) }
+      return deny.("off") unless @trainer_battles
+
+      t = Array(env[:trainers])
+      type, name, version, map, event = t[0].is_a?(Array) ? t[0] : []
+      unless t.length == 1 && type.is_a?(String) && name.is_a?(String) &&
+             [version, map, event].all? { |v| v.is_a?(Integer) }
+        return deny.("bad")
+      end
+      return deny.("unknown") unless @world.trainer_place(map, event, type, name, version)
+
+      here = conn.data[:last_pos]
+      return deny.("not_here") unless here.is_a?(Array) && here[0] == map
+
+      @mailbox.submit(account_id) do
+        seed = @trainer_battles.seed_for(account_id, map, event, type, name, version)
+        @reactor.post { reply(conn, type: :trainer_battle_seed, nonce: nonce, seed: seed) if @reactor.alive?(conn) }
+      rescue StandardError => e
+        @log.call("trainerseed: account #{account_id} #{e.class}: #{e.message}")
+        @reactor.post { deny.("error") if @reactor.alive?(conn) }
+      end
+    end
+
     def handle_battle_record(env, body, account_id)
       return unless @battle_records
 
@@ -2883,6 +2916,7 @@ module PEMK
         shop_recheck: !@shop_deals.nil?,                                     # ... a deal given up on is asked again
         money_claims: money_mode,                                             # money authority: how prizes are claimed
         save_ack: true,                                                      # each save is answered written or not
+        trainer_seed: !@trainer_battles.nil?,                                # a trainer battle asks for its seed first
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
