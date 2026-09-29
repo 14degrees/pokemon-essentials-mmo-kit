@@ -40,6 +40,7 @@ module PEMK
       @db       = DB.connect(@config.database_url, max_connections: WORKERS + 2)
       @accounts   = Accounts.new(@db)
       @sessions   = Sessions.new(@db)
+      @bans       = Bans.new(@db)   # moderation: set and lifted by the operator (bin/pemk_admin.rb)
       @characters = Characters.new(@db)
       # Badges become monotonic once the sovereignty layer is on: they are progression,
       # and a reloaded save pushing 0 must not erase them.
@@ -223,6 +224,7 @@ module PEMK
         @log.call("server: WARNING the world export predates the water marks - a surfer is not checked against " \
                   "walls and a dive reads as an impossible warp (one debug launch regenerates it)")
       end
+      @log.call("server: moderation - #{@bans.in_force_list.size} account(s) banned (bin/pemk_admin.rb)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
       @pool.start
@@ -403,6 +405,13 @@ module PEMK
       addr  = conn.addr
       @pool.submit do
         acct, err = @accounts.authenticate(email, pw)
+        # Banned: told until when and why, once the password is right (a stranger learns
+        # nothing), and no session is issued.
+        if acct && (ban = @bans.active(acct[:id]))
+          @log.call("server: login refused for account #{acct[:id]}: banned")
+          @reactor.post { reply(conn, type: :login_err, reason: "banned", **Bans.notice(ban)) }
+          next
+        end
         if acct
           # A password login takes the account over: the sessions it replaces must not
           # come back with their old tokens (an older client ignores :session_replaced
@@ -442,6 +451,12 @@ module PEMK
       fresh = env[:resume] != true
       @pool.submit do
         account_id = @sessions.resolve(token)
+        # A ban revokes the sessions; one set in the table by hand still stops a resume.
+        if account_id && (ban = @bans.active(account_id))
+          @log.call("server: resume refused for account #{account_id}: banned")
+          @reactor.post { reply(conn, type: :auth_err, reason: "banned", **Bans.notice(ban)) }
+          next
+        end
         if account_id
           # Same serialization as handle_login: read behind the account's mailbox.
           @reactor.post do
@@ -2622,10 +2637,48 @@ module PEMK
 
     def on_tick
       sweep_trades
+      maybe_ban_sweep
       maybe_anomaly_sweep
       maybe_resim_sweep
       maybe_item_sweep
       maybe_prune_deals
+    end
+
+    BAN_SWEEP_SEC = 10
+
+    # Moderation: an account banned while it plays is told until when and why, and let
+    # go, within BAN_SWEEP_SEC. The bans are read on a worker; the connections are
+    # closed here, on the reactor.
+    def maybe_ban_sweep
+      return if @ban_sweeping || @online.empty?
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @last_ban_sweep && (now - @last_ban_sweep) < BAN_SWEEP_SEC
+
+      @last_ban_sweep = now
+      @ban_sweeping   = true
+      ids = @online.keys
+      @pool.submit do
+        banned = begin
+          @bans.banned_among(ids).to_h { |id| [id, @bans.active(id)] }
+        rescue StandardError => e
+          @log.call("server: ban sweep failed #{e.class}: #{e.message}")
+          {}
+        end
+        @reactor.post do
+          @ban_sweeping = false
+          banned.each { |id, ban| let_go_banned(id, ban) }
+        end
+      end
+    end
+
+    def let_go_banned(account_id, ban)
+      conn = @online[account_id]
+      return unless conn && ban
+
+      @log.call("server: account #{account_id} is banned - connection closed")
+      reply(conn, type: :banned, **Bans.notice(ban))
+      @reactor.finish(conn)
     end
 
     DEAL_PRUNE_SEC = 3600

@@ -221,6 +221,26 @@ before restarting the server: the export picks up the new format on its own.
 Details and limits: [`docs/ARCHITECTURE-SECURITY.md`](ARCHITECTURE-SECURITY.md)
 (section *Story state*).
 
+## Moderation: banning an account
+
+The detections above name accounts; this is how you act on one. From `server/`, with
+the server's `DATABASE_URL` (an account is named by its id or its email):
+
+```bash
+bundle exec ruby bin/pemk_admin.rb show player@example.com          # the account, its bans, its flags
+bundle exec ruby bin/pemk_admin.rb ban player@example.com --days 7 duplicating items
+bundle exec ruby bin/pemk_admin.rb ban 42                           # no end: until lifted
+bundle exec ruby bin/pemk_admin.rb bans                             # the bans in force
+bundle exec ruby bin/pemk_admin.rb unban 42
+```
+
+A ban ends the account's sessions at once. A player who is online is told until when
+and why, and the server closes the connection within ten seconds; the game then stays
+offline. The next login is refused with the same notice, once the password is right,
+so a stranger learns nothing. Nothing is deleted: a lifted ban stays on record with
+who set it and who lifted it (`PEMK_OPERATOR` names you in the record; the default
+is your shell user). A game older than this feature just shows "Login failed: banned".
+
 ## Understand what you're running (deeper docs)
 
 - **Project overview & what works today:** [`README.md`](../README.md)
