@@ -6,3 +6,5 @@
 # Shell scripts anywhere (tools/autopilot/ap.sh runs under Git Bash): a CRLF
 # checkout breaks them.
 *.sh         text eol=lf
+# Battle-record fixtures are raw record bodies: never text, never converted.
+/server/test/fixtures/**/*.bin binary
