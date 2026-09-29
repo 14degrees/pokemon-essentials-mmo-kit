@@ -101,6 +101,26 @@ randomness the client did not choose - before the prize counts.
   Brock on the same seed (and, the same choices, the same battle), each walked and
   replayed from the seed, the AI's draws included, to a match.
 
+### P3 (2026-09-29): the verdict, in shadow
+
+- A prize claim names the seed its battle ran on (`:money_claim ... seed`); the server
+  links the claim to the seed's row when the row is this account's and names the claim's
+  own trainer (migration 043: `money_claims.trainer_battle_id`, `proof`).
+- The replay tool (`bin/pemk_replay.rb`) also checks the player's team against the
+  server's own (`ProofChecks`): each Pokemon registered, owned, active, its first-sight
+  lock kept (IVs - or 31, Hyper Training - shiny, gender), no more EXP than the server has
+  seen; it writes `replay_prize`, `replay_detail` and `team_check`. As a daemon it wakes on
+  the server's `NOTIFY pemk_replay` for each record, not at its next poll.
+- The live server's sweep (every 5 s) gives each linked claim its verdict: **proven** (a
+  won record, replayed to a match, the player's team the server's, the replay's prize the
+  claimed amount - the placement's seed is then spent), **refuted** (the draws are not the
+  seed's, the replay or the team disagrees, another prize), **unprovable** (no won record
+  in ten minutes, a record that cannot be replayed, an unregistered Pokemon). One record
+  proves one claim. Shadow: `trainerproof: ... PROVEN` / `WOULD-HOLD (reason)`, nothing
+  held.
+- Autotest 085: an honest win over Camper Liam is proven and spends the seed; a modified
+  client that asks Brock's seed, makes the battle up and claims his prize is refuted.
+
 ## 4. What stays open
 
 - Lookahead: a client knows its seed before it plays, so it can simulate the battle ahead
