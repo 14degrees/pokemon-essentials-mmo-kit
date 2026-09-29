@@ -46,7 +46,9 @@ Autotest.scenario "a clerk that sets its prices is paid them", flags: { PEMK_SHO
   s.check("the Great Ball was sold") { a.get_item!("GREATBALL")["quantity"].zero? }
   s.check("the server took the stall's $5,000 and paid the day's $#{sell}") { ledger.call == 1000 + sell }
   s.check("the ledger says why") do
-    %w[shop:buy:SILPHSCOPEx1 shop:sell:GREATBALLx1].all? do |why|
+    # With item authority on, the demo's Great Ball is a local tier (an event adds it by
+    # itself): its sale is labelled so.
+    [%w[shop:buy:SILPHSCOPEx1], %w[shop:sell:GREATBALLx1 shop:sell:local:GREATBALLx1]].all? do |why|
       s.db[:economy_ledger].where(account_id: id, reason: why).count == 1
     end
   end

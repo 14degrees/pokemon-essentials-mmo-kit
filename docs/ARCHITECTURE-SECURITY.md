@@ -589,7 +589,15 @@ A money frame above S logs what no claim or deal explains and was not already ab
 money conjured again after a spend is logged again. A purchase S cannot cover is logged
 `BOUGHT-UNEXPLAINED`. A new account starts from the exported start money, a fresh login
 adopts the ledger's balance, and a boot with the setting off drops the measurement, so a
-stretch without it never counts.
+stretch without it never counts. A trainer fought again after its prize was paid (a crash
+that undid the save's record of the win, or a save edit re-arming it) is refused as a
+repeat, and the money that follows is logged `REPEAT`, outside the review queue: the flag
+audit is the one that sees save edits.
+
+A sale of items the server never judged - a local tier such as the Pickup table's Nuggets,
+or any sale without item authority - moves the client's balance but not S: the log says
+`UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.
+Enforcement cannot trust that money until those sources are modelled or capped.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
