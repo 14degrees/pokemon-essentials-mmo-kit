@@ -581,7 +581,7 @@ against the exports and records its verdict:
 
 The export also marks the battles the game lets be fought again (the win turns on nothing
 a later page waits for, or only under a further condition - the demo's Champion Blue and
-repeat Grunt): the boot names them, and a re-fight's refusal says so.
+repeat Grunt): the boot names them, and each pays at most once per 20 minutes.
 
 A claim is judged with what its connection reported, and answered "wait" (nothing recorded,
 the client asks again) before that: its position; for Pay Day or a stated Happy Hour, its
@@ -630,6 +630,13 @@ with money counts them (battle points are the client's word until BP authority),
 spends the count first, and each snapshot lowers it to what the possession may still hold
 (a bag-only one with the stores last known), so a Mart Potion resold is owned and a used
 one conjured back is not.
+
+Sam's rules (2026-09-29), logged `WOULD-REFUSE` until enforcement ships: the units bought
+with battle points are counted apart and never sell for money (a sale takes the others
+first; past them it is refused, `bp_bought`); the local units the server never sold sell
+for at most `PEMK_MONEY_LOCAL_DAILY` a day (default $10,000; `local_daily`); and a battle
+the game lets be fought again pays at most once per 20 minutes (`cadence`, its prize
+logged as a repeat).
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
