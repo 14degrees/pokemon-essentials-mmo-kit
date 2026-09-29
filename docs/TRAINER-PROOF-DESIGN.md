@@ -83,6 +83,24 @@ randomness the client did not choose - before the prize counts.
   `$game_map`); it now has one, set to the recorded map, and the corpus's caught
   battles that failed on it replay to a match.
 
+### P2 (2026-09-29): the seed
+
+- Under `PEMK_BATTLE_ENFORCE_RNG=on` the login says trainer battles are seeded
+  (`trainer_seed`). A trainer loaded for a battle asks its placement's seed at once
+  (`:trainer_battle_req {nonce, trainers: [[type, name, version, map, event]]}`); the
+  battle's start waits for the answer, at most two seconds, behind the transition.
+- The server answers only a placement the export knows, on the map the player stands on,
+  and one trainer at a time (single battles first): `:trainer_battle_seed {nonce, seed}`,
+  else `:trainer_battle_deny {nonce, reason}` and the battle is recorded unseeded.
+- The seed is THE open seed of (account, placement) - migration 042, `trainer_battles`,
+  one open row per placement under a unique index: asked again, the same answer; a new one
+  only once a win on it is proven (P3) or after a day. Every attempt's record names it.
+- The record leaves at `pbEndOfBattle` entry, before the prize claim; the ingest binds it
+  to its seed row (`battle_records.trainer_battle_id`) and walks it.
+- Autotest 084: Liam, then Brock twice under `on` - three seeded battles, the two against
+  Brock on the same seed (and, the same choices, the same battle), each walked and
+  replayed from the seed, the AI's draws included, to a match.
+
 ## 4. What stays open
 
 - Lookahead: a client knows its seed before it plays, so it can simulate the battle ahead
@@ -92,10 +110,10 @@ randomness the client did not choose - before the prize counts.
 - Placements the export cannot rebuild (a trainer built by a script, edited in
   `:on_trainer_load`) are marked unprovable.
 
-## 5. Decisions for Sam
+## 5. Sam's decisions (2026-09-29)
 
 - **Unproven claims under `on`** (no answer to the seed request, an unprovable
-  placement): held and paid from a small daily allowance (proposed), paid under the caps
-  as today, or refused. Old clients are refused at login, as M3 does.
-- **Lookahead:** accept it for trainers as for wild battles (proposed, first), or reveal
-  per round later.
+  placement): **held, and paid from a small daily allowance**. Old clients are refused at
+  login, as M3 does.
+- **Lookahead: accepted for now**, as for wild battles; revealing each round's draws
+  after the player's choices stays possible later.

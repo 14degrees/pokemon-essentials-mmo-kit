@@ -59,6 +59,8 @@ module PEMK
         NetStatus.on_banned(msg)         # the operator suspended the account: offline, told why
       when :save_ok, :save_err
         Sync.on_save_reply(msg)          # a pushed save written, or to be sent again
+      when :trainer_battle_seed, :trainer_battle_deny
+        BattleRng.on_trainer_seed(msg)   # a trainer battle's seed (trainer proof P2)
       when :flag_repair
         Flags.note_repair(msg)           # step 5: owned values back to the server's
       when :inv_correct
