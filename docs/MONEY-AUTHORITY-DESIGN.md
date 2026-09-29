@@ -580,9 +580,9 @@ Its verification then found, fixed as well:
   still gets one trusted baseline when it is turned on - the operator's cutover.
 - A purchase before a new account's first judgment is credited (the record had no judged
   totals to join), so judging it from nothing owes nothing for it.
-- The boot names an export that does not say which trainers share a battle; and no claim
-  names two versions of one trainer (a rival's branches, a phone contact's rematches),
-  battle calls or not.
+- The boot names an export that does not say which trainers share a battle; and where the
+  export names no calls (a phone contact's rematches, an older export), a claim names one
+  version of each trainer at most - two grunts of one name in one call stay one battle.
 Left as they are: a claim that waited past the save holding its battle can be voided by
 a crash before the next frame (narrow); the daily allowances count voided claims; an
 older account with a save keeps one trusted baseline, whenever its first full snapshot

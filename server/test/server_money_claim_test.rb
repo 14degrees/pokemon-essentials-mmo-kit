@@ -37,6 +37,8 @@ class ServerMoneyClaimTest < Minitest::Test
         { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "Amy", "version" => 0, "calls" => [0] },
         { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "May", "version" => 0, "calls" => [0] },
         { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "Kay", "version" => 0, "calls" => [1] },
+        { "event_id" => 24, "x" => 9, "y" => 9, "type" => "YOUNGSTER", "name" => "Joey", "version" => 1, "calls" => [0] },
+        { "event_id" => 24, "x" => 9, "y" => 9, "type" => "YOUNGSTER", "name" => "Joey", "version" => 2, "calls" => [0] },
         { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 },
         { "event_id" => 3, "x" => 5, "y" => 5, "type" => "CHAMPION", "name" => "Blue", "version" => 0, "repeatable" => true },
         { "event_id" => 20, "x" => 6, "y" => 6, "type" => "YOUNGSTER", "name" => "Ben", "version" => 0 },
@@ -73,7 +75,9 @@ class ServerMoneyClaimTest < Minitest::Test
     { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] },
     { "type" => "TWINS", "name" => "Amy", "version" => 0, "party" => [["PLUSLE", 10, nil, %w[SPARK]]] },
     { "type" => "TWINS", "name" => "May", "version" => 0, "party" => [["MINUN", 10, nil, %w[SPARK]]] },
-    { "type" => "TWINS", "name" => "Kay", "version" => 0, "party" => [["PICHU", 10, nil, %w[SPARK]]] }
+    { "type" => "TWINS", "name" => "Kay", "version" => 0, "party" => [["PICHU", 10, nil, %w[SPARK]]] },
+    { "type" => "YOUNGSTER", "name" => "Joey", "version" => 1, "party" => [["RATTATA", 10, nil, %w[TACKLE]]] },
+    { "type" => "YOUNGSTER", "name" => "Joey", "version" => 2, "party" => [["RATTATA", 10, nil, %w[TACKLE]]] }
   ]
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
@@ -810,11 +814,15 @@ class ServerMoneyClaimTest < Minitest::Test
   def test_a_claim_is_one_battle
     start_server
     s, = login
-    assert_equal "bad", claim(s, 1, [blue(0), blue(1)], 1320)[:verdict], "two versions of one trainer: two branches"
+    assert_equal ["unknown", 0], claim(s, 1, [blue(0), blue(1)], 1320).values_at(:verdict, :accepted), "two branches"
     apart = [["TWINS", "Amy", 0, 31, 23], ["TWINS", "Kay", 0, 31, 23]]
     assert_equal ["unknown", 0], claim(s, 3, apart, 320).values_at(:verdict, :accepted), "two of the event's battles"
     twins = [["TWINS", "Amy", 0, 31, 23], ["TWINS", "May", 0, 31, 23]]
     assert_equal ["paid", 320], claim(s, 2, twins, 320).values_at(:verdict, :accepted), "10 x 16, twice"
+    grunts = [["YOUNGSTER", "Joey", 1, 31, 24], ["YOUNGSTER", "Joey", 2, 31, 24]]
+    assert_equal ["paid", 320], claim(s, 4, grunts, 320).values_at(:verdict, :accepted), "two of one name, one call"
+    assert_equal ["unknown", 0], claim(s, 5, [jeff(0), jeff(1)], 736).values_at(:verdict, :accepted),
+                 "a phone contact's versions: no calls, one version at most"
   end
 
   # Nothing is bought back where there is no Mart.

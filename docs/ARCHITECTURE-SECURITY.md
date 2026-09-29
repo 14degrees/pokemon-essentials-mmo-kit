@@ -660,8 +660,8 @@ client). The server then:
 - judges a new account's first snapshot from an empty inventory (an account registered
   while item authority runs, or one that had never played when the flag came), buys items
   back only at a Mart, counts phone rematches in the daily allowance, and takes one battle
-  per claim (never two versions of one trainer; the trainers one event names share a
-  battle call);
+  per claim (the trainers one event names share a battle call; without calls, one
+  version of each trainer);
 - lowers the BP count only by what the possession really lost, conjured units first.
 
 The client holds its money frames while this session's prizes wait for their verdicts (a

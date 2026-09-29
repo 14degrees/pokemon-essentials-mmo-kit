@@ -1791,9 +1791,8 @@ module PEMK
         [t[0].to_s[0, 32], t[1].to_s[0, 32], t[2], t[3], t[4]]
       end
       # One battle names each trainer once - the same one placed on two events (a double
-      # battle's pair) is not two prizes, and no battle faces two versions of one trainer
-      # (a rival's branches, a phone contact's rematches).
-      out.map { |t| t[0, 2] }.uniq.length == out.length ? out : nil
+      # battle's pair) is not two prizes. (Two versions of one trainer: one_battle?.)
+      out.map { |t| t[0, 3] }.uniq.length == out.length ? out : nil
     end
 
     def money_cap
@@ -1861,14 +1860,17 @@ module PEMK
     end
 
     # The trainers one event battles in separate calls (a rival's branches) are not one
-    # battle's foes: those a claim names from the same event must share a battle call. An
-    # export that does not say lets them be.
+    # battle's foes: those a claim names from the same event must share a battle call -
+    # two grunts of one name in one call are one battle. Where the export names no calls (a
+    # phone contact's rematches, an older export), one version of each trainer at most.
     def one_battle?(trainers)
       trainers.group_by { |t| [t[3], t[4]] }.all? do |(tmap, event), group|
         next true if group.length < 2
 
         calls = group.map { |type, name, version, _, _| (@world.trainer_place(tmap, event, type, name, version) || {})["calls"] }
-        calls.include?(nil) || !calls.reduce(:&).empty?
+        next !calls.reduce(:&).empty? unless calls.include?(nil)
+
+        group.map { |t| t[0, 2] }.uniq.length == group.length
       end
     end
 
