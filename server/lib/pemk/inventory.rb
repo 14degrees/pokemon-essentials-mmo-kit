@@ -153,16 +153,45 @@ module PEMK
 
       bag    = row[:bag].to_h
       judged = row[:judged] && row[:judged].to_h
+      bought = row[:bought].to_h
       items.each do |item, qty|
         next unless qty.to_i.positive?
 
         bag[item.to_s] = bag[item.to_s].to_i + qty
         judged[canon.call(item.to_s)] = judged[canon.call(item.to_s)].to_i + qty if judged
+        bought[canon.call(item.to_s)] = bought[canon.call(item.to_s)].to_i + qty
       end
-      fields = { bag: Sequel.pg_jsonb(bag), updated_at: now }
+      fields = { bag: Sequel.pg_jsonb(bag), bought: Sequel.pg_jsonb(bought), updated_at: now }
       fields[:judged] = Sequel.pg_jsonb(judged) if judged
       @db[:inventory_snapshots].where(account_id: account_id).update(fields)
       true
+    end
+
+    # A sale spends the units the server sold first. -> how many of +qty+ it had sold.
+    def take_bought(account_id, item, qty, now: Time.now)
+      row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
+      bought = (row && row[:bought]).to_h
+      have = bought[item.to_s].to_i
+      return 0 unless have.positive?
+
+      used = [have, qty].min
+      bought[item.to_s] = have - used
+      bought.delete(item.to_s) unless bought[item.to_s].positive?
+      @db[:inventory_snapshots].where(account_id: account_id).update(bought: Sequel.pg_jsonb(bought), updated_at: now)
+      used
+    end
+
+    # A judged snapshot: no more bought units than the possession holds (+totals+, by
+    # canonical id) - one used or tossed is gone, whichever unit it was.
+    def clamp_bought(account_id, totals)
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      bought = (row && row[:bought]).to_h
+      return if bought.empty?
+
+      clamped = bought.to_h { |item, n| [item, [n.to_i, totals[item].to_i].min] }.select { |_, n| n.positive? }
+      return if clamped == bought
+
+      @db[:inventory_snapshots].where(account_id: account_id).update(bought: Sequel.pg_jsonb(clamped))
     end
 
     # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record
