@@ -48,6 +48,30 @@ module PEMK
       notify(:replaced, _INTL("This account was just logged in from another window or device, so this one is now offline. Restart the game to play online here."))
     end
 
+    # The server's operator suspended the account (a :banned frame, or a resume refused
+    # as banned): stay offline for good and say until when, and why.
+    def on_banned(msg)
+      @terminal     = true
+      @reconnect_at = nil
+      PEMK.log("net: the account is banned -> offline for good")
+      notify(:banned, ban_text(msg))
+    end
+
+    # "This account is suspended until 2026-10-01 12:00. Reason: ..." (no end: until
+    # the server's operator lifts it).
+    def ban_text(msg)
+      ends, note = ban_terms(msg)
+      text = ends ? _INTL("This account is suspended until {1}.", ends) : _INTL("This account is suspended.")
+      note ? text + " " + _INTL("Reason: {1}", note) : text
+    end
+
+    # -> [the end as the player's local time | nil, the reason as plain text | nil]
+    def ban_terms(msg)
+      t = msg.is_a?(Hash) ? msg[:until] : nil
+      ends = t.is_a?(Integer) && t.positive? ? (Time.at(t).strftime("%Y-%m-%d %H:%M") rescue nil) : nil
+      [ends, (PEMK.plain_text(msg.is_a?(Hash) ? msg[:note] : nil, 200) rescue nil)]
+    end
+
     # Dispatch saw DISCONNECTED. Only meaningful once logged in (boot-time
     # offline is handled by Auth.login_blocking).
     def on_disconnect
@@ -115,6 +139,9 @@ module PEMK
         PEMK.shutdown
         PEMK.log("net: relogin rejected -> reconnection stopped (restart required)")
         notify(nil, _INTL("Your online session has expired. Please restart the game to log in again."))
+      when :banned
+        PEMK.shutdown
+        on_banned(PEMK::Auth.last_refusal)
       else # :net — transport/timeout; never leave an unauthenticated socket alive
         PEMK.shutdown
         @backoff      = [@backoff * 2, RECONNECT_MAX].min
