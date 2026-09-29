@@ -59,6 +59,7 @@ def replay_pass(db, dry:, limit:)
     tally[result[:verdict]] += 1
     line = "  ##{row[:id]} #{row[:mode]} outcome=#{row[:outcome]} rounds=#{row[:rounds]}: #{result[:verdict].to_s.upcase}"
     line += " — #{result[:detail]}" if result[:detail]
+    line += " (prize #{result[:prize]})" if result[:prize]   # a trainer battle: what the engine paid
     puts line
   end
   tally
