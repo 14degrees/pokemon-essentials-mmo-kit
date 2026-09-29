@@ -118,6 +118,33 @@ class BattleDataTest < Minitest::Test
     assert_nil @bd.trainer_party("CAMPER", "Liam", 0)   # a pre-D4 export has none
   end
 
+  # Money authority M0: a trainer's prize is its strongest Pokemon's level x its type's
+  # base money (Battle#pbGainMoney); the moves say whether a foe could double it.
+  def test_trainer_prizes_and_start_money
+    bd = PEMK::BattleData.new(write_json(FIX.merge(
+      "trainer_types" => { "CAMPER" => { "base_money" => 16 }, "ODD" => { "base_money" => -1 } },
+      "money_rules" => { "start_money" => 3000 },
+      "trainers" => [
+        { "type" => "CAMPER", "name" => "Liam", "version" => 0,
+          "party" => [["DIGLETT", 10, nil, %w[SCRATCH]], ["MEOWTH", 11, "AMULETCOIN", %w[PAYDAY HAPPYHOUR]]] },
+        { "type" => "CAMPER", "name" => "Old", "version" => 0, "party" => [["DIGLETT", 12]] },
+        { "type" => "ODD", "name" => "Odd", "version" => 0, "party" => [["DIGLETT", 5]] }
+      ]
+    )))
+    assert_equal 176, bd.trainer_prize("CAMPER", "Liam", 0), "11 x 16"
+    assert_equal 192, bd.trainer_prize(:CAMPER, "Old", 0)
+    assert_nil bd.trainer_prize("ODD", "Odd", 0), "a base money the engine cannot have"
+    assert_nil bd.trainer_prize("CAMPER", "Nobody", 0)
+    assert_equal [["DIGLETT", 10, nil, %w[SCRATCH]], ["MEOWTH", 11, "AMULETCOIN", %w[PAYDAY HAPPYHOUR]]],
+                 bd.trainer_party("CAMPER", "Liam", 0), "the held items and moves ride along"
+    assert_equal true, bd.trainer_knows_any?("CAMPER", "Liam", 0, %w[HAPPYHOUR METRONOME])
+    assert_equal false, bd.trainer_knows_any?("CAMPER", "Liam", 0, %w[METRONOME])
+    assert_nil bd.trainer_knows_any?("CAMPER", "Old", 0, %w[HAPPYHOUR]), "no moves listed"
+    assert_equal 3000, bd.start_money
+    assert_nil @bd.start_money, "an export from before M0"
+    assert_nil @bd.trainer_base_money("CAMPER")
+  end
+
   def test_absent_export_is_a_no_op
     path = File.join(Dir.tmpdir, "pemk_absent_battle_data_#{Process.pid}.json")
     File.delete(path) if File.exist?(path)
