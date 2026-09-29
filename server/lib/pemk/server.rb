@@ -555,6 +555,7 @@ module PEMK
             # ... and a payout it shows has reached the record, reported applied or not.
             @gift_grants&.seal_arrived(account_id, increases(prev, bag, stores, status[1]))
             judge_items(account_id, prev, bag, stores, status[1]) if @item_ledger
+            clamp_bought(account_id) if @judged_local
           end
         end
         # E4: while units are owed, each judged snapshot brings the correction for its seq.
@@ -600,6 +601,22 @@ module PEMK
       end
     rescue StandardError => e
       @log.call("inv: WARNING item judgment failed for account #{account_id} #{e.class}: #{e.message}")
+    end
+
+    # Money authority: no more units the server sold than the possession may still hold -
+    # after every snapshot, a bag-only one too (the stores last known stand in for the
+    # rest), so units used there cannot come back conjured and pass for sold ones. A
+    # savepoint: the count never costs the snapshot.
+    def clamp_bought(account_id)
+      @db.transaction(savepoint: true) do
+        row = @db[:inventory_snapshots].where(account_id: account_id).first
+        next unless row && row[:bought]
+
+        stores = { pc: row[:pc].to_h, mail: row[:mailbox].to_h, held: row[:held].to_h }
+        @inventory.clamp_bought(account_id, canonical(Inventory.totals(row[:bag].to_h, stores)))
+      end
+    rescue StandardError => e
+      @log.call("inv: WARNING bought count failed for account #{account_id} #{e.class}: #{e.message}")
     end
 
     # E4: what left the possession settles its open debts - except what a vanished Pokemon
@@ -1359,11 +1376,17 @@ module PEMK
             # for money no source it owns explains - labelled, and left out of the shadow
             # balance.
             local = op == :sell && @judged_local&.include?(canon(item))
-            label = local ? "#{shop}:sell:local:#{item}x#{qty}" : "#{shop}:#{op}:#{item}x#{qty}"
+            # ... except the units the server itself sold the account (a resold Mart Potion).
+            resold = local ? @inventory.take_bought(account_id, canon(item), qty) : 0
+            label = local && resold < qty ? "#{shop}:sell:local:#{item}x#{qty}" : "#{shop}:#{op}:#{item}x#{qty}"
             st, value, = @ledger.adjust(account_id, field, delta, reason: label)
             if st == :ack
               balance = value
-              owned = op == :buy || (@judged_local && !local)
+              owned = if op == :buy then delta
+                      elsif !@judged_local then 0                  # no item authority: nothing is judged
+                      elsif local then unit * resold
+                      else delta
+                      end
               shadow_deal(account_id, delta, value - delta, item, owned: owned) if field == :money
             else
               why = bp ? "bp" : "money"
@@ -1771,13 +1794,14 @@ module PEMK
 
     # A deal the server made moved the money: the shadow balance moves with it. A
     # purchase it cannot cover spent money no source explains.
-    # M1d: +owned+ false - a sale of items the server never judged: the client's balance
-    # moves, the shadow balance does not, and the log names the unowned source.
-    def shadow_deal(account_id, delta, before, item, owned: true)
+    # M1d: +owned+ - the part of a deal the server owns. A sale of items it never judged (nor
+    # sold itself) moves the client's balance, not the shadow balance, and is named.
+    def shadow_deal(account_id, delta, before, item, owned: delta)
       return unless @money_shadow
 
       short = @money_shadow.deal(account_id, delta, before: before, credit: owned)
-      @log.call("money: account #{account_id} UNOWNED-SOURCE +#{delta} (sold #{item}, never judged)") unless owned
+      unowned = delta - owned
+      @log.call("money: account #{account_id} UNOWNED-SOURCE +#{unowned} (sold #{item}, never judged)") if unowned.positive?
       return unless short.positive?
 
       @log.call("money: account #{account_id} BOUGHT-UNEXPLAINED #{item} with #{short} no source explains")

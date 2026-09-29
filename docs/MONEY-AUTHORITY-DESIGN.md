@@ -351,8 +351,12 @@ an item bought with battle points, goes to a counter per account and day, logged
 `UNOWNED-SOURCE +n` and labelled in the ledger (`shop:sell:local:ITEM`).
 
 Built 2026-09-29 for the local tiers: the sale is labelled, logged `UNOWNED-SOURCE`, and
-moves C without S; without item authority every sale is unowned. Still to come: the items
-bought with battle points (they need a per-item count in the record) and the daily counter.
+moves C without S; without item authority every sale is unowned. The units the server
+itself sold the account are not local, whatever their tier: a gated purchase counts them
+per item (`inventory_snapshots.bought`), a sale spends that count first, and every snapshot
+lowers it to what the possession may still hold - with a bag-only snapshot, the bag and the
+stores last known, so units used there and conjured back never pass for sold ones. Still
+to come: the items bought with battle points and the daily counter.
 
 ### Preconditions
 
@@ -382,7 +386,8 @@ review showed that the premise - an honest frame is always at or below S - is fa
 
 - S only falls and never catches up with the ledger L. A sale of a local tier moves L and
   not S, and in the demo the local tiers include ordinary Mart stock (Potions, Great
-  Balls, Repels, stones). A Potion bought at a Mart then resold is an unowned source.
+  Balls, Repels, stones). A Potion bought at a Mart then resold is an unowned source
+  (since fixed: the units the server sold are counted, see M1d).
 - A claim first judged on a new connection is judged before that connection's team
   report, so Pay Day and Happy Hour are bounded at nothing.
 - A frame can be judged before its claim (a "wait", a claim over its frame budget).
@@ -425,8 +430,8 @@ client's stated amount (now the server's bound).
 
 ### Sales under `on`
 
-- A sale of units the server itself sold to the account (a per-item bought count, as for
-  battle points) is owned: a resale of a Mart Potion is not an unowned source.
+- A sale of units the server itself sold to the account (the per-item bought count, built
+  in shadow) is owned: a resale of a Mart Potion is not an unowned source.
 - A sale of other local-tier units uses the daily allowance `PEMK_MONEY_LOCAL_DAILY`;
   beyond it the clerk refuses the sale before any unit leaves (no lost items). Unset, the
   allowance is 0 and the blocker stands.

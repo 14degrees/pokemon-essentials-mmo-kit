@@ -341,6 +341,59 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal "unproven", payday(s2, 3, 60, trainer_claim: 60)[:verdict], "its prize was refused"
   end
 
+  # A local tier the server itself sold: reselling those units is money it owns (the demo's
+  # Potions are a local tier); any more than it sold is not.
+  def test_a_resale_of_what_the_server_sold
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    money(s, 1000, 1)
+    send_env(s, { type: :inv, bag: { POTION: 2 }, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["POTION"])
+    potion = @server.instance_variable_get(:@battle).item("POTION")
+    send_env(s, { type: :shop_req, op: :buy, item: "POTION", quantity: 2, unit_price: potion["price"], map: 32,
+                  event: 20, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    sold = potion["sell_price"]
+    assert_equal :shop_grant, sell(s, "POTION", 1, sold, 2)[:type]
+    assert_equal :shop_grant, sell(s, "POTION", 3, sold, 3)[:type]
+    reasons = @db[:economy_ledger].where(account_id: lo[:account_id]).order(:id).select_map(:reason)
+    assert_equal ["shop:sell:POTIONx1", "shop:sell:local:POTIONx3"], reasons.grep(/sell/)
+    s_now, c_now = @db[:money_shadow].where(account_id: lo[:account_id]).get(%i[s c])
+    assert_equal 1000 - 2 * potion["price"] + 2 * sold, s_now, "the two it sold count"
+    assert_equal s_now + 2 * sold, c_now, "two more than it sold do not"
+    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{2 * sold} (sold POTION") })
+  end
+
+  # Units used where a bag-only snapshot shows it are gone from the count: conjured back,
+  # they are not the ones the server sold. The stores last known still hold theirs.
+  def test_a_bag_only_snapshot_lowers_the_units_sold
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    money(s, 1000, 1)
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["POTION"])
+    potion = @server.instance_variable_get(:@battle).item("POTION")
+    send_env(s, { type: :shop_req, op: :buy, item: "POTION", quantity: 3, unit_price: potion["price"], map: 32,
+                  event: 20, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    bought = -> { @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bought).to_h }
+    stores = { pc: { POTION: 1 }, mail: {}, held: {}, holders: {} }
+    send_env(s, { type: :inv, bag: { POTION: 1 }, stores: stores, seq: 2 })   # one used, one in the PC
+    recv_type(s, :inv_ack)
+    assert_equal({ "POTION" => 2 }, bought.call)
+    send_env(s, { type: :inv, bag: {}, seq: 3 })   # the bag's used too - the PC's stays
+    recv_type(s, :inv_ack)
+    assert_equal({ "POTION" => 1 }, bought.call)
+    send_env(s, { type: :inv, bag: { POTION: 2 }, seq: 4 })   # two appear
+    recv_type(s, :inv_ack)
+    assert_equal({ "POTION" => 1 }, bought.call, "what appears is never a unit it sold")
+    sold = potion["sell_price"]
+    assert_equal :shop_grant, sell(s, "POTION", 2, sold, 2)[:type]
+    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{sold} (sold POTION") }, "one of the two was its own")
+  end
+
   def test_the_login_says_how_claims_are_judged
     start_server
     _, lo = login

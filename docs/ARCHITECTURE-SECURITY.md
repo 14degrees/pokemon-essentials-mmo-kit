@@ -611,7 +611,11 @@ in a game whose settings or events can turn rematches on.
 A sale of items the server never judged - a local tier such as the Pickup table's Nuggets,
 or any sale without item authority - moves the client's balance but not S: the log says
 `UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.
-Enforcement cannot trust that money until those sources are modelled or capped.
+Enforcement cannot trust that money until those sources are modelled or capped. The units
+the server itself sold the account are its own, whatever their tier: a gated purchase
+counts them, a sale spends the count first, and each snapshot lowers it to what the
+possession may still hold (a bag-only one with the stores last known), so a Mart Potion
+resold is owned and a used one conjured back is not.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
