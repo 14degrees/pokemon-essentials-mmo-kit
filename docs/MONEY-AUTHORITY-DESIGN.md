@@ -352,11 +352,14 @@ an item bought with battle points, goes to a counter per account and day, logged
 
 Built 2026-09-29 for the local tiers: the sale is labelled, logged `UNOWNED-SOURCE`, and
 moves C without S; without item authority every sale is unowned. The units the server
-itself sold the account are not local, whatever their tier: a gated purchase counts them
-per item (`inventory_snapshots.bought`), a sale spends that count first, and every snapshot
-lowers it to what the possession may still hold - with a bag-only snapshot, the bag and the
-stores last known, so units used there and conjured back never pass for sold ones. Still
-to come: the items bought with battle points and the daily counter.
+itself sold the account are not local, whatever their tier: a gated purchase paid with
+money counts them per item (`inventory_snapshots.bought`), a sale spends that count first,
+and every snapshot lowers it to what the possession may still hold - with a bag-only
+snapshot, the bag and the stores last known, so units used there and conjured back never
+pass for sold ones. Battle points are the client's word until BP authority, so what they
+buy is not counted: conjured BP spent at the exchange, then sold at a Mart, stays unowned
+for a local tier. Still to come: the judged items bought with battle points (their sale is
+owned today - blocker 4) and the daily counter.
 
 ### Preconditions
 

@@ -42,7 +42,9 @@ class ServerMoneyClaimTest < Minitest::Test
       ] },
       "32" => { "name" => "Town", "width" => 20, "height" => 20, "objects" => [
         { "kind" => "mart", "items" => %w[POTION], "prices" => {}, "price_options" => {}, "sell_options" => {},
-          "dynamic" => false, "x" => 9, "y" => 9, "event_id" => 20 }
+          "dynamic" => false, "x" => 9, "y" => 9, "event_id" => 20 },
+        { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "price_options" => {}, "dynamic" => false,
+          "x" => 11, "y" => 9, "event_id" => 22 }
       ] }
     }
   ))
@@ -446,6 +448,26 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal 1000 - 2 * potion["price"] + 2 * sold, s_now, "the two it sold count"
     assert_equal s_now + 2 * sold, c_now, "two more than it sold do not"
     assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{2 * sold} (sold POTION") })
+  end
+
+  # Battle points are the client's word until BP authority: what they buy is not money the
+  # server received, and its resale is not owned.
+  def test_a_resale_of_what_battle_points_bought
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    money(s, 1000, 1)
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["PROTEIN"])
+    protein = @server.instance_variable_get(:@battle).item("PROTEIN")
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 1, unit_price: protein["bp_price"], bp: true,
+                  map: 32, event: 22, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    assert_equal({}, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bought).to_h)
+    assert_equal :shop_grant, sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:type]
+    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{protein['sell_price']} (sold PROTEIN") })
   end
 
   # Units used where a bag-only snapshot shows it are gone from the count: conjured back,

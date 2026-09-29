@@ -1404,7 +1404,7 @@ module PEMK
             bonus  = bp ? 0 : premier_bonus(item, qty)
             bought = { item => qty }
             bought["PREMIERBALL"] = bonus if bonus.positive?
-            unless on && @inventory.add_bought(account_id, bought, canon: method(:canon))
+            unless on && @inventory.add_bought(account_id, bought, canon: method(:canon), paid: !bp)
               ref = "#{env[:map]}:#{env[:event]}"
               bought.each { |i, n| credit_item(account_id, i, n, shop, ref) }
             end
