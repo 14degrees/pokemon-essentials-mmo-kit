@@ -148,52 +148,61 @@ module PEMK
     # from the server. +items+ { item => qty }. -> false when there is no record yet (the
     # first snapshot brings them).
     # +paid+: bought with money, so a resale draws on money the server received (M1d).
-    # Battle points are the client's word until BP authority: what they buy is not counted.
+    # Battle points are the client's word until BP authority: what they buy is counted
+    # apart (bp_bought), units that never sell for money.
     def add_bought(account_id, items, canon: ->(i) { i }, paid: true, now: Time.now)
       row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
       return false unless row && row[:bag]
 
+      column = paid ? :bought : :bp_bought
       bag    = row[:bag].to_h
       judged = row[:judged] && row[:judged].to_h
-      bought = row[:bought].to_h
+      count  = row[column].to_h
       items.each do |item, qty|
         next unless qty.to_i.positive?
 
         bag[item.to_s] = bag[item.to_s].to_i + qty
         judged[canon.call(item.to_s)] = judged[canon.call(item.to_s)].to_i + qty if judged
-        bought[canon.call(item.to_s)] = bought[canon.call(item.to_s)].to_i + qty if paid
+        count[canon.call(item.to_s)] = count[canon.call(item.to_s)].to_i + qty
       end
-      fields = { bag: Sequel.pg_jsonb(bag), bought: Sequel.pg_jsonb(bought), updated_at: now }
+      fields = { bag: Sequel.pg_jsonb(bag), column => Sequel.pg_jsonb(count), updated_at: now }
       fields[:judged] = Sequel.pg_jsonb(judged) if judged
       @db[:inventory_snapshots].where(account_id: account_id).update(fields)
       true
     end
 
     # A sale spends the units the server sold first. -> how many of +qty+ it had sold.
-    def take_bought(account_id, item, qty, now: Time.now)
+    # +column+ :bp_bought takes the units battle points bought instead.
+    def take_bought(account_id, item, qty, column: :bought, now: Time.now)
+      return 0 unless qty.positive?
+
       row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
-      bought = (row && row[:bought]).to_h
+      bought = (row && row[column]).to_h
       have = bought[item.to_s].to_i
       return 0 unless have.positive?
 
       used = [have, qty].min
       bought[item.to_s] = have - used
       bought.delete(item.to_s) unless bought[item.to_s].positive?
-      @db[:inventory_snapshots].where(account_id: account_id).update(bought: Sequel.pg_jsonb(bought), updated_at: now)
+      @db[:inventory_snapshots].where(account_id: account_id).update(column => Sequel.pg_jsonb(bought), updated_at: now)
       used
     end
 
     # A judged snapshot: no more bought units than the possession holds (+totals+, by
-    # canonical id) - one used or tossed is gone, whichever unit it was.
+    # canonical id) - one used or tossed is gone, whichever unit it was. Both counts.
     def clamp_bought(account_id, totals)
       row = @db[:inventory_snapshots].where(account_id: account_id).first
-      bought = (row && row[:bought]).to_h
-      return if bought.empty?
+      return unless row
 
-      clamped = bought.to_h { |item, n| [item, [n.to_i, totals[item].to_i].min] }.select { |_, n| n.positive? }
-      return if clamped == bought
+      fields = {}
+      %i[bought bp_bought].each do |column|
+        count = row[column].to_h
+        next if count.empty?
 
-      @db[:inventory_snapshots].where(account_id: account_id).update(bought: Sequel.pg_jsonb(clamped))
+        clamped = count.to_h { |item, n| [item, [n.to_i, totals[item].to_i].min] }.select { |_, n| n.positive? }
+        fields[column] = Sequel.pg_jsonb(clamped) unless clamped == count
+      end
+      @db[:inventory_snapshots].where(account_id: account_id).update(fields) unless fields.empty?
     end
 
     # -> the item the record says +uid+ holds (nil: nothing), or :unknown when the record

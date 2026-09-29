@@ -100,7 +100,11 @@ module PEMK
         (MoneyShadow.clear(@db) rescue nil)   # M1b: rows would go stale without the measurement
       else
         @money_shadow = MoneyShadow.new(@db, start_money: @battle.start_money, cap: @config.economy_caps.fetch(:money))
+        @money_daily  = MoneyDaily.new(@db)   # the day's local sales (PEMK_MONEY_LOCAL_DAILY)
       end
+      # M3: the money rules refuse instead of logging. Until enforcement ships, 'on' runs
+      # as shadow.
+      @money_enforce = false
       @last_maps = {}   # account_id => the map its last connection ended on (M1a claims)
       @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
@@ -614,13 +618,19 @@ module PEMK
     def clamp_bought(account_id)
       @db.transaction(savepoint: true) do
         row = @db[:inventory_snapshots].where(account_id: account_id).first
-        next unless row && row[:bought]
+        next unless row && (row[:bought] || row[:bp_bought])
 
-        stores = { pc: row[:pc].to_h, mail: row[:mailbox].to_h, held: row[:held].to_h }
-        @inventory.clamp_bought(account_id, canonical(Inventory.totals(row[:bag].to_h, stores)))
+        @inventory.clamp_bought(account_id, possession(row))
       end
     rescue StandardError => e
       @log.call("inv: WARNING bought count failed for account #{account_id} #{e.class}: #{e.message}")
+    end
+
+    # What a record row says the account may hold, by canonical id: the bag and the stores
+    # last known.
+    def possession(row)
+      stores = { pc: row[:pc].to_h, mail: row[:mailbox].to_h, held: row[:held].to_h }
+      canonical(Inventory.totals(row[:bag].to_h, stores))
     end
 
     # E4: what left the possession settles its open debts - except what a vanished Pokemon
@@ -1368,6 +1378,9 @@ module PEMK
         bonus   = 0
         why ||= "not_held" if op == :sell && !on && !@inventory.holds?(account_id, item, qty)
         @db.transaction do
+          # Money authority: the units battle points bought never sell for money (Sam,
+          # 2026-09-29) - the sale takes the others first. Counted before any unit leaves.
+          bp_units = op == :sell && on && why.nil? && @money_claims ? bp_units_in_sale(account_id, item, qty) : 0
           # A sale the server makes takes the items out of its record with the money in,
           # so a client that keeps them cannot sell the same record again.
           if op == :sell && on && why.nil?
@@ -1381,17 +1394,23 @@ module PEMK
             # balance.
             local = op == :sell && @judged_local&.include?(canon(item))
             # ... except the units the server itself sold the account (a resold Mart Potion).
-            resold = local ? @inventory.take_bought(account_id, canon(item), qty) : 0
-            label = local && resold < qty ? "#{shop}:sell:local:#{item}x#{qty}" : "#{shop}:#{op}:#{item}x#{qty}"
+            resold = local ? @inventory.take_bought(account_id, canon(item), qty - bp_units) : 0
+            local_units = local ? qty - bp_units - resold : 0
+            why = money_sale_refusal(account_id, item, qty, unit, bp_units, local_units) if op == :sell && @money_claims
+            raise Sequel::Rollback if why   # nothing moves: not the items either
+            label = local && local_units.positive? ? "#{shop}:sell:local:#{item}x#{qty}" : "#{shop}:#{op}:#{item}x#{qty}"
             st, value, = @ledger.adjust(account_id, field, delta, reason: label)
             if st == :ack
               balance = value
               owned = if op == :buy then delta
                       elsif !@judged_local then 0                  # no item authority: nothing is judged
-                      elsif local then unit * resold
-                      else delta
+                      else unit * (qty - bp_units - local_units)
                       end
               shadow_deal(account_id, delta, value - delta, item, owned: owned) if field == :money
+              if op == :sell && @money_claims
+                @inventory.take_bought(account_id, canon(item), bp_units, column: :bp_bought) if bp_units.positive?
+                @money_daily&.add_local(account_id, unit * local_units)
+              end
             else
               why = bp ? "bp" : "money"
               raise Sequel::Rollback   # nothing moves: not the items either
@@ -1428,6 +1447,40 @@ module PEMK
       rescue StandardError => e
         @log.call("shop: request failed #{e.class}: #{e.message}")
       end
+    end
+
+    # Money authority: of a sale of +qty+ +item+, the units battle points bought - those
+    # the possession cannot leave out, since the others go first. Read before any unit
+    # leaves.
+    def bp_units_in_sale(account_id, item, qty)
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      bp = (row && row[:bp_bought]).to_h[canon(item)].to_i
+      return 0 unless bp.positive?
+
+      [qty - (possession(row)[canon(item)].to_i - bp), 0].max
+    end
+
+    # Money authority (Sam, 2026-09-29): a sale may not reach into the units battle points
+    # bought, nor sell more local units the server never sold than the day allows
+    # (PEMK_MONEY_LOCAL_DAILY). -> the refusal when enforced, else nil: logged as what
+    # enforcement would refuse.
+    def money_sale_refusal(account_id, item, qty, unit, bp_units, local_units)
+      why = nil
+      if bp_units.positive?
+        why = "bp_bought"
+        detail = "#{bp_units} bought with battle points"
+      elsif local_units.positive? && (cap = @config.money_local_daily)
+        sold = @money_daily.local_sold(account_id)
+        if sold + (unit * local_units) > cap
+          why = "local_daily"
+          detail = "$#{unit * local_units} of local units, $#{sold} sold today of $#{cap}"
+        end
+      end
+      return nil unless why
+
+      @log.call("money: account #{account_id} #{@money_enforce ? 'REFUSE' : 'WOULD-REFUSE'} sale of #{item} " \
+                "x#{qty} (#{why}: #{detail})")
+      @money_enforce ? why : nil
     end
 
     # A client that gave up waiting for a deal asks how it ended, by its nonce: the
@@ -1684,7 +1737,7 @@ module PEMK
         verdict ||= claim_repeat(account_id, type, name, version, tmap, event, place)
         rematch ||= place["rematch"]
         again ||= place["repeatable"]
-        keys << MoneyClaims.trainer_key(type, name, version)
+        keys << MoneyClaims.trainer_key(type, name, version) unless place["repeatable"]   # its event is its clock
         keys << MoneyClaims.event_key(tmap, event, place["page"]) unless place["rematch"]
       end
       bound *= 2 if env[:amulet] == true && prize_item_held?(account_id, env[:partner])
@@ -1695,11 +1748,14 @@ module PEMK
       @db.transaction do
         @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
                                                 accepted: accepted, map: map, trainers: trainers)
-        @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch) if MoneyClaims::PAID.include?(verdict)
+        @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch || again) if MoneyClaims::PAID.include?(verdict)
         @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
         # A battle paid before, fought again: its prize in the next frame is a repeat.
-        # (what the battle pays by the server's own count, not what the client states)
-        @money_shadow&.repeat(account_id, [amount, bound].min, before: money_row(account_id)) if verdict == "repeat"
+        # (what the battle pays by the server's own count, not what the client states) So
+        # is a battle the game lets be fought again, fought before its cadence.
+        if verdict == "repeat" || (verdict == "cadence" && again)
+          @money_shadow&.repeat(account_id, [amount, bound].min, before: money_row(account_id))
+        end
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where, again: again)
       [verdict, accepted]
@@ -1722,8 +1778,13 @@ module PEMK
 
     # -> nil when this trainer may be paid now, else why not: a battle paid already
     # ("repeat"), a rematch before its cadence ("cadence") or before the version below it
-    # ("order").
+    # ("order"). A battle the game lets be fought again pays at most once per REMATCH_SEC,
+    # its event the clock (Sam, 2026-09-29).
     def claim_repeat(account_id, type, name, version, map, event, place)
+      if place["repeatable"]
+        last = @money_claims.payout(account_id, MoneyClaims.event_key(map, event, place["page"]))
+        return last && Time.now - last[:paid_at] < MoneyClaims::REMATCH_SEC ? "cadence" : nil
+      end
       paid = @money_claims.payout(account_id, MoneyClaims.trainer_key(type, name, version))
       unless place["rematch"]
         return "repeat" if paid || @money_claims.payout(account_id, MoneyClaims.event_key(map, event, place["page"]))
@@ -1791,8 +1852,8 @@ module PEMK
       else
         @log.call("money: account #{account_id} WOULD-REFUSE prize #{amount} for #{names} (#{verdict}" \
                   "#{where ? ", on map #{where}" : ''}" \
-                  "#{again && verdict == 'repeat' ? ', a battle the game lets be fought again' : ''})")
-        flag_anomaly(account_id, :money_claim) unless verdict == "repeat"
+                  "#{again && verdict == 'cadence' ? ', a battle the game lets be fought again: once per 20 minutes' : ''})")
+        flag_anomaly(account_id, :money_claim) unless verdict == "repeat" || (again && verdict == "cadence")
       end
     end
 
@@ -1813,7 +1874,7 @@ module PEMK
       return if again.nil? || again.empty?
 
       names = again.map { |m, e, type, name, v| "#{type} #{name} v#{v} (map #{m} event #{e})" }
-      @log.call("server: money: battles the game lets be fought again, each re-fight refused as a repeat: #{names.join(', ')}")
+      @log.call("server: money: battles the game lets be fought again, each paid at most once per 20 minutes: #{names.join(', ')}")
     end
 
     # A fresh login: a claim that neither a money frame nor a save sealed may be missing
