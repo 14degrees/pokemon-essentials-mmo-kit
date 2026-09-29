@@ -1,0 +1,225 @@
+require "minitest/autorun"
+require "socket"
+require "timeout"
+require "json"
+require "tempfile"
+
+root  = File.expand_path("..", __dir__)
+lib   = File.join(root, "lib")
+proto = File.expand_path("../protocol", root)
+$LOAD_PATH.unshift(lib)   unless $LOAD_PATH.include?(lib)
+$LOAD_PATH.unshift(proto) unless $LOAD_PATH.include?(proto)
+
+ENV["PEMK_BIND"] = "127.0.0.1"
+ENV["PEMK_PORT"] = "0"
+require "pemk"
+
+# Money authority M1a over the wire: a trainer battle's prize is claimed where the engine
+# pays it, and judged against the exports - each trainer placed on the claim's map, where
+# the player is; each battle paid once (the branches of one event are one battle); a
+# rematch in order and on its cadence; the amount within the bound its trainers and facts
+# allow. In shadow every verdict is recorded and logged, and no money moves.
+class ServerMoneyClaimTest < Minitest::Test
+  W = PEMK::Wire
+
+  WORLD = Tempfile.new(["pemk_world", ".json"])
+  WORLD.write(JSON.generate(
+    "schema_version" => 3,
+    "maps" => {
+      "31" => { "name" => "Route", "width" => 20, "height" => 20, "objects" => [], "trainers" => [
+        { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 0, "rematch" => true },
+        { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 1, "rematch" => true },
+        { "event_id" => 7, "x" => 2, "y" => 2, "type" => "LASS", "name" => "Anna", "version" => 0 },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0 },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1 },
+        { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 }
+      ] },
+      "32" => { "name" => "Town", "width" => 20, "height" => 20, "objects" => [] }
+    }
+  ))
+  WORLD.flush
+
+  BATTLE = Tempfile.new(["pemk_battle", ".json"])
+  src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
+  src["trainer_types"] = { "CAMPER" => { "base_money" => 16 }, "LASS" => { "base_money" => 20 },
+                           "RIVAL1" => { "base_money" => 60 } }
+  src["trainers"] = [
+    { "type" => "CAMPER", "name" => "Jeff", "version" => 0, "party" => [["SPEAROW", 16, nil, %w[PECK]]] },
+    { "type" => "CAMPER", "name" => "Jeff", "version" => 1, "party" => [["SPEAROW", 30, nil, %w[PECK]]] },
+    { "type" => "LASS", "name" => "Anna", "version" => 0, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
+    { "type" => "RIVAL1", "name" => "Blue", "version" => 0, "party" => [["PIDGEY", 10, nil, %w[TACKLE]]] },
+    { "type" => "RIVAL1", "name" => "Blue", "version" => 1, "party" => [["PIDGEY", 12, nil, %w[TACKLE]]] },
+    { "type" => "LASS", "name" => "Copy", "version" => 0, "party" => [["CLEFAIRY", 10, nil, %w[METRONOME]]] }
+  ]
+  BATTLE.write(JSON.generate(src))
+  BATTLE.flush
+
+  def setup
+    @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
+    %i[money_claims money_payouts economy_ledger economy_balances inventory_snapshots party_snapshots
+       enforcement_events].each { |t| @db[t].delete rescue nil }
+    @db[:accounts].delete
+    @logs = Queue.new
+  end
+
+  def teardown
+    @server&.stop
+    @db&.disconnect
+  end
+
+  def start_server(mode = "shadow")
+    env = ENV.to_h.merge("PEMK_WORLD" => WORLD.path, "PEMK_BATTLE_DATA" => BATTLE.path, "PEMK_MONEY_AUTHORITY" => mode)
+    @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(m) { @logs << m })
+    @server.start
+    @port = @server.port
+  end
+
+  def logs
+    out = []
+    out << @logs.pop until @logs.empty?
+    out
+  end
+
+  def send_env(s, e)
+    s.write(W.encode_split(e))
+  end
+
+  def recv_type(s, *types)
+    Timeout.timeout(5) do
+      loop do
+        h = s.read(4)
+        return nil if h.nil?
+
+        env = W.decode_envelope(s.read(h.unpack1("N")), false)[:env]
+        return env if types.include?(env[:type])
+      end
+    end
+  end
+
+  def login(email = "claim@t.co", map: 31)
+    s = TCPSocket.new("127.0.0.1", @port)
+    send_env(s, { type: :register, email: email, password: "password1" })
+    recv_type(s, :register_ok, :register_err)
+    send_env(s, { type: :login, email: email, password: "password1" })
+    lo = recv_type(s, :login_ok)
+    send_env(s, { type: :pos, map: map, x: 5, y: 5, dir: 2 }) if map
+    [s, lo]
+  end
+
+  def claim(s, nonce, trainers, amount, map: 31, **facts)
+    send_env(s, { type: :money_claim, nonce: nonce, trainers: trainers, amount: amount, map: map }.merge(facts))
+    recv_type(s, :money_claim_ack)
+  end
+
+  ANNA = ["LASS", "Anna", 0, 31, 7].freeze
+  def jeff(v) = ["CAMPER", "Jeff", v, 31, 5]
+  def blue(v) = ["RIVAL1", "Blue", v, 31, 15]
+
+  def test_a_prize_is_judged_against_its_trainer
+    start_server
+    s, lo = login
+    r = claim(s, 11, [ANNA], 400)
+    assert_equal ["paid", 400], r.values_at(:verdict, :accepted), "20 x 20"
+    row = @db[:money_claims].where(account_id: lo[:account_id], nonce: 11).first
+    assert_equal ["paid", "shadow", 400], row.values_at(:verdict, :mode, :accepted)
+    assert_nil @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance), "shadow moves nothing"
+    assert(logs.any? { |l| l.include?("prize 400 for LASS Anna v0") })
+  end
+
+  def test_a_battle_is_paid_once
+    start_server
+    s, = login
+    claim(s, 1, [ANNA], 400)
+    assert_equal ["repeat", 0], claim(s, 2, [ANNA], 400).values_at(:verdict, :accepted)
+    assert_equal "paid", claim(s, 3, [blue(0)], 600)[:verdict]
+    assert_equal "repeat", claim(s, 4, [blue(1)], 720)[:verdict], "another branch of the same event"
+  end
+
+  def test_a_claim_away_from_its_trainer
+    start_server
+    s, = login(map: 32)
+    assert_equal "away", claim(s, 1, [ANNA], 400)[:verdict]
+    s2, = login("claim2@t.co")
+    assert_equal "unknown", claim(s2, 2, [["LASS", "Anna", 0, 31, 9]], 400)[:verdict], "not this event's trainer"
+    assert_equal "unknown", claim(s2, 3, [["LASS", "Nobody", 0, 31, 7]], 400)[:verdict]
+  end
+
+  def test_a_claim_over_its_bound_is_suspect
+    start_server
+    s, lo = login
+    assert_equal ["suspect", 400], claim(s, 1, [ANNA], 800, amulet: true).values_at(:verdict, :accepted),
+                 "no Amulet Coin on the party"
+    assert_equal 1, @db[:money_payouts].where(account_id: lo[:account_id], key: "trainer:LASS:Anna:0").count,
+                 "the battle is paid for all the same"
+  end
+
+  def test_rematches_in_order_and_on_their_cadence
+    start_server
+    s, lo = login
+    assert_equal "order", claim(s, 1, [jeff(1)], 480)[:verdict], "the first rematch before the battle itself"
+    assert_equal "paid", claim(s, 2, [jeff(0)], 256)[:verdict]
+    assert_equal "paid", claim(s, 3, [jeff(1)], 480)[:verdict]
+    assert_equal "cadence", claim(s, 4, [jeff(1)], 480)[:verdict]
+    @db[:money_payouts].where(account_id: lo[:account_id]).update(paid_at: Time.now - 21 * 60)
+    assert_equal "paid", claim(s, 5, [jeff(1)], 480)[:verdict], "twenty minutes later"
+  end
+
+  def test_a_nonce_gets_its_first_verdict_and_a_claim_waits_for_a_position
+    start_server
+    s, = login(map: nil)
+    assert_equal "wait", claim(s, 1, [ANNA], 400)[:verdict], "no position on this connection yet"
+    send_env(s, { type: :pos, map: 31, x: 5, y: 5, dir: 2 })
+    assert_equal "paid", claim(s, 1, [ANNA], 400)[:verdict], "judged once it has one"
+    assert_equal ["paid", 400], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "asked again"
+  end
+
+  def test_an_unsealed_claim_is_voided_at_login
+    start_server
+    s, lo = login
+    claim(s, 1, [ANNA], 400)
+    s.close
+    s, = login   # the save it loads may lack the battle
+    assert_equal "paid", claim(s, 2, [ANNA], 400)[:verdict], "fought again"
+    send_env(s, { type: :econ, field: :money, value: 3400, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    s.close
+    s, = login
+    assert_equal "repeat", claim(s, 3, [ANNA], 400)[:verdict], "sealed by the money frame"
+    assert_equal 1, @db[:money_claims].where(account_id: lo[:account_id]).exclude(voided_at: nil).count
+    assert_equal ["void", 0], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "the voided one, asked again"
+  end
+
+  def test_the_login_says_how_claims_are_judged
+    start_server
+    _, lo = login
+    assert_equal "shadow", lo[:money_claims]
+  end
+
+  def test_happy_hour_needs_the_move
+    start_server
+    s, = login
+    assert_equal ["suspect", 400], claim(s, 1, [ANNA], 800, happy_hour: true).values_at(:verdict, :accepted)
+    send_env(s, { type: :team_check, team: [{ "species" => "CLEFAIRY", "level" => 10, "moves" => %w[METRONOME] }], seq: 1 })
+    recv_type(s, :team_ack)
+    assert_equal ["paid", 400], claim(s, 2, [["LASS", "Copy", 0, 31, 9]], 400, happy_hour: true).values_at(:verdict, :accepted),
+                 "10 x 20 x 2 with Metronome in the party"
+  end
+
+  def test_bad_claims
+    start_server
+    s, = login
+    assert_equal "bad", claim(s, 1, [ANNA, ANNA], 400)[:verdict], "the same trainer twice"
+    assert_equal "bad", claim(s, 2, [ANNA, blue(0), jeff(0), ["LASS", "Copy", 0, 31, 9]], 1)[:verdict], "four trainers"
+    assert_equal "bad", claim(s, 3, [ANNA], -5)[:verdict]
+    assert_equal "bad", claim(s, nil, [ANNA], 400)[:verdict]
+    assert_equal 0, @db[:money_claims].count
+  end
+
+  def test_off_judges_nothing
+    start_server("off")
+    s, = login
+    send_env(s, { type: :money_claim, nonce: 1, trainers: [ANNA], amount: 400, map: 31 })
+    assert_raises(Timeout::Error) { recv_type(s, :money_claim_ack) }
+    assert_equal 0, @db[:money_claims].count
+  end
+end

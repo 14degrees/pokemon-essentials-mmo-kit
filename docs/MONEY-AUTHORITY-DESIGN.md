@@ -233,3 +233,125 @@ These are live today and are fixed first.
 - **Offline play.** An offline session is local and never reaches the account.
 - **Alt accounts.** Per-account caps do not stop a farm of alts: money buys tracked items,
   which trade across as held items. D5 review is the answer there.
+
+
+## 9. M1 in detail (revised 2026-09-29 after its own review)
+
+M1 measures, in shadow, exactly what M2 and M3 would pay and refuse. Nothing a player
+sees changes. A second adversarial review of the first draft found that it would have
+explained money nobody earned (Pay Day stacked on D4's envelope, one battle paid for each
+of its branches, rematches claimed at their top version, a carried excess hiding later
+conjures) and logged honest money as unexplained (Pay Day in a trainer battle, a claim
+judged against a stale position after a reconnect, new accounts). M1 is therefore split,
+and each part ships on its own.
+
+### M1a - trainer prize claims
+
+Built 2026-09-29 (`money_claims`, `money_payouts`; autotest 077). Still to come from this
+list: the partner's version, the battle rules (a no-money event), the flush of the facts
+at `:on_start_battle`, and marking the trainers beaten before M1 as paid.
+
+- **The claim.** An alias of `Battle#pbGainMoney` computes, before the original runs, what
+  the engine is about to add: `internalBattle && moneyGain` must hold, then the sum of
+  `pbMaxLevelInTeam(1, i) * t.base_money` over the opponents, and the Amulet Coin and Happy
+  Hour field effects. Each opponent carries the key of the trainer data it was built from,
+  tagged in `GameData::Trainer#to_trainer`: `[type, real_name, version]`, so a rival's
+  substituted name and a trainer rebuilt after spotting the player keep their key. The
+  claim also names each trainer's `(map, event_id)`, the partner's `(type, name)`, and the
+  client's econ seq.
+- **The place.** No capability opts out of it. Before each claim, and at
+  `:on_start_battle`, the client sends a position frame that bypasses Presence's
+  deduplication, whose memory `Sync.reset` clears on a new connection. On a new connection
+  the server judges a claim only after that connection's first position. The claim may
+  also name the map the account's previous connection ended on, which the server keeps per
+  account when a connection closes. With `PEMK_POS_ENFORCE` off, the place is the client's
+  own word, and the verdict says so.
+- **Once.** A trainer pays once per account and `(type, name, version)`, and a non-rematch
+  event once per account and `(map, event_id)`: the rival's three branches on one event
+  are one battle. A claim names at most three distinct trainers. A battle whose event sets
+  no money pays nothing once the battle rules are exported.
+- **Rematches.** A placement the export marks as a rematch may repeat. A version above the
+  start one pays only once the version below it was paid. A version already paid repeats
+  at most once per 20 minutes, on one clock per `(type, name, start version)` kept in
+  `money_claims`. The export places only the versions `Phone.add` registered.
+- **The bound.** The sum of `trainer_prize` over the trainers, doubled per multiplier:
+  - Amulet Coin: a unit the item record recognizes (judged, no open debt), held by a
+    Pokemon in `party_snapshots` or in the partner's exported party;
+  - Happy Hour: the player's side knows HAPPYHOUR or METRONOME, or has a copying move
+    (MIMIC, COPYCAT, MIRRORMOVE, SKETCH, TRANSFORM) or the IMPOSTER ability facing a
+    battler that knows either. A foe's own Happy Hour does nothing (the engine sets the
+    effect only for the player's side).
+  The facts are flushed at `:on_start_battle`, before `in_battle` is set: position, bag,
+  party and team report. The accepted amount is `min(amount, bound)`; the rest is logged
+  `SUSPECT`.
+- **Seal and void**, as gifts: the first fresh money frame after a claim seals it. A fresh
+  login voids the unsealed claims once, since the save may not have kept the battle; a
+  void takes its amount back from S and marks its nonce. An excess that follows a claim
+  refused as already paid is logged `REPEAT`, outside D5.
+- **Nonces** are keyed by `(account_id, nonce)`; the verdict is stored with the mode it
+  was judged in. A shadow verdict never becomes an M2 payment for the same nonce.
+- **Validation.** An integer amount from 0 to the cap, at most three trainers, strings of
+  at most 32 characters, and a `money_claim` frame budget.
+
+### M1b - the shadow balance
+
+- Two numbers per account: S, the balance M2 would keep, and C, the client's balance as
+  the server last knew it (`money_shadow`). Only fresh, acked frames of the account's
+  current connection count: replays, rejected frames and frames of a replaced session
+  still in the mailbox do not.
+- **Seeding.** S and C are created at the account's first claim, adjust or fresh frame with
+  M1 on, from the ledger balance before that event applies; an account with no ledger row
+  starts from the exported start money. A boot in shadow after a boot with M1 off drops
+  every row, so a stretch without measurement never counts. A claim whose econ seq is older
+  than the seed is answered `stale` and credits nothing. At seeding, the placed trainers
+  whose self-switch A the flag mirror holds are marked paid; without the mirror, the first
+  claim of each already beaten trainer is an exposure the logs name.
+- **Claims.** An accepted claim of amount a: `S = min(S + a, cap)`.
+- **Server transactions**, inside `Ledger#adjust`'s transaction and only when acked: `S +=
+  d` and `C += d`. A purchase S cannot cover is logged `BOUGHT-UNEXPLAINED`, and S is never
+  floored.
+- **Frames.** A fresh frame of value v logs `max(0, v - S) - max(0, C - S)` when positive,
+  as `money: account N UNEXPLAINED +d` (a D5 kind, `money_unexplained`); then `S = min(S,
+  v)` and `C = v`. The excess is derived each time, never remembered: a conjure after a
+  spend, or back up to an old peak, is logged again.
+- **Login.** A fresh login adopts the ledger balance L through the trusted setter, which
+  sends no frame: C becomes L. S is never reset at login, or a logout would launder money.
+- **Reseed.** The reseed frame after a reconnect is judged only after the re-sent claims
+  and after a position frame.
+
+### M1c - Pay Day
+
+- One claim per battle, sent at `:on_end_battle` after the D4 report. `in_battle` is still
+  true there, so it reaches the server before the frame with the money. A wild battle's
+  claim names all its foes; a trainer battle's names the trainer claim's nonce.
+- Each named foe's encounter mint must belong to the account, be younger than 90 seconds,
+  and have no `payday_at` yet (a new column, apart from the catch and uid markers).
+- The bound: 5 x the highest level among the party Pokemon that know PAYDAY, METRONOME, or
+  a copying move while a foe knows PAYDAY, x min(their summed maximum PP, K per foe), x 4.
+  K is a small constant tuned from M1's logs. D4's envelope is not used.
+
+### M1d - money from sources the server does not own
+
+S credits only sales of units the item record judged. A sale of a local-tier item, or of
+an item bought with battle points, goes to a counter per account and day, logged
+`UNOWNED-SOURCE +n` and labelled in the ledger (`shop:sell:local:ITEM`).
+
+### Preconditions
+
+At boot, the server names what M1 cannot measure, and labels the claims instead of logging
+`UNEXPLAINED` while any holds: the shop gate off (sales are not server transactions), D2
+not on (no mints for Pay Day), D1 off (no moves for Happy Hour), no trainer placement or
+money sources export. The harness grant that replaces `a.money!` in the autotests exists
+only behind a server flag.
+
+### Also found by the review, live today
+
+- Presence remembered the last position it sent across a reconnect, so a new connection's
+  first position waited for the player to move; the gift gate could judge a request
+  against the position stored with the last save. Fixed 2026-09-29: `Sync.reset` clears
+  that memory.
+- A client that does not advertise `gift_pos` is never judged by place at the gift gate.
+  That keeps older clients working with the gate on; once the operators' clients all send
+  their position first, the gate can judge every client.
+- A partner trainer's version is lost: `partner[2]` holds the trainer's random ID and is
+  read back as a version.

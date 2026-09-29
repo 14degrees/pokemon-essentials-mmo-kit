@@ -47,6 +47,7 @@ module PEMK
       @start        = nil   # [map,x,y]
       @encounters   = {}    # map_id => raw encounters hash
       @trainers_by_map = {} # map_id => frozen Array of [type, name, version]
+      @trainer_places  = {} # map_id => { event_id => frozen Array of [type, name, version, rematch] } (M1a)
       @gifts        = {}    # [map,event_id] => frozen gift/prize object (step 6 payout gate)
       @shops        = {}    # [map,event_id] => frozen mart / bp_shop object (item authority)
       @loaded       = false
@@ -218,6 +219,17 @@ module PEMK
       (@trainers_by_map[map_id] || []).include?([type.to_s, name.to_s, version.to_i])
     end
 
+    # Money authority M1a: the event of +map_id+ that starts a battle against this
+    # trainer. -> { "rematch" => bool, "versions" => [the contact's versions here] } | nil
+    def trainer_place(map_id, event_id, type, name, version)
+      places = (@trainer_places[map_id] || {})[event_id.to_i] || []
+      hit = places.find { |t| t[0] == type.to_s && t[1] == name.to_s && t[2] == version.to_i }
+      return nil unless hit
+
+      versions = places.select { |t| t[0] == hit[0] && t[1] == hit[1] && t[3] }.map { |t| t[2] }.sort
+      { "rematch" => hit[3], "versions" => versions }
+    end
+
     # Coarse: are these two maps joined by ANY edge connection? Used to accept an
     # edge-cross transfer without (yet) modelling the exact seam geometry.
     def connected?(map_a, map_b)
@@ -361,6 +373,14 @@ module PEMK
         [t["type"].to_s, t["name"].to_s, t["version"].to_i].freeze
       end
       @trainers_by_map[map_id] = ids.uniq.freeze unless ids.empty?
+      # M1a: by event, with the rematch mark (an export before it has neither).
+      by_event = {}
+      list.each do |t|
+        next unless t.is_a?(Hash) && t["type"] && t["name"] && t["event_id"].is_a?(Integer)
+
+        (by_event[t["event_id"]] ||= []) << [t["type"].to_s, t["name"].to_s, t["version"].to_i, t["rematch"] == true].freeze
+      end
+      @trainer_places[map_id] = by_event.transform_values(&:freeze).freeze unless by_event.empty?
     end
 
     def load_warps(map_id, warps)
@@ -408,6 +428,7 @@ module PEMK
       @heal.freeze
       @encounters.freeze
       @trainers_by_map.freeze
+      @trainer_places.freeze
       @gifts.freeze
       @shops.freeze
     end

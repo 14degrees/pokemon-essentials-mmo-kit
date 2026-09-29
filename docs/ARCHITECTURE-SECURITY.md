@@ -557,6 +557,31 @@ one the record holds, whatever its origin - a Nugget the Pickup ability could ha
 sells for its price. Money itself is still client-authored within the economy caps (the
 ledger bounds battle gains, not every change). Only tracked items are fully server-owned.
 
+### Where money came from (`PEMK_MONEY_AUTHORITY`)
+
+Off by default; `shadow` measures, nothing moves. Money is being moved to the server in
+steps (see [`MONEY-AUTHORITY-DESIGN.md`](MONEY-AUTHORITY-DESIGN.md)); the first one judges
+what a trainer battle pays.
+
+The client claims a trainer battle's prize where the engine pays it: the trainers by the
+data they were built from and the event that started each battle, the amount, and the
+Amulet Coin and Happy Hour facts, after a fresh position. The server judges each claim
+against the exports and records its verdict:
+- each trainer is known and placed on the claim's map, and that map is where the server
+  last saw the player (or the map just left, or where the previous connection ended);
+- a battle pays once - per trainer version, and per event for a battle that cannot be
+  fought again, so the branches of one event are one battle;
+- a phone rematch pays in version order, at most once per 20 minutes per contact;
+- the amount is within its bound: the strongest Pokemon's level times the type's base
+  money, summed, doubled for an Amulet Coin the record holds on a party Pokemon and for a
+  Happy Hour the party could have brought.
+
+A claim no money frame sealed is voided at a fresh login (the save may lack the battle).
+The log says `money: ... prize N for ...`, `WOULD-REFUSE` (away, unknown, repeat, order,
+cadence) or `SUSPECT` (over the bound), and the boot names what the claims cannot rely on
+in this configuration. Autotest 077 fights Camper Liam and finds his claim paid for exactly
+what the engine paid.
+
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
 On by default (`off` turns it off). The swap is the server's, but the Pokemon itself
