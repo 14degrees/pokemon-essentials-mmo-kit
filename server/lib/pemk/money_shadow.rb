@@ -57,13 +57,25 @@ module PEMK
       [-s2, -delta].min
     end
 
-    # A fresh, acked frame of value +v+ from the account's current connection. -> the
-    # money it shows that no source explains, newly (0 when none).
+    # A claim refused as already paid: the next frame shows its prize again. That part of
+    # the frame's excess is a repeat - a crash may have undone the save's record of the
+    # win - logged apart from money no source explains.
+    def repeat(account_id, amount, before:)
+      row(account_id, before)
+      @db[:money_shadow].where(account_id: account_id)
+                        .update(repeat: Sequel[:repeat] + amount, updated_at: Time.now)
+    end
+
+    # A fresh, acked frame of value +v+ from the account's current connection.
+    # -> [the money it shows that no source explains, newly; the part a repeat explains].
+    # The next frame consumes the pending repeat, whether or not it showed.
     def frame(account_id, v, before:)
       s, c = row(account_id, before)
-      d = [v - s, 0].max - [c - s, 0].max
-      set(account_id, s: [s, v].min, c: v)
-      [d, 0].max
+      pending = @db[:money_shadow].where(account_id: account_id).get(:repeat).to_i
+      d = [[v - s, 0].max - [c - s, 0].max, 0].max
+      r = [d, pending].min
+      set(account_id, s: [s, v].min, c: v, repeat: 0)
+      [d - r, r]
     end
 
     # A fresh login adopts the ledger balance through a setter that sends no frame.

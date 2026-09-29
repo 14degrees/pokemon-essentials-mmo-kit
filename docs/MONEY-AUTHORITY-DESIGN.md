@@ -297,7 +297,10 @@ at `:on_start_battle`, and marking the trainers beaten before M1 as paid.
 
 Built 2026-09-29 (`money_shadow`), with two simplifications: a boot with the setting off
 empties the table (no epoch), and the claim's econ seq is not checked against the seed yet.
-A reconnect's reseed sends the unanswered claims first, each after a position.
+A reconnect's reseed sends the unanswered claims first, each after a position. The money
+that follows a claim refused as already paid is logged `REPEAT` (money_shadow.repeat, which
+the next frame consumes); a full autotest run with the measurement on logs only the
+harness's `a.money!` and the gift scenario's deliberate re-fight of Brock.
 
 - Two numbers per account: S, the balance M2 would keep, and C, the client's balance as
   the server last knew it (`money_shadow`). Only fresh, acked frames of the account's

@@ -240,6 +240,21 @@ class ServerMoneyClaimTest < Minitest::Test
     assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{nugget} (sold NUGGET") })
   end
 
+  # A trainer fought again after its prize was paid: the claim is a repeat, and the money
+  # that follows is logged as one, not as money from nowhere.
+  def test_a_prize_paid_again_is_a_repeat
+    start_server
+    s, lo = login
+    money(s, 3000, 1)
+    claim(s, 1, [ANNA], 400)
+    money(s, 3400, 2)
+    assert_equal "repeat", claim(s, 2, [ANNA], 400)[:verdict]
+    money(s, 3800, 3)
+    sleep 0.3
+    lines = logs.grep(/money: account #{lo[:account_id]} (UNEXPLAINED|REPEAT)/).map { |l| l[/(UNEXPLAINED|REPEAT) \+\d+/] }
+    assert_equal ["REPEAT +400"], lines
+  end
+
   def test_the_login_says_how_claims_are_judged
     start_server
     _, lo = login

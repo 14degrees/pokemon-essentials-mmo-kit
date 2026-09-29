@@ -1509,6 +1509,8 @@ module PEMK
                                                 accepted: accepted, map: map, trainers: trainers)
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch) if MoneyClaims::PAID.include?(verdict)
         @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
+        # A battle paid before, fought again: its prize in the next frame is a repeat.
+        @money_shadow&.repeat(account_id, amount, before: money_row(account_id)) if verdict == "repeat"
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
       [verdict, accepted]
@@ -1655,7 +1657,8 @@ module PEMK
     def shadow_frame(account_id, value, before)
       return unless @money_shadow
 
-      d = @money_shadow.frame(account_id, value, before: before)
+      d, repeated = @money_shadow.frame(account_id, value, before: before)
+      @log.call("money: account #{account_id} REPEAT +#{repeated} (a prize paid before)") if repeated.positive?
       return unless d.positive?
 
       @log.call("money: account #{account_id} UNEXPLAINED +#{d}")
