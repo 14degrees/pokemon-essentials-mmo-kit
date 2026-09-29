@@ -33,4 +33,7 @@ Autotest.scenario "a trainer's prize is claimed and judged", flags: { PEMK_MONEY
   end
   s.check("nothing refused or suspect") { s.server.grep(/money: account #{id} (WOULD-REFUSE|SUSPECT)/).empty? }
   s.check("the money frame sealed it") { s.wait_for("the seal", seconds: 20) { claim.call[:sealed_at] } }
+  s.check("the shadow balance explains every coin, the starting money too") do
+    s.server.grep(/money: account #{id} (UNEXPLAINED|BOUGHT-UNEXPLAINED)/).empty?
+  end
 end

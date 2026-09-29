@@ -256,6 +256,9 @@ module PEMK
     def self.reseed_after_reconnect
       return unless $player
 
+      # Money authority M1: the prizes still unanswered go first, after a position, so the
+      # server knows them before the money frame that shows them.
+      (PEMK::PrizeClaim.flush rescue nil)
       (PEMK::Sync.mark_econ(:money, $player.money) rescue nil)
       (PEMK::Sync.mark_econ(:coins, $player.coins) rescue nil)
       (PEMK::Sync.mark_econ(:battle_points, $player.battle_points) rescue nil)

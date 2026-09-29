@@ -105,6 +105,16 @@ module PEMK
       PEMK.log("prize: claim #{n} judged #{msg[:verdict]} (#{msg[:accepted]})")
     end
 
+    # A new connection's reseed: every claim still unanswered goes out now, before the
+    # money frame that shows it.
+    def flush
+      return unless active? && online?
+
+      claims.each { |e| send_claim(e) }
+    rescue StandardError => e
+      PEMK.log("prize: flush error #{e.class}: #{e.message}")
+    end
+
     # Per frame: a claim this connection has not sent, or sent long ago, goes out.
     def tick
       return unless active?
