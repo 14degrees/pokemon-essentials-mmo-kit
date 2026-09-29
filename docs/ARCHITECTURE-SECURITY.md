@@ -73,7 +73,7 @@ The honest counterweight to the ✅ column — these are the real remaining gaps
 | PC boxes, Pokédex, roamers, daycare | **client-only** | not projected at all — "park it in a box" evades the party shadow (their held items are recorded, E0) |
 | Party composition | **server-shadowed** | detection-only; the save blob remains authoritative |
 | Money / badges | **server-persisted, client-authored** | capped and audited, not earned server-side |
-| Overworld position | **enforceable, but** | the no-clip verdict is suppressed whenever the CLIENT declares `:surf`/`:dive` |
+| Overworld position | **enforceable** | a surfer crosses only the water the export marks and a diver walks like on the ground; whether the player may surf at all (a Pokemon with Surf, the badge) is not checked |
 
 ### Story state: switches, variables, self-switches (`PEMK_FLAG_STATE`)
 
@@ -285,6 +285,25 @@ and the violating frame is *not* fanned out to peers; teleport stays log-only
 surface false-positive classes (surf, bridges, ledges) before anything is
 blocked. **Spawn/respawn is server-owned:** the last-good position is persisted
 (migration 007) and re-seeded at login, so a client can't spawn anywhere.
+
+**Water.** The passability grid counts every water tile as a wall. The world export
+also marks, per map, where a surfer may be (`water` rows: `w`, the engine's rule for
+a surfer, waterfalls included), where Dive also goes down or comes up (`d`), and deep
+water under a rock (`x`: the engine lets a diver come up onto it, no surfer reaches
+it), with the map's `dive_map` and, on a map below, the `surface_map` the engine
+brings a diver up to. A frame that says it surfs is a no-clip unless its tile is
+water; a diver walks the map below under the normal rule; and Dive is a legal map
+change only from deep water to that very tile of the map below (wrapped into a
+smaller map, as the engine does), or back up to the surface map onto deep water. A
+snap-back keeps a swimmer swimming (surfing on water, diving below): on foot on water
+it could never move again. An export from before these marks cannot tell water from
+walls: surfers are trusted there and a dive reads as an illegal warp, and the boot
+warns (one debug launch regenerates the export). Autotest `080_swim` surfs, dives,
+is sent back three ways and lands on Route 8, and flags a modified client that surfs
+into the cliff, dives from shallow water or walks through rock underwater. Still
+open: the mode is the client's word, so surfing without Surf (or its badge) is not
+checked, and a two-tile hop over a rock between two water tiles is only a (logged)
+teleport.
 
 The end state for Layer B:
 

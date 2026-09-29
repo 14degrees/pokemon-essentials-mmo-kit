@@ -21,7 +21,10 @@ module PEMK
   # Passability is a per-map array of H hex-nibble row strings (W chars each), where
   # the nibble is the ground tile's RMXP passage bits and 0x0f ('f') == fully blocked.
   # walkable? flags ONLY an explicit 'f' (never a missing grid), so the position audit
-  # is conservative by construction.
+  # is conservative by construction. Water is a per-map array of H row strings: 'w'
+  # where a surfer may be, 'd' where Dive also goes down or comes up, 'x' deep water
+  # under a rock (a diver may come up there, no surfer may be there), '.' elsewhere;
+  # an export with water_marks says so for every map (no grid = no water there).
   #
   # Boot policy (unchanged, asymmetric): ABSENT export -> tolerated (empty model + one
   # warning); PRESENT-but-INVALID (unparseable / wrong schema_version / wrong shape)
@@ -40,6 +43,10 @@ module PEMK
       @maps         = {}    # map_id => { name:, width:, height:, count: }
       @passable     = {}    # map_id => frozen Array of frozen row strings
       @ledges       = {}    # map_id => frozen Hash { [x,y] => true }
+      @water        = {}    # map_id => frozen Array of frozen row strings ('.', 'w', 'd', 'x')
+      @dive_maps    = {}    # map_id => the map Dive takes a player down to
+      @surface_maps = {}    # dive map_id => the map a diver comes up to (the engine's own pick)
+      @water_marks  = false # does the export mark water? (then a map without a grid has none)
       @warps_by_map = {}    # map_id => frozen Array of frozen warp hashes
       @heal         = {}    # map_id => [map,x,y]
       @connections  = []    # frozen Array of raw 6-int conn arrays
@@ -88,6 +95,43 @@ module PEMK
     def ledge?(map_id, x, y)
       s = @ledges[map_id]
       s ? s.key?([x, y]) : false
+    end
+
+    # --- water (Layer B for surfers and divers) --------------------------------
+    # The passability grid counts water as walls: these say which of them a surfer
+    # crosses, and where Dive goes down or comes up.
+    def water_marks?; @water_marks; end
+
+    # true = a surfer may be here, false = no water, nil = the export does not say (it
+    # predates the water marks, or the tile is outside the grid).
+    def water?(map_id, x, y)
+      return (@water_marks ? false : nil) unless @water.key?(map_id)
+
+      c = water_char(map_id, x, y)
+      c && (c == "w" || c == "d")
+    end
+
+    # Where Dive goes down, and where a diver comes up on the map above ('x': deep water
+    # under a rock, which the engine lets a diver come up onto but no surfer reach).
+    def deep?(map_id, x, y)
+      c = water_char(map_id, x, y)
+      c == "d" || c == "x"
+    end
+
+    # The map Dive takes a player down to from +map_id+ | nil.
+    def dive_map(map_id)
+      @dive_maps[map_id]
+    end
+
+    # The map a diver on +map_id+ comes up to | nil (the first whose DiveMap it is).
+    def surface_map(map_id)
+      @surface_maps[map_id]
+    end
+
+    # -> [width, height] of +map_id+ | nil.
+    def dims(map_id)
+      m = @maps[map_id]
+      m && m[:width].is_a?(Integer) && m[:height].is_a?(Integer) ? [m[:width], m[:height]] : nil
     end
 
     # --- warps (Layer B/C transfer legality) -----------------------------------
@@ -278,7 +322,8 @@ module PEMK
       return "absent (audit no-op — run the in-game exporter)" unless @loaded
 
       "#{@maps.size} maps, #{@by_tile.size} objects, #{@passable.size} passgrids, " \
-        "#{@ledges.values.sum(&:size)} ledges, #{@warps_by_map.values.sum(&:size)} warps, " \
+        "#{@ledges.values.sum(&:size)} ledges, #{@water.size} water grids, #{@dive_maps.size} dive maps, " \
+        "#{@warps_by_map.values.sum(&:size)} warps, " \
         "#{@connections.size} connections (schema v#{SCHEMA_VERSION})"
     end
 
@@ -320,6 +365,8 @@ module PEMK
       @money_sources = doc["money_sources"].is_a?(Hash) ? deep_freeze(doc["money_sources"]) : nil
       # ... and whether its trainer placements say which battles can be fought again.
       @trainer_marks = doc["trainer_marks"] == true
+      # ... and whether its maps mark water.
+      @water_marks = doc["water_marks"] == true
       @partners = load_partners(doc["partners"])
       @connections = freeze_connections(doc["connections"])
       @home  = coord_array(doc["home"], 4) || coord_array(doc["home"], 3)
@@ -340,6 +387,9 @@ module PEMK
       load_objects(map_id, m["objects"])
       load_passability(path, map_id, m["passability"], width, height)
       load_ledges(map_id, m["ledges"])
+      load_water(path, map_id, m["water"], width, height)
+      @dive_maps[map_id] = m["dive_map"] if m["dive_map"].is_a?(Integer) && m["dive_map"].positive?
+      @surface_maps[map_id] = m["surface_map"] if m["surface_map"].is_a?(Integer) && m["surface_map"].positive?
       load_warps(map_id, m["warps"])
       h = coord_array(m["heal"], 3)
       @heal[map_id] = h if h
@@ -388,6 +438,27 @@ module PEMK
       end
 
       @passable[map_id] = grid.map(&:freeze).freeze
+    end
+
+    def load_water(path, map_id, grid, width, height)
+      return if grid.nil?
+
+      unless grid.is_a?(Array) && width.is_a?(Integer) && height.is_a?(Integer) &&
+             grid.length == height &&
+             grid.all? { |r| r.is_a?(String) && r.length == width && r.match?(/\A[.wdx]*\z/) }
+        raise "world data #{path} map #{map_id} water is malformed " \
+              "(need #{height} strings of #{width} '.', 'w', 'd' or 'x'; regenerate the export)"
+      end
+
+      @water[map_id] = grid.map(&:freeze).freeze
+    end
+
+    def water_char(map_id, x, y)
+      grid = @water[map_id]
+      return nil unless grid && y >= 0 && y < grid.length
+
+      row = grid[y]
+      x >= 0 && x < row.length ? row[x] : nil
     end
 
     def load_ledges(map_id, ledges)
@@ -485,6 +556,9 @@ module PEMK
       @maps.freeze
       @passable.freeze
       @ledges.freeze
+      @water.freeze
+      @dive_maps.freeze
+      @surface_maps.freeze
       @warps_by_map.freeze
       @heal.freeze
       @encounters.freeze
