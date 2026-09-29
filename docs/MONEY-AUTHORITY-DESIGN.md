@@ -448,6 +448,23 @@ client's stated amount (now the server's bound).
   beyond it the clerk refuses the sale before any unit leaves (no lost items). Unset, the
   allowance is 0 and the blocker stands.
 
+### Sam's decisions (2026-09-29)
+
+- Local sales: `PEMK_MONEY_LOCAL_DAILY` defaults to $10,000 a day (UTC), counted per
+  account in `money_daily`; `none` lifts it. The whole sale is refused past it
+  (`local_daily`).
+- Triple Triad: card sales are closed under `on` (the client says so) until they are
+  server transactions.
+- Battle points: the units they buy at the gated exchange are counted apart
+  (`inventory_snapshots.bp_bought`, clamped by every snapshot) and never sell for money -
+  a sale takes the other units first and is refused (`bp_bought`) past them. BP authority
+  comes later. Residual: a BP-bought item traded to another account sells there.
+- Repeatable trainers: a battle the game lets be fought again pays at most once per 20
+  minutes, like a phone rematch, its event the clock; fought again sooner, it is refused
+  as `cadence` and its prize logged as a repeat, not a conjure.
+
+Until enforcement ships, `on` runs as shadow: the sale rules log `WOULD-REFUSE`.
+
 ### Blockers (the boot names each, and runs as shadow while one is left)
 
 1. D2 on, and Pay Day proven by battle records (D7), or its daily allowance set.
@@ -473,7 +490,8 @@ client's stated amount (now the server's bound).
 7. `PEMK_POS_ENFORCE=on` is not a blocker: a battle already pays once, and placement only
    makes "being there" cost a walk.
 
-In the demo, 3, 4 (Triple Triad, battle points) and 5 block `on`; the rest are settings.
+In the demo, 3, 4 (Triple Triad, battle points) and 5 blocked `on`; with Sam's decisions
+above, what is left are settings.
 
 ### Cutover
 

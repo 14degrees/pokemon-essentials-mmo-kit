@@ -15,7 +15,7 @@ module PEMK
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
                 :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority,
-                :money_payday_daily
+                :money_payday_daily, :money_local_daily
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -211,6 +211,14 @@ module PEMK
                             elsif raw.match?(/\A\d+\z/) then raw.to_i
                             else 20_000
                             end
+      # What an account may sell per day of the items the server never judged (a local
+      # tier: Pickup, mining...) and never sold it itself - money no source it owns
+      # explains. A number, or "none" for no cap. Default 10000 (Sam, 2026-09-29).
+      raw = env.fetch("PEMK_MONEY_LOCAL_DAILY", "").to_s.strip.downcase
+      @money_local_daily = if raw == "none" then nil
+                           elsif raw.match?(/\A\d+\z/) then raw.to_i
+                           else 10_000
+                           end
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

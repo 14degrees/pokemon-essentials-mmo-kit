@@ -150,10 +150,16 @@ class ServerMoneyClaimTest < Minitest::Test
   def test_a_battle_fought_again_by_design
     start_server
     assert(logs.any? { |l| l.include?("fought again") && l.include?("CHAMPION Blue v0 (map 31 event 3)") })
-    s, = login
-    assert_equal "paid", claim(s, 1, [["CHAMPION", "Blue", 0, 31, 3]], 5000)[:verdict], "50 x 100"
-    assert_equal "repeat", claim(s, 2, [["CHAMPION", "Blue", 0, 31, 3]], 5000)[:verdict]
+    s, lo = login
+    champion = ["CHAMPION", "Blue", 0, 31, 3]
+    assert_equal "paid", claim(s, 1, [champion], 5000)[:verdict], "50 x 100"
+    assert_equal "cadence", claim(s, 2, [champion], 5000)[:verdict], "once per 20 minutes (Sam, 2026-09-29)"
     assert(logs.any? { |l| l.include?("WOULD-REFUSE") && l.include?("a battle the game lets be fought again") })
+    assert_equal 5000, @db[:money_shadow].where(account_id: lo[:account_id]).get(:repeat), "its prize is no conjure"
+    @db[:money_payouts].where(account_id: lo[:account_id]).update(paid_at: Time.now - (21 * 60))
+    assert_equal "paid", claim(s, 3, [champion], 5000)[:verdict], "twenty minutes later"
+    assert_nil @db[:money_payouts].where(account_id: lo[:account_id], key: "trainer:CHAMPION:Blue:0").first,
+               "its event is its clock"
   end
 
   # The battle rules say it pays nothing: the engine claims nothing, so a claim is forged.
@@ -494,9 +500,56 @@ class ServerMoneyClaimTest < Minitest::Test
     send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 1, unit_price: protein["bp_price"], bp: true,
                   map: 32, event: 22, seq: 1 })
     assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
-    assert_equal({}, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bought).to_h)
-    assert_equal :shop_grant, sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:type]
-    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{protein['sell_price']} (sold PROTEIN") })
+    count = ->(column) { @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(column).to_h }
+    assert_equal({}, count.(:bought))
+    assert_equal({ "PROTEIN" => 1 }, count.(:bp_bought))
+    # never sold for money (Sam, 2026-09-29): refused once enforced, logged until then
+    @server.instance_variable_set(:@money_enforce, true)
+    assert_equal "bp_bought", sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:reason]
+    assert_equal 1, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["PROTEIN"], "kept"
+    @server.instance_variable_set(:@money_enforce, false)
+    assert_equal :shop_grant, sell(s, "PROTEIN", 1, protein["sell_price"], 3)[:type]
+    lines = logs
+    assert(lines.any? { |l| l.include?("WOULD-REFUSE sale of PROTEIN x1 (bp_bought: 1 bought with battle points)") })
+    assert(lines.any? { |l| l.include?("UNOWNED-SOURCE +#{protein['sell_price']} (sold PROTEIN") })
+    assert_equal({}, count.(:bp_bought), "sold")
+  end
+
+  # The units battle points bought are the possession's last: a sale of the others is free.
+  def test_the_units_battle_points_bought_go_last
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    send_env(s, { type: :inv, bag: { PROTEIN: 2 }, seq: 1 })   # two found
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set.new)
+    @server.instance_variable_set(:@money_enforce, true)
+    protein = @server.instance_variable_get(:@battle).item("PROTEIN")
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 1, unit_price: protein["bp_price"], bp: true,
+                  map: 32, event: 22, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    assert_equal :shop_grant, sell(s, "PROTEIN", 2, protein["sell_price"], 2)[:type], "the two found"
+    assert_equal "bp_bought", sell(s, "PROTEIN", 1, protein["sell_price"], 3)[:reason], "the one BP bought"
+    assert_equal 1, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["PROTEIN"]
+  end
+
+  # Local units the server never sold: at most PEMK_MONEY_LOCAL_DAILY a day (Sam, 2026-09-29).
+  def test_the_days_local_sales_are_bounded
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on", "PEMK_MONEY_LOCAL_DAILY" => "250")
+    s, lo = login
+    send_env(s, { type: :inv, bag: { POTION: 5 }, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["POTION"])
+    sold = @server.instance_variable_get(:@battle).item("POTION")["sell_price"]   # 100
+    assert_equal :shop_grant, sell(s, "POTION", 2, sold, 1)[:type]
+    assert_equal 2 * sold, @db[:money_daily].where(account_id: lo[:account_id]).get(:local_sold)
+    @server.instance_variable_set(:@money_enforce, true)
+    assert_equal "local_daily", sell(s, "POTION", 1, sold, 2)[:reason], "the day's allowance is spent"
+    @server.instance_variable_set(:@money_enforce, false)
+    assert_equal :shop_grant, sell(s, "POTION", 1, sold, 3)[:type]
+    assert(logs.any? { |l| l.include?("WOULD-REFUSE sale of POTION x1 (local_daily: $#{sold} of local units, $#{2 * sold} sold today of $250)") })
+    assert_equal 2, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bag).to_h["POTION"]
   end
 
   # Units used where a bag-only snapshot shows it are gone from the count: conjured back,
