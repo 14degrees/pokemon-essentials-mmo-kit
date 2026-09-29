@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "timeout"
+
 module Autotest
   # A PEMK server in this process, on the test port and the pemk_autotest database,
   # booted with one scenario's flags. Bound to 0.0.0.0 so the Windows game reaches
@@ -59,6 +61,18 @@ module Autotest
         ledger.adjust(account_id, :money, delta, reason: "autotest") unless delta.zero?
       ensure
         done << true
+      end
+      Timeout.timeout(10) { done.pop }
+    end
+
+    # Sends a frame to +account_id+'s window as the server would, for a test that needs
+    # the game to handle one (a correction, a notice). -> whether the account was online.
+    def tell(account_id, **env)
+      done = Queue.new
+      @server.instance_variable_get(:@reactor).post do
+        conn = @server.instance_variable_get(:@online)[account_id]
+        @server.send(:reply, conn, **env) if conn
+        done << !conn.nil?
       end
       Timeout.timeout(10) { done.pop }
     end

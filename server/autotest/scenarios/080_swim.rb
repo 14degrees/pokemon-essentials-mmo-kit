@@ -45,11 +45,28 @@ Autotest.scenario "a surfer crosses water, and only water", flags: { PEMK_POS_EN
   s.check("Dive takes the player to the same tile below") { where.call == [UNDERWATER, 12, 21, "dive"] }
 
   a.walk_to!(13, 22, timeout: 30)
+  # A snap-back (what `on` sends for a refused move) keeps a swimmer swimming: on foot
+  # on water it could never move again, and a diver could never come up.
+  sent_back = lambda do |to, what|
+    s.server.tell(id, type: :pos_correct, map: to[0], x: to[1], y: to[2])
+    (s.wait_for(what, seconds: 15) { where.call == to } rescue false)
+  end
+  s.check("a diver sent back still dives") { sent_back.([UNDERWATER, 12, 21, "dive"], "the diver sent back") }
+  a.walk_to!(13, 22, timeout: 30)
   a.interact!
   a.converse("Yes")                        # "Light is filtering down from above..."
   a.wait_until!("map #{ROUTE8} within 10", timeout: 20)
   a.wait_until!("idle within 5", timeout: 15)
   s.check("the player comes back up, surfing") { where.call == [ROUTE8, 13, 22, "surf"] }
+  s.check("a surfer sent back still surfs") { sent_back.([ROUTE8, 14, 22, "surf"], "the surfer sent back") }
+  s.check("a surfer sent back below dives there") do
+    sent_back.([UNDERWATER, 14, 22, "dive"], "the surfer sent back below")
+  end
+  a.wait_until!("idle within 5", timeout: 15)
+  a.interact!
+  a.converse("Yes")                        # up again
+  a.wait_until!("map #{ROUTE8} within 10", timeout: 20)
+  a.wait_until!("idle within 5", timeout: 15)
 
   a.walk_to!(25, 12, timeout: 60)
   a.walk_to!(26, 12, timeout: 30)          # onto the shore: a jump off the water
