@@ -19,7 +19,8 @@ module PEMK
     # sends where it stands before it asks for a gift, so it can be judged by place.
     # inv_correct: it takes back the items the server could not account for (E4).
     # money_claims: it claims its prizes, and holds its money for their verdicts (M3).
-    CAPS = %w[flag_repair trade_redeliver gift_pos inv_correct money_claims].freeze
+    # save_ack: it sends a save again until the server says it was written.
+    CAPS = %w[flag_repair trade_redeliver gift_pos inv_correct money_claims save_ack].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 
@@ -174,6 +175,7 @@ module PEMK
       (PEMK::Sync.adopt_inv_seq(reply[:inv_seq]) rescue nil)  # ... same for the independent :inv channel
       (PEMK::Sync.adopt_flags_seq(reply[:flags_seq]) rescue nil)  # ... and the :flags channel (else it dies on reconnect)
       (PEMK::Sync.adopt_mon_seq(reply[:mon_seq]) rescue nil)  # ... and the :mon_party projection channel
+      (PEMK::Sync.adopt_save_ack(reply[:save_ack]) rescue nil) # ... and whether each save is answered
       (PEMK::Pickup.adopt_enforce(reply[:pickup_enforce]) rescue nil)  # M4-C: gate pickups only if server says on
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset
       (PEMK::GiftClaim.adopt_gate(reply[:gift_gate]) rescue nil)  # step 6: ask before a gift
@@ -229,6 +231,7 @@ module PEMK
       (PEMK::Sync.adopt_inv_seq(reply[:inv_seq]) rescue nil)
       (PEMK::Sync.adopt_flags_seq(reply[:flags_seq]) rescue nil)  # ... and the :flags channel (else it dies on reconnect)
       (PEMK::Sync.adopt_mon_seq(reply[:mon_seq]) rescue nil)
+      (PEMK::Sync.adopt_save_ack(reply[:save_ack]) rescue nil)
       (PEMK::Pickup.adopt_enforce(reply[:pickup_enforce]) rescue nil)  # M4-C
       (PEMK::Pickup.adopt_reset_allowed(reply[:pickup_reset_allowed]) rescue nil)  # M4-C: dev-only F9 reset
       (PEMK::GiftClaim.adopt_gate(reply[:gift_gate]) rescue nil)  # step 6: ask before a gift
