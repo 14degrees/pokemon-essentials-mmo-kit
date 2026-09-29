@@ -65,8 +65,12 @@ module PEMK
       seed = env[:battle_seed]
       if seed.is_a?(Integer) && seed.positive?
         roll_id = @db[:encounter_rolls].where(account_id: account_id, battle_seed: seed).get(:id)
-        # ... or a trainer battle's (P2): each attempt at a placement names its seed.
-        trainer_battle_id = @trainer_battles&.row_for_seed(account_id, seed)&.[](:id) unless roll_id
+        # ... or a trainer battle's (P2): each attempt at a placement names its seed - an
+        # open one (a spent seed's win is already proven; migration 044 keeps one win each).
+        unless roll_id
+          row = @trainer_battles&.row_for_seed(account_id, seed)
+          trainer_battle_id = row[:id] if row && row[:state] == "open"
+        end
         # an unknown seed is recorded UNBOUND, and loudly — either a stale relogin
         # or a fabricated claim; part 3's parity stats treat unbound `on` records
         # as first-class suspects.
@@ -119,7 +123,8 @@ module PEMK
       )
       walk == :mismatch ? :desync : :ok
     rescue Sequel::UniqueConstraintViolation
-      @log.call("battlerec: account #{account_id} duplicate record for roll #{roll_id} -> dropped")
+      what = roll_id ? "roll #{roll_id}" : "the won battle on trainer seed #{trainer_battle_id}"
+      @log.call("battlerec: account #{account_id} duplicate record for #{what} -> dropped")
       :dup
     rescue StandardError => e
       @log.call("battlerec: ingest failed #{e.class}: #{e.message}")

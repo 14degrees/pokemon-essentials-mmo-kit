@@ -153,14 +153,27 @@ class TrainerProofsTest < Minitest::Test
     assert_equal [[@me, 1, :unprovable, "no record of a won battle on its seed"]], @proofs.sweep(now: @now + 700)
   end
 
-  def test_one_record_proves_one_claim
+  # One win, one prize: a seed holds one won battle and one claim (migration 044).
+  def test_one_win_proves_one_claim
     row, seed = seed_row(@me)
-    linked(1, row, seed)
-    linked(2, row, seed)
+    assert_equal row, linked(1, row, seed)
+    assert_nil linked(2, row, seed), "another claim naming the same battle is not linked"
     record(row, status: "match")
-    judged = @proofs.sweep(now: @now)
-    assert_equal [[@me, 1, :proven, nil]], judged, "the second claim finds no record left"
+    assert_raises(Sequel::UniqueConstraintViolation) { record(row, status: "match") }   # a copy of the win
+    record(row, status: "match", outcome: 2)                                            # a lost attempt: fine
+    assert_equal [[@me, 1, :proven, nil]], @proofs.sweep(now: @now)
     assert_nil verdict(2)
-    assert_equal [[@me, 2, :unprovable, "no record of a won battle on its seed"]], @proofs.sweep(now: @now + 700)
+    assert_empty @proofs.sweep(now: @now + 700), "the unlinked claim is never judged on it"
+    claim(@me, 3)
+    assert_nil @proofs.link_claim(@me, 3, seed, [LIAM]), "a spent seed links no claim"
+  end
+
+  def test_a_repeatable_trainer_s_claim_is_judged_too
+    row, seed = seed_row(@me)
+    @db[:money_claims].insert(account_id: @me, nonce: 9, kind: "repeatable", verdict: "paid", mode: "shadow",
+                              amount: 176, accepted: 176, map: 10, trainers: [LIAM].to_json, created_at: @now)
+    @proofs.link_claim(@me, 9, seed, [LIAM])
+    record(row, status: "match")
+    assert_equal [[@me, 9, :proven, nil]], @proofs.sweep(now: @now)
   end
 end

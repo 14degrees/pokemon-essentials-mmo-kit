@@ -27,19 +27,24 @@ module PEMK
     def link_claim(account_id, nonce, seed, trainers)
       return nil unless seed.is_a?(Integer) && seed.positive? && trainers.is_a?(Array) && trainers.length == 1
 
-      row = @db[:trainer_battles].where(account_id: account_id, seed: seed).first
+      # an open seed only (a spent one's win already paid), of this account, for this trainer
+      row = @db[:trainer_battles].where(account_id: account_id, seed: seed, state: "open").first
       return nil unless row && trainers[0] == [row[:tr_type], row[:tr_name], row[:tr_version], row[:map_id], row[:event_id]]
 
-      @db[:money_claims].where(account_id: account_id, nonce: nonce, trainer_battle_id: nil)
-                        .update(trainer_battle_id: row[:id])
-      row[:id]
+      linked = @db[:money_claims].where(account_id: account_id, nonce: nonce, trainer_battle_id: nil)
+                                 .update(trainer_battle_id: row[:id])
+      linked.positive? ? row[:id] : nil
+    rescue Sequel::UniqueConstraintViolation   # another claim holds this battle: one win, one prize
+      @log.call("trainerproof: account #{account_id} claim #{nonce} names a battle another claim holds")
+      nil
     end
 
     # One pass over the linked claims still without a verdict.
     # -> [[account_id, nonce, proof, reason], ...] for the claims judged now.
     def sweep(now: Time.now)
       judged = []
-      @db[:money_claims].where(proof: nil, kind: "trainer").exclude(trainer_battle_id: nil)
+      # "repeatable": a trainer fought again (the placements enforcement starts with)
+      @db[:money_claims].where(proof: nil, kind: %w[trainer repeatable]).exclude(trainer_battle_id: nil)
                         .order(:created_at).limit(200).all.each do |claim|
         proof, record, reason = judge(claim, now)
         next unless proof
@@ -84,12 +89,10 @@ module PEMK
       [:proven, record, nil]
     end
 
-    # The won battle on the claim's seed: the latest won record on it that is not another
-    # claim's proof already (one record, one claim).
+    # The won battle on the claim's seed: a seed holds one (migration 044), and a claim holds
+    # the seed - one win, one prize.
     def record_for(claim)
-      used = @db[:money_claims].exclude(proof_record_id: nil).select(:proof_record_id)
-      @db[:battle_records].where(trainer_battle_id: claim[:trainer_battle_id], outcome: 1)
-                          .exclude(id: used).order(Sequel.desc(:id)).first
+      @db[:battle_records].where(trainer_battle_id: claim[:trainer_battle_id], outcome: 1).first
     end
 
     def settle(claim, proof, record, now)

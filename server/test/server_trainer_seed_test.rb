@@ -146,7 +146,7 @@ class ServerTrainerSeedTest < Minitest::Test
 
   # --- records on the seed -------------------------------------------------------
 
-  def walk_body(seed, bounds)
+  def walk_body(seed, bounds, outcome: 1)
     prng = PEMK::Prng.new(seed, PEMK::Prng::STREAM_BATTLE)
     log = bounds.map { |b| [b, prng.rand_below(b)] }.flatten.pack("N*")
     h = 0xcbf29ce484222325
@@ -155,7 +155,7 @@ class ServerTrainerSeedTest < Minitest::Test
                                 draws: { b: { n: bounds.size, fp: format("%016x", h), log: log },
                                          a: { n: 0, fp: "0" * 16, log: "".b },
                                          r: { n: 0, fp: "0" * 16, log: "".b } } })
-    env = { type: :battle_record, mode: "on", engine_fp: "ab" * 8, outcome: 1, rounds: 2,
+    env = { type: :battle_record, mode: "on", engine_fp: "ab" * 8, outcome: outcome, rounds: 2,
             draws_battle: bounds.size, draws_ai: 0, draws_run: 0, fp_battle: format("%016x", h),
             fp_ai: "0" * 16, fp_run: "0" * 16, truncated: false, desynced: false, battle_seed: seed }
     [env, body]
@@ -191,17 +191,30 @@ class ServerTrainerSeedTest < Minitest::Test
     c, = authed_conn("ts5@t.co")
     seed = ask(c, LIAM)[:seed]
     row = @db[:trainer_battles].where(seed: seed).get(:id)
-    send_env(c, *walk_body(seed, [100, 16, 2]))                 # an attempt, lost or won
-    send_env(c, *walk_body(seed, [100, 16, 2, 4]))              # and another, on the same seed
+    send_env(c, *walk_body(seed, [100, 16, 2], outcome: 2))     # an attempt, lost
+    send_env(c, *walk_body(seed, [100, 16, 2, 4]))              # another, on the same seed, won
     recs = wait_for { (r = @db[:battle_records].order(:id).all).size == 2 && r }
     assert_equal [row, row], recs.map { |r| r[:trainer_battle_id] }
     assert_equal %w[walk_ok walk_ok], recs.map { |r| r[:replay_status] }
-    env, body = walk_body(seed, [100, 16])
+    send_env(c, *walk_body(seed, [100, 16, 2, 4]))              # the win again: a copy, dropped
+    wait_for { @logs.any? { |l| l.include?("duplicate record for the won battle on trainer seed #{row}") } }
+    env, body = walk_body(seed, [100, 16], outcome: 2)
     rec = W.decode_primitive(body)
     rec[:draws][:b][:log] = [100, 0, 16, 0].pack("N*")            # the same bounds, values the seed never gave
     send_env(c, env, W.encode_primitive(rec))
     bad = wait_for { @db[:battle_records].count == 3 && @db[:battle_records].order(:id).last }
     assert_equal "walk_mismatch", bad[:replay_status]
+    c.close
+  end
+
+  def test_a_spent_seed_binds_no_more_battles
+    start_server
+    c, = authed_conn("ts7@t.co")
+    seed = ask(c, LIAM)[:seed]
+    @db[:trainer_battles].where(seed: seed).update(state: "proven")
+    send_env(c, *walk_body(seed, [100, 16], outcome: 2))
+    rec = wait_for { @db[:battle_records].first }
+    assert_nil rec[:trainer_battle_id], "an old seed's record binds nothing"
     c.close
   end
 end
