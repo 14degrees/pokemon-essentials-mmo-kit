@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-29T05:47:00",
+  "generated_at": "2026-09-29T07:02:40",
   "maps": {
     "1": {
       "name": "Intro",
@@ -1670,7 +1670,7 @@
         "ffffffffffffffffffff"
       ],
       "trainers": [
-        {"event_id": 3, "x": 6, "y": 6, "type": "CHAMPION", "name": "Blue", "version": 0}
+        {"event_id": 3, "x": 6, "y": 6, "type": "CHAMPION", "name": "Blue", "version": 0, "repeatable": true}
       ]
     },
     "38": {
@@ -2186,7 +2186,7 @@
       },
       "trainers": [
         {"event_id": 5, "x": 14, "y": 18, "type": "TEAMROCKET_M", "name": "Grunt", "version": 1},
-        {"event_id": 6, "x": 14, "y": 19, "type": "TEAMROCKET_F", "name": "Grunt", "version": 1}
+        {"event_id": 6, "x": 14, "y": 19, "type": "TEAMROCKET_F", "name": "Grunt", "version": 1, "repeatable": true}
       ]
     },
     "49": {
@@ -3828,5 +3828,12 @@
       {"map": 62, "event": 5, "calls": ["script"], "fields": ["battle_points"], "amounts": [], "computed": true},
       {"map": 62, "event": 4, "calls": ["script"], "fields": ["battle_points"], "amounts": [], "computed": true}
     ]
+  },
+  "trainer_marks": true,
+  "partners": {
+    "list": [
+      ["POKEMONTRAINER_May", "May", 0]
+    ],
+    "computed": false
   }
 }

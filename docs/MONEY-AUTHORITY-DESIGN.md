@@ -352,11 +352,14 @@ an item bought with battle points, goes to a counter per account and day, logged
 
 Built 2026-09-29 for the local tiers: the sale is labelled, logged `UNOWNED-SOURCE`, and
 moves C without S; without item authority every sale is unowned. The units the server
-itself sold the account are not local, whatever their tier: a gated purchase counts them
-per item (`inventory_snapshots.bought`), a sale spends that count first, and every snapshot
-lowers it to what the possession may still hold - with a bag-only snapshot, the bag and the
-stores last known, so units used there and conjured back never pass for sold ones. Still
-to come: the items bought with battle points and the daily counter.
+itself sold the account are not local, whatever their tier: a gated purchase paid with
+money counts them per item (`inventory_snapshots.bought`), a sale spends that count first,
+and every snapshot lowers it to what the possession may still hold - with a bag-only
+snapshot, the bag and the stores last known, so units used there and conjured back never
+pass for sold ones. Battle points are the client's word until BP authority, so what they
+buy is not counted: conjured BP spent at the exchange, then sold at a Mart, stays unowned
+for a local tier. Still to come: the judged items bought with battle points (their sale is
+owned today - blocker 4) and the daily counter.
 
 ### Preconditions
 
@@ -417,14 +420,23 @@ client's stated amount (now the server's bound).
   taken for a replay of it.
 - A frame is never judged ahead of its claims: no money frame leaves while a prize claim
   is unanswered (a hold like the shop doubt's), `Shop.ask` waits for them too, and a claim
-  over its frame budget gets "wait" instead of silence.
+  over its frame budget gets "wait" instead of silence. The client sends a trainer
+  battle's Pay Day claim only once its prize claim is answered. These ship together, with
+  `on`: a Pay Day held alone would let the money frame judge its coins first, and a hold
+  without `Shop.ask` waiting would let a Mart purchase adopt a balance without the prize.
 - A Pay Day claim, or one stating Happy Hour, gets "wait" until the connection's first
   team report; a reconnect's reseed sends position, bag and team before re-sending claims.
+  Built in shadow (2026-09-29), with a trainer battle's Pay Day waiting until the prize
+  claim its connection sent ahead of it has a verdict - the reactor notes each claim a
+  connection sends, those over the frame budget too, and forgets a malformed one; the
+  account's mailbox judges them in order. The client already sends its team on every new
+  connection.
 - Claims made while disconnected are flagged by the client and judged without the place
   check (logged); the once-per-battle rule still binds. A resume does not seed the
   position from the save, and the last map of each account is kept across restarts.
 - `handle_save` seals the claims recorded before it, as gifts are sealed, so a crash
-  after a checkpoint does not void a prize the save holds.
+  after a checkpoint does not void a prize the save holds. Built (2026-09-29): a
+  checkpoint waits for the battle's event to end, so the win is in that save.
 - Under `on`, a login without the money-claims capability is refused with an update
   message: an older client claims nothing, and every prize would be refused.
 
@@ -447,7 +459,17 @@ client's stated amount (now the server's bound).
 5. Repeatable trainer placements: the export marks a placement repeatable when its
    winning branch does not set its self-switch unconditionally; each is a blocker until
    the server can bound its repeats (Champion Blue, the Shadow Grunt in the demo).
-6. The exports: trainer placements, base money and the start money.
+   Marked since 2026-09-29: a battle is fought once when every call starting it is a
+   conditional branch whose win turns on, at the branch's own level, all that a later
+   page waits for; the boot names the others, and a re-fight's refusal says so. A later
+   page's battle is its own (keyed by its page), and a trainer id placed on several
+   events is paid once - right for a double battle's two events, wrong for one generic
+   trainer reused on two routes: a blocker to tell apart by the events each win disables.
+6. The exports: trainer placements, base money and the start money. Also exported
+   (2026-09-29): a placement whose battle rules say it pays nothing (`noMoney`: the
+   engine claims nothing there, so a claim is forged - `no_money`, flagged), and the
+   partner trainers the game registers (an Amulet Coin counts on those versions only; a
+   partner computed at runtime keeps any version).
 7. `PEMK_POS_ENFORCE=on` is not a blocker: a battle already pays once, and placement only
    makes "being there" cost a walk.
 

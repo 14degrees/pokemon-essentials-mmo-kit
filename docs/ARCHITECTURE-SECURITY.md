@@ -569,16 +569,29 @@ Amulet Coin and Happy Hour facts, after a fresh position. The server judges each
 against the exports and records its verdict:
 - each trainer is known and placed on the claim's map, and that map is where the server
   last saw the player (or the map just left, or where the previous connection ended);
-- a battle pays once - per trainer version, and per event for a battle that cannot be
-  fought again, so the branches of one event are one battle;
+- a battle pays once - per trainer version, and per event page for a battle that cannot
+  be fought again, so the branches of one page are one battle;
+- a battle whose rules say it pays nothing (`noMoney`) is never claimed by the engine: a
+  claim for one is refused (`no_money`) and flagged;
 - a phone rematch pays in version order, at most once per 20 minutes per contact;
 - the amount is within its bound: the strongest Pokemon's level times the type's base
-  money, summed, doubled for an Amulet Coin the record holds on a party Pokemon and for a
-  Happy Hour the party could have brought.
+  money, summed, doubled for an Amulet Coin the record holds on a party Pokemon (or the
+  export gives a partner the game registers) and for a Happy Hour the party could have
+  brought.
 
-A claim no money frame sealed is voided at a fresh login (the save may lack the battle).
-The log says `money: ... prize N for ...`, `WOULD-REFUSE` (away, unknown, repeat, order,
-cadence) or `SUSPECT` (over the bound), and the boot names what the claims cannot rely on
+The export also marks the battles the game lets be fought again (the win turns on nothing
+a later page waits for, or only under a further condition - the demo's Champion Blue and
+repeat Grunt): the boot names them, and a re-fight's refusal says so.
+
+A claim is judged with what its connection reported, and answered "wait" (nothing recorded,
+the client asks again) before that: its position; for Pay Day or a stated Happy Hour, its
+team; for a trainer battle's Pay Day, the verdict of the prize claim the connection sent
+ahead of it (one dropped over its frame budget included: it goes out again). A claim that
+neither a money frame nor a save followed is voided at a fresh login (the save may lack
+the battle); a checkpoint waits for the battle's event to end, so a save after a claim
+holds its win.
+The log says `money: ... prize N for ...`, `WOULD-REFUSE` (away, unknown, no_money, repeat,
+order, cadence) or `SUSPECT` (over the bound), and the boot names what the claims cannot rely on
 in this configuration. Autotest 077 fights Camper Liam and finds his claim paid for exactly
 what the engine paid.
 
@@ -612,10 +625,11 @@ A sale of items the server never judged - a local tier such as the Pickup table'
 or any sale without item authority - moves the client's balance but not S: the log says
 `UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.
 Enforcement cannot trust that money until those sources are modelled or capped. The units
-the server itself sold the account are its own, whatever their tier: a gated purchase
-counts them, a sale spends the count first, and each snapshot lowers it to what the
-possession may still hold (a bag-only one with the stores last known), so a Mart Potion
-resold is owned and a used one conjured back is not.
+the server itself sold the account are its own, whatever their tier: a gated purchase paid
+with money counts them (battle points are the client's word until BP authority), a sale
+spends the count first, and each snapshot lowers it to what the possession may still hold
+(a bag-only one with the stores last known), so a Mart Potion resold is owned and a used
+one conjured back is not.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 

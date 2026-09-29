@@ -25,6 +25,8 @@ class ServerMoneyClaimTest < Minitest::Test
   WORLD = Tempfile.new(["pemk_world", ".json"])
   WORLD.write(JSON.generate(
     "schema_version" => 3,
+    "trainer_marks" => true,
+    "partners" => { "list" => [["POKEMONTRAINER", "May", 0]], "computed" => false },
     "maps" => {
       "31" => { "name" => "Route", "width" => 20, "height" => 20, "objects" => [], "trainers" => [
         { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 0, "rematch" => true },
@@ -32,11 +34,17 @@ class ServerMoneyClaimTest < Minitest::Test
         { "event_id" => 7, "x" => 2, "y" => 2, "type" => "LASS", "name" => "Anna", "version" => 0 },
         { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0 },
         { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1 },
-        { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 }
+        { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 },
+        { "event_id" => 3, "x" => 5, "y" => 5, "type" => "CHAMPION", "name" => "Blue", "version" => 0, "repeatable" => true },
+        { "event_id" => 20, "x" => 6, "y" => 6, "type" => "YOUNGSTER", "name" => "Ben", "version" => 0 },
+        { "event_id" => 20, "x" => 6, "y" => 6, "type" => "YOUNGSTER", "name" => "Ben", "version" => 1, "page" => 1 },
+        { "event_id" => 21, "x" => 7, "y" => 7, "type" => "YOUNGSTER", "name" => "Joey", "version" => 0, "no_money" => true }
       ] },
       "32" => { "name" => "Town", "width" => 20, "height" => 20, "objects" => [
         { "kind" => "mart", "items" => %w[POTION], "prices" => {}, "price_options" => {}, "sell_options" => {},
-          "dynamic" => false, "x" => 9, "y" => 9, "event_id" => 20 }
+          "dynamic" => false, "x" => 9, "y" => 9, "event_id" => 20 },
+        { "kind" => "bp_shop", "items" => %w[PROTEIN], "prices" => {}, "price_options" => {}, "dynamic" => false,
+          "x" => 11, "y" => 9, "event_id" => 22 }
       ] }
     }
   ))
@@ -45,14 +53,21 @@ class ServerMoneyClaimTest < Minitest::Test
   BATTLE = Tempfile.new(["pemk_battle", ".json"])
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["trainer_types"] = { "CAMPER" => { "base_money" => 16 }, "LASS" => { "base_money" => 20 },
-                           "RIVAL1" => { "base_money" => 60 } }
+                           "RIVAL1" => { "base_money" => 60 }, "CHAMPION" => { "base_money" => 100 },
+                           "YOUNGSTER" => { "base_money" => 16 } }
   src["trainers"] = [
     { "type" => "CAMPER", "name" => "Jeff", "version" => 0, "party" => [["SPEAROW", 16, nil, %w[PECK]]] },
     { "type" => "CAMPER", "name" => "Jeff", "version" => 1, "party" => [["SPEAROW", 30, nil, %w[PECK]]] },
     { "type" => "LASS", "name" => "Anna", "version" => 0, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
     { "type" => "RIVAL1", "name" => "Blue", "version" => 0, "party" => [["PIDGEY", 10, nil, %w[TACKLE]]] },
     { "type" => "RIVAL1", "name" => "Blue", "version" => 1, "party" => [["PIDGEY", 12, nil, %w[TACKLE]]] },
-    { "type" => "LASS", "name" => "Copy", "version" => 0, "party" => [["CLEFAIRY", 10, nil, %w[METRONOME]]] }
+    { "type" => "LASS", "name" => "Copy", "version" => 0, "party" => [["CLEFAIRY", 10, nil, %w[METRONOME]]] },
+    { "type" => "CHAMPION", "name" => "Blue", "version" => 0, "party" => [["PIDGEOT", 50, nil, %w[TACKLE]]] },
+    { "type" => "YOUNGSTER", "name" => "Ben", "version" => 0, "party" => [["RATTATA", 10, nil, %w[TACKLE]]] },
+    { "type" => "YOUNGSTER", "name" => "Ben", "version" => 1, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
+    { "type" => "YOUNGSTER", "name" => "Joey", "version" => 0, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
+    { "type" => "POKEMONTRAINER", "name" => "May", "version" => 0, "party" => [["TORCHIC", 10, "AMULETCOIN", %w[EMBER]]] },
+    { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] }
   ]
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
@@ -130,6 +145,45 @@ class ServerMoneyClaimTest < Minitest::Test
     assert(logs.any? { |l| l.include?("prize 400 for LASS Anna v0") })
   end
 
+  # A battle the game lets be fought again (its win marks nothing a later page waits for):
+  # the boot names it, and a re-fight's refusal says so.
+  def test_a_battle_fought_again_by_design
+    start_server
+    assert(logs.any? { |l| l.include?("fought again") && l.include?("CHAMPION Blue v0 (map 31 event 3)") })
+    s, = login
+    assert_equal "paid", claim(s, 1, [["CHAMPION", "Blue", 0, 31, 3]], 5000)[:verdict], "50 x 100"
+    assert_equal "repeat", claim(s, 2, [["CHAMPION", "Blue", 0, 31, 3]], 5000)[:verdict]
+    assert(logs.any? { |l| l.include?("WOULD-REFUSE") && l.include?("a battle the game lets be fought again") })
+  end
+
+  # The battle rules say it pays nothing: the engine claims nothing, so a claim is forged.
+  def test_a_battle_that_pays_nothing
+    start_server
+    s, = login
+    assert_equal ["no_money", 0], claim(s, 1, [["YOUNGSTER", "Joey", 0, 31, 21]], 320).values_at(:verdict, :accepted)
+    assert(logs.any? { |l| l.include?("WOULD-REFUSE prize 320 for YOUNGSTER Joey v0 (no_money)") })
+  end
+
+  # An Amulet Coin on the partner trainer's party counts for a partner the game registers.
+  def test_the_partner_is_one_the_game_registers
+    start_server
+    s, = login
+    assert_equal ["suspect", 400], claim(s, 1, [ANNA], 800, amulet: true, partner: %w[RICHBOY Rich])
+      .values_at(:verdict, :accepted), "never registered as a partner"
+    assert_equal ["paid", 1200], claim(s, 2, [blue(0)], 1200, amulet: true, partner: %w[POKEMONTRAINER May])
+      .values_at(:verdict, :accepted), "10 x 60, doubled: May holds one"
+  end
+
+  # A later page's battle (the first win moved the event on) is another battle.
+  def test_a_later_pages_battle_is_another
+    start_server
+    s, = login
+    ben = ->(v) { ["YOUNGSTER", "Ben", v, 31, 20] }
+    assert_equal "paid", claim(s, 1, [ben.(0)], 160)[:verdict]
+    assert_equal "paid", claim(s, 2, [ben.(1)], 320)[:verdict], "the event's second page"
+    assert_equal "repeat", claim(s, 3, [ben.(1)], 320)[:verdict]
+  end
+
   def test_a_battle_is_paid_once
     start_server
     s, = login
@@ -191,6 +245,20 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal "repeat", claim(s, 3, [ANNA], 400)[:verdict], "sealed by the money frame"
     assert_equal 1, @db[:money_claims].where(account_id: lo[:account_id]).exclude(voided_at: nil).count
     assert_equal ["void", 0], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "the voided one, asked again"
+  end
+
+  # A save after a claim holds its battle, with or without a money frame between them.
+  def test_a_save_seals_the_claims_before_it
+    start_server
+    s, lo = login
+    claim(s, 1, [ANNA], 400)
+    s.write(W.encode_split({ type: :save }, "\x04\b0".b))
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)   # the save's job ran before this one
+    s.close
+    s, = login
+    assert_equal "repeat", claim(s, 2, [ANNA], 400)[:verdict], "sealed by the save"
+    assert_equal 0, @db[:money_claims].where(account_id: lo[:account_id]).exclude(voided_at: nil).count
   end
 
   def money(s, value, seq)
@@ -326,6 +394,52 @@ class ServerMoneyClaimTest < Minitest::Test
     assert(logs.any? { |l| l.include?("pay day 60 (bound 600) (unminted)") })
   end
 
+  # A claim is judged with what its connection reported: nothing is recorded before.
+  def test_a_claim_waits_for_what_it_is_judged_with
+    start_server
+    s, lo = login(map: nil)
+    assert_equal "wait", claim(s, 1, [ANNA], 400)[:verdict], "no position yet"
+    assert_equal "wait", payday(s, 2, 60, trainer_claim: 1)[:verdict], "no team yet"
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    assert_equal "wait", payday(s, 2, 60, trainer_claim: 1)[:verdict], "its prize still waits"
+    assert_equal 0, @db[:money_claims].where(account_id: lo[:account_id]).count
+    send_env(s, { type: :pos, map: 31, x: 5, y: 5, dir: 2 })
+    assert_equal "paid", claim(s, 1, [ANNA], 400)[:verdict]
+    assert_equal "paid", payday(s, 2, 60, trainer_claim: 1)[:verdict], "judged after its prize"
+    s2, = login("claim2@t.co")
+    assert_equal "wait", claim(s2, 3, [ANNA], 800, happy_hour: true)[:verdict], "Happy Hour: no team yet"
+    assert_equal "paid", claim(s2, 4, [blue(0)], 600)[:verdict], "a prize alone needs no team"
+    # a prize claim refused as malformed never holds its Pay Day
+    team(s2, ["MEOWTH", 12, %w[PAYDAY]])
+    assert_equal "bad", claim(s2, 5, [ANNA], -1)[:verdict]
+    assert_equal "unproven", payday(s2, 6, 60, trainer_claim: 5)[:verdict]
+  end
+
+  # A prize claim dropped over its frame budget goes out again: the Pay Day that gets
+  # through after it waits for it.
+  def test_a_pay_day_waits_for_a_prize_over_its_budget
+    start_server
+    s, = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    10.times { |i| send_env(s, { type: :money_claim, nonce: 100 + i, trainers: [ANNA], amount: 400, map: 31 }) }
+    send_env(s, { type: :money_claim, nonce: 1, trainers: [blue(0)], amount: 600, map: 31 })   # over budget
+    10.times { recv_type(s, :money_claim_ack) }
+    sleep 0.8   # the budget grows back by one
+    assert_equal "wait", payday(s, 2, 60, trainer_claim: 1)[:verdict], "its prize is coming"
+    sleep 1.2   # room for both
+    assert_equal "paid", claim(s, 1, [blue(0)], 600)[:verdict]
+    assert_equal "paid", payday(s, 2, 60, trainer_claim: 1)[:verdict]
+    # a malformed one dropped the same way, then refused, holds nothing
+    s2, = login("claim2@t.co")
+    team(s2, ["MEOWTH", 12, %w[PAYDAY]])
+    10.times { |i| send_env(s2, { type: :money_claim, nonce: 200 + i, trainers: [ANNA], amount: 400, map: 31 }) }
+    send_env(s2, { type: :money_claim, nonce: 3, trainers: [ANNA], amount: -1, map: 31 })   # over budget
+    10.times { recv_type(s2, :money_claim_ack) }
+    sleep 1.2
+    assert_equal "bad", claim(s2, 3, [ANNA], -1)[:verdict]
+    assert_equal "unproven", payday(s2, 4, 60, trainer_claim: 3)[:verdict]
+  end
+
   def test_pay_day_in_a_trainer_battle_follows_its_prize
     start_server
     s, = login
@@ -363,6 +477,26 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal 1000 - 2 * potion["price"] + 2 * sold, s_now, "the two it sold count"
     assert_equal s_now + 2 * sold, c_now, "two more than it sold do not"
     assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{2 * sold} (sold POTION") })
+  end
+
+  # Battle points are the client's word until BP authority: what they buy is not money the
+  # server received, and its resale is not owned.
+  def test_a_resale_of_what_battle_points_bought
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    money(s, 1000, 1)
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["PROTEIN"])
+    protein = @server.instance_variable_get(:@battle).item("PROTEIN")
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 1, unit_price: protein["bp_price"], bp: true,
+                  map: 32, event: 22, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    assert_equal({}, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bought).to_h)
+    assert_equal :shop_grant, sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:type]
+    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{protein['sell_price']} (sold PROTEIN") })
   end
 
   # Units used where a bag-only snapshot shows it are gone from the count: conjured back,
@@ -403,6 +537,7 @@ class ServerMoneyClaimTest < Minitest::Test
   def test_happy_hour_needs_the_move
     start_server
     s, = login
+    team(s, ["PIKACHU", 10, %w[THUNDERSHOCK]])
     assert_equal ["suspect", 400], claim(s, 1, [ANNA], 800, happy_hour: true).values_at(:verdict, :accepted)
     send_env(s, { type: :team_check, team: [{ "species" => "CLEFAIRY", "level" => 10, "moves" => %w[METRONOME] }], seq: 1 })
     recv_type(s, :team_ack)

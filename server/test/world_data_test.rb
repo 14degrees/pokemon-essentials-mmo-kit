@@ -120,6 +120,35 @@ class WorldDataTest < Minitest::Test
     refute load(sample).trainers_known?   # a pre-D4 export
   end
 
+  # Money authority: the battles the game lets be fought again, and whether the export says.
+  def test_repeatable_trainers
+    doc = sample
+    doc["maps"]["5"]["trainers"] = [
+      { "event_id" => 4, "x" => 3, "y" => 8, "type" => "CAMPER", "name" => "Liam", "version" => 0 },
+      { "event_id" => 3, "x" => 6, "y" => 6, "type" => "CHAMPION", "name" => "Blue", "version" => 0, "repeatable" => true }
+    ]
+    assert_nil load(doc).repeatable_trainers, "an export before the mark"
+    doc["trainer_marks"] = true
+    w = load(doc)
+    assert_equal [[5, 3, "CHAMPION", "Blue", 0]], w.repeatable_trainers
+    assert_equal true, w.trainer_place(5, 3, "CHAMPION", "Blue", 0)["repeatable"]
+    assert_equal false, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["repeatable"]
+    assert_equal 0, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["page"]
+    assert_equal false, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["no_money"]
+  end
+
+  # Money authority: the partner trainers the game registers.
+  def test_partner_versions
+    doc = sample
+    assert_nil load(doc).partner_versions("POKEMONTRAINER", "May"), "an export before the list"
+    doc["partners"] = { "list" => [["POKEMONTRAINER", "May", 0], ["POKEMONTRAINER", "May", 2], "junk"], "computed" => false }
+    w = load(doc)
+    assert_equal [0, 2], w.partner_versions("POKEMONTRAINER", "May")
+    assert_equal [], w.partner_versions("RICHBOY", "Rich")
+    doc["partners"]["computed"] = true
+    assert_nil load(doc).partner_versions("POKEMONTRAINER", "May"), "a partner computed at runtime: any"
+  end
+
   def test_prize_events
     doc = sample
     doc["maps"]["7"]["objects"] = [{ "kind" => "prize", "item" => "MASTERBALL", "items" => %w[MASTERBALL PPUP],
