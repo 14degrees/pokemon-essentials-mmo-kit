@@ -32,8 +32,13 @@ class ServerMoneyClaimTest < Minitest::Test
         { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 0, "rematch" => true },
         { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 1, "rematch" => true },
         { "event_id" => 7, "x" => 2, "y" => 2, "type" => "LASS", "name" => "Anna", "version" => 0 },
-        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0 },
-        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1 },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0, "calls" => [2] },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1, "calls" => [0] },
+        { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "Amy", "version" => 0, "calls" => [0] },
+        { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "May", "version" => 0, "calls" => [0] },
+        { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "Kay", "version" => 0, "calls" => [1] },
+        { "event_id" => 24, "x" => 9, "y" => 9, "type" => "YOUNGSTER", "name" => "Joey", "version" => 1, "calls" => [0] },
+        { "event_id" => 24, "x" => 9, "y" => 9, "type" => "YOUNGSTER", "name" => "Joey", "version" => 2, "calls" => [0] },
         { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 },
         { "event_id" => 3, "x" => 5, "y" => 5, "type" => "CHAMPION", "name" => "Blue", "version" => 0, "repeatable" => true },
         { "event_id" => 20, "x" => 6, "y" => 6, "type" => "YOUNGSTER", "name" => "Ben", "version" => 0 },
@@ -53,7 +58,7 @@ class ServerMoneyClaimTest < Minitest::Test
   BATTLE = Tempfile.new(["pemk_battle", ".json"])
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["trainer_types"] = { "CAMPER" => { "base_money" => 16 }, "LASS" => { "base_money" => 20 },
-                           "RIVAL1" => { "base_money" => 60 }, "CHAMPION" => { "base_money" => 100 },
+                           "RIVAL1" => { "base_money" => 60 }, "CHAMPION" => { "base_money" => 100 }, "TWINS" => { "base_money" => 16 },
                            "YOUNGSTER" => { "base_money" => 16 } }
   src["trainers"] = [
     { "type" => "CAMPER", "name" => "Jeff", "version" => 0, "party" => [["SPEAROW", 16, nil, %w[PECK]]] },
@@ -67,7 +72,12 @@ class ServerMoneyClaimTest < Minitest::Test
     { "type" => "YOUNGSTER", "name" => "Ben", "version" => 1, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
     { "type" => "YOUNGSTER", "name" => "Joey", "version" => 0, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
     { "type" => "POKEMONTRAINER", "name" => "May", "version" => 0, "party" => [["TORCHIC", 10, "AMULETCOIN", %w[EMBER]]] },
-    { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] }
+    { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] },
+    { "type" => "TWINS", "name" => "Amy", "version" => 0, "party" => [["PLUSLE", 10, nil, %w[SPARK]]] },
+    { "type" => "TWINS", "name" => "May", "version" => 0, "party" => [["MINUN", 10, nil, %w[SPARK]]] },
+    { "type" => "TWINS", "name" => "Kay", "version" => 0, "party" => [["PICHU", 10, nil, %w[SPARK]]] },
+    { "type" => "YOUNGSTER", "name" => "Joey", "version" => 1, "party" => [["RATTATA", 10, nil, %w[TACKLE]]] },
+    { "type" => "YOUNGSTER", "name" => "Joey", "version" => 2, "party" => [["RATTATA", 10, nil, %w[TACKLE]]] }
   ]
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
@@ -115,11 +125,13 @@ class ServerMoneyClaimTest < Minitest::Test
     end
   end
 
-  def login(email = "claim@t.co", map: 31)
+  def login(email = "claim@t.co", map: 31, caps: nil)
     s = TCPSocket.new("127.0.0.1", @port)
     send_env(s, { type: :register, email: email, password: "password1" })
     recv_type(s, :register_ok, :register_err)
-    send_env(s, { type: :login, email: email, password: "password1" })
+    frame = { type: :login, email: email, password: "password1" }
+    frame[:caps] = caps if caps
+    send_env(s, frame)
     lo = recv_type(s, :login_ok)
     send_env(s, { type: :pos, map: map, x: 5, y: 5, dir: 2 }) if map
     [s, lo]
@@ -160,6 +172,18 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal "paid", claim(s, 3, [champion], 5000)[:verdict], "twenty minutes later"
     assert_nil @db[:money_payouts].where(account_id: lo[:account_id], key: "trainer:CHAMPION:Blue:0").first,
                "its event is its clock"
+  end
+
+  # A claim proves no fight: what battles fought again pay is bounded per day.
+  def test_battles_fought_again_are_bounded_per_day
+    start_server("shadow", "PEMK_MONEY_REPEAT_DAILY" => "7000")
+    s, lo = login
+    champion = ["CHAMPION", "Blue", 0, 31, 3]
+    assert_equal ["paid", 5000], claim(s, 1, [champion], 5000).values_at(:verdict, :accepted)
+    @db[:money_payouts].where(account_id: lo[:account_id]).update(paid_at: Time.now - (21 * 60))
+    assert_equal ["paid", 2000], claim(s, 2, [champion], 5000).values_at(:verdict, :accepted), "what the day has left"
+    assert_equal %w[repeatable repeatable], @db[:money_claims].where(account_id: lo[:account_id]).order(:nonce).select_map(:kind)
+    assert(logs.any? { |l| l.include?("prize 5000 held to 2000 (the day's allowance for battles fought again)") })
   end
 
   # The battle rules say it pays nothing: the engine claims nothing, so a claim is forged.
@@ -614,5 +638,235 @@ class ServerMoneyClaimTest < Minitest::Test
     send_env(s, { type: :money_claim, nonce: 1, trainers: [ANNA], amount: 400, map: 31 })
     assert_raises(Timeout::Error) { recv_type(s, :money_claim_ack) }
     assert_equal 0, @db[:money_claims].count
+  end
+
+  # --- M3: enforcement -------------------------------------------------------------
+
+  # 'on' enforces only once every source of money is one the server makes or bounds.
+  def test_on_runs_as_shadow_while_a_blocker_is_left
+    start_server("on")
+    boot = logs
+    assert(boot.any? { |l| l.include?("'on' runs as shadow until:") && l.include?("the shop gate is not on") })
+    assert_equal false, @server.instance_variable_get(:@money_enforce)
+    _, lo = login("claim@t.co", caps: %w[money_claims])
+    assert_equal "shadow", lo[:money_claims], "the mode the claims are judged in"
+  end
+
+  # Enforced: the server pays what it judges, and a frame above the balance is refused -
+  # recorded under its seq, so the next frame follows it.
+  def test_enforced_the_server_pays_and_refuses_the_rest
+    s, lo = enforced_login
+    assert_equal "on", lo[:money_claims]
+    assert_equal start_money, lo[:econ][:money], "the server's start money, adopted with the login"
+    assert_equal [:econ_ack, 1000], money(s, 1000, 1).values_at(:type, :value), "a spend"
+    assert_equal ["paid", 400], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted)
+    assert_equal 1400, balance(lo), "paid by the server"
+    assert_equal 400, @db[:money_claims].where(account_id: lo[:account_id], nonce: 1).get(:credited)
+    r = money(s, 1400, 2)
+    assert_equal [:econ_ack, 1400], r.values_at(:type, :value), "the frame that shows the prize"
+    r = money(s, 9999, 3)
+    assert_equal [:econ_rej, 1400, "unexplained"], r.values_at(:type, :value, :reason)
+    assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], seq: 3, reason: "refused:+8599").count
+    assert_equal [:econ_ack, 1300], money(s, 1300, 4).values_at(:type, :value), "a spend after it"
+    assert(logs.any? { |l| l.include?("REFUSED a frame of 9999 over the balance 1400") })
+  end
+
+  # Enforced: a claim a fresh login voids takes its payment back.
+  def test_enforced_a_void_takes_the_payment_back
+    s, lo = enforced_login
+    claim(s, 1, [ANNA], 400)
+    assert_equal balance(lo), @db[:money_claims].where(account_id: lo[:account_id]).get(:credited) + start_money
+    s.close
+    _, lo = login("claim@t.co", caps: %w[money_claims])
+    assert_equal start_money, balance(lo), "the save it loads may lack the battle"
+    assert_equal start_money, lo[:econ][:money]
+  end
+
+  # Enforced: a client that claims nothing would see every prize refused.
+  def test_enforced_an_older_client_must_update
+    start_server("on")
+    @server.instance_variable_set(:@money_enforce, true)
+    s = TCPSocket.new("127.0.0.1", @port)
+    send_env(s, { type: :register, email: "old@t.co", password: "password1" })
+    recv_type(s, :register_ok, :register_err)
+    send_env(s, { type: :login, email: "old@t.co", password: "password1" })
+    assert_equal "update_required", recv_type(s, :login_ok, :login_err)[:reason]
+  end
+
+  # --- M3 review (2026-09-29): what an adversarial read found -------------------------
+
+  # Units battle points bought, hidden from a bag-only snapshot and shown again by a full
+  # one, are still theirs: the count is lowered only by judged totals.
+  def test_bp_units_hidden_from_a_bag_only_snapshot_stay_bp_units
+    s, lo = enforced_login(shop: true)
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    stores = { pc: {}, mail: {}, held: {}, holders: {} }
+    send_env(s, { type: :inv, bag: {}, stores: stores, seq: 1 })   # the judged baseline
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set.new)
+    protein = @server.instance_variable_get(:@battle).item("PROTEIN")
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 3, unit_price: protein["bp_price"], bp: true,
+                  map: 32, event: 22, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    send_env(s, { type: :inv, bag: {}, seq: 2 })                      # hidden, bag-only
+    recv_type(s, :inv_ack)
+    send_env(s, { type: :inv, bag: { PROTEIN: 3 }, stores: stores, seq: 3 })   # back
+    recv_type(s, :inv_ack)
+    assert_equal({ "PROTEIN" => 3 }, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bp_bought).to_h)
+    assert_equal "bp_bought", sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:reason]
+  end
+
+  # A claim whose payment was spent is kept at a fresh login - taking back part of it
+  # would let the battle be claimed again for the rest; a deal after it seals it.
+  def test_a_spent_prize_is_never_claimed_twice
+    s, lo = enforced_login(shop: true)
+    claim(s, 1, [ANNA], 400)
+    s.close
+    @db[:economy_balances].where(account_id: lo[:account_id], field: "money").update(balance: 100)   # spent
+    s, = login("claim@t.co", caps: %w[money_claims])
+    assert_equal 100, balance(lo), "nothing taken back"
+    assert_equal "repeat", claim(s, 2, [ANNA], 400)[:verdict], "kept, still paid"
+    assert(logs.any? { |l| l.include?("kept 1 unsealed prize claim(s): their money was spent") })
+    s.close
+    s, lo = enforced_login(shop: true, email: "deal@t.co")
+    claim(s, 3, [ANNA], 400)
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)
+    potion = @server.instance_variable_get(:@battle).item("POTION")
+    send_env(s, { type: :shop_req, op: :buy, item: "POTION", quantity: 1, unit_price: potion["price"], map: 32,
+                  event: 20, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    refute_nil @db[:money_claims].where(account_id: lo[:account_id], nonce: 3).get(:sealed_at), "sealed by the deal"
+  end
+
+  # A client frame's seq is positive and bounded.
+  def test_a_frame_seq_is_positive_and_bounded
+    s, = enforced_login
+    assert_equal "bad_seq", money(s, 100, -(2**63))[:reason]
+    assert_equal "bad_seq", money(s, 100, 0)[:reason]
+    assert_equal "bad_seq", money(s, 100, 2**60)[:reason]
+    assert_equal ["paid", 400], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "the ledger still pays"
+  end
+
+  # A claim is judged by this connection's own position, or where the last save stood.
+  def test_a_claim_is_judged_where_this_connection_reported
+    start_server
+    s, lo = login(map: nil)
+    @server.instance_variable_get(:@characters).store(lo[:account_id], blob: "\x04\b0".b, position: [31, 5, 5])
+    s.close
+    s, = login(map: nil)   # the login seeds the stored position: not this connection's word
+    assert_equal "wait", claim(s, 1, [ANNA], 400)[:verdict]
+    send_env(s, { type: :pos, map: 32, x: 5, y: 5, dir: 2 })
+    assert_equal "paid", claim(s, 1, [ANNA], 400)[:verdict], "walked on since the save that stood by Anna"
+  end
+
+  # One battle names a trainer once; the ack says when this request judged it.
+  def test_one_trainer_once_and_the_first_verdict
+    start_server
+    s, = login
+    assert_equal "bad", claim(s, 1, [ANNA, ["LASS", "Anna", 0, 31, 8]], 800)[:verdict], "one trainer, two events"
+    r = claim(s, 2, [ANNA], 400)
+    assert_equal ["paid", true], r.values_at(:verdict, :first)
+    assert_equal ["paid", false], claim(s, 2, [ANNA], 400).values_at(:verdict, :first), "asked again"
+  end
+
+  # A held item battle points bought stays one when its Pokemon is traded.
+  def test_a_traded_bp_item_stays_a_bp_item
+    start_server
+    _, lo = login
+    _, lo2 = login("claim2@t.co")
+    a = lo[:account_id]
+    b = lo2[:account_id]
+    [a, b].each do |acc|
+      @db[:inventory_snapshots].insert(account_id: acc, bag: Sequel.pg_jsonb({}), last_seq: 1, distinct_items: 0, total_qty: 0,
+                                       updated_at: Time.now)
+    end
+    @db[:inventory_snapshots].where(account_id: a).update(holders: Sequel.pg_jsonb({ "77" => "PROTEIN" }),
+                                                          bp_bought: Sequel.pg_jsonb({ "PROTEIN" => 2 }))
+    @server.send(:carry_bp_tags, a, b, [77])
+    count = ->(acc) { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
+    assert_equal [{ "PROTEIN" => 1 }, { "PROTEIN" => 1 }], [count.(a), count.(b)]
+  end
+
+  # --- second review ---------------------------------------------------------------
+
+  # BP units held by a Pokemon that drops out of a snapshot for a while stay BP units; the
+  # possession really losing units lowers the count.
+  def test_bp_units_leave_only_as_the_possession_loses_them
+    start_server
+    _, lo = login
+    acc = lo[:account_id]
+    @db[:inventory_snapshots].insert(account_id: acc, bag: Sequel.pg_jsonb({}), last_seq: 1, updated_at: Time.now,
+                                     bp_bought: Sequel.pg_jsonb({ "PROTEIN" => 3 }))
+    count = -> { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
+    none = Hash.new(0)
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, none.merge("PROTEIN" => 2), none)
+    assert_equal({ "PROTEIN" => 3 }, count.call, "two went with Pokemon that dropped out: not spent")
+    @server.send(:lower_bp, acc, { "PROTEIN" => 6 }, { "PROTEIN" => 3 }, none, none.merge("PROTEIN" => 3))
+    assert_equal({ "PROTEIN" => 3 }, count.call, "three conjured units dropped: the ones never recognized leave first")
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, none, none)
+    assert_equal({ "PROTEIN" => 1 }, count.call, "two used")
+  end
+
+  # One claim, one battle: the trainers it names from one event share a battle call - the
+  # rival's branches are separate battles, a double battle's pair is one.
+  def test_a_claim_is_one_battle
+    start_server
+    s, = login
+    assert_equal ["unknown", 0], claim(s, 1, [blue(0), blue(1)], 1320).values_at(:verdict, :accepted), "two branches"
+    apart = [["TWINS", "Amy", 0, 31, 23], ["TWINS", "Kay", 0, 31, 23]]
+    assert_equal ["unknown", 0], claim(s, 3, apart, 320).values_at(:verdict, :accepted), "two of the event's battles"
+    twins = [["TWINS", "Amy", 0, 31, 23], ["TWINS", "May", 0, 31, 23]]
+    assert_equal ["paid", 320], claim(s, 2, twins, 320).values_at(:verdict, :accepted), "10 x 16, twice"
+    grunts = [["YOUNGSTER", "Joey", 1, 31, 24], ["YOUNGSTER", "Joey", 2, 31, 24]]
+    assert_equal ["paid", 320], claim(s, 4, grunts, 320).values_at(:verdict, :accepted), "two of one name, one call"
+    assert_equal ["unknown", 0], claim(s, 5, [jeff(0), jeff(1)], 736).values_at(:verdict, :accepted),
+                 "a phone contact's versions: no calls, one version at most"
+  end
+
+  # Nothing is bought back where there is no Mart.
+  def test_a_sale_needs_a_mart
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, = login
+    send_env(s, { type: :inv, bag: { POTION: 1 }, seq: 1 })
+    recv_type(s, :inv_ack)
+    send_env(s, { type: :shop_req, op: :sell, item: "POTION", quantity: 1, unit_price: 100, map: 31, event: 7, seq: 1 })
+    assert_equal "not_a_shop", recv_type(s, :shop_grant, :shop_deny)[:reason], "Anna's event"
+  end
+
+  # A phone rematch is fought again too: the same daily allowance bounds it.
+  def test_phone_rematches_share_the_daily_allowance
+    start_server("shadow", "PEMK_MONEY_REPEAT_DAILY" => "300")
+    s, lo = login
+    assert_equal ["paid", 256], claim(s, 1, [jeff(0)], 256).values_at(:verdict, :accepted)
+    assert_equal ["paid", 44], claim(s, 2, [jeff(1)], 480).values_at(:verdict, :accepted), "what the day has left"
+    assert_equal %w[repeatable repeatable], @db[:money_claims].where(account_id: lo[:account_id]).order(:nonce).select_map(:kind)
+  end
+
+  # Voiding a login's claims can fail: the login goes on, the claims wait for the next.
+  def test_a_failed_void_never_ends_a_login
+    s, lo = enforced_login
+    claim(s, 1, [ANNA], 400)
+    s.close
+    @server.define_singleton_method(:take_back) { |*_| raise "boom" }
+    _, again = login("claim@t.co", caps: %w[money_claims])
+    assert_equal lo[:account_id], again[:account_id]
+    assert_nil @db[:money_claims].where(account_id: lo[:account_id], nonce: 1).get(:voided_at)
+    assert(logs.any? { |l| l.include?("WARNING voiding the claims of account") })
+  end
+
+  def enforced_login(shop: false, email: "claim@t.co")
+    start_server("on", shop ? { "PEMK_SHOP_ENFORCE" => "on" } : {}) unless @server
+    @server.instance_variable_set(:@money_enforce, true)
+    login(email, caps: %w[money_claims])
+  end
+
+  def balance(lo)
+    @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
+  end
+
+  def start_money
+    @server.instance_variable_get(:@battle).start_money
   end
 end

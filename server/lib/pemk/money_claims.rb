@@ -33,10 +33,13 @@ module PEMK
       @db[:money_claims].where(account_id: account_id, nonce: nonce).first
     end
 
-    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, kind: "trainer", now: Time.now)
+    # +credited+: what the server paid into the ledger for it (M3 enforcement; 0 in shadow).
+    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, kind: "trainer", credited: 0,
+               now: Time.now)
       @db[:money_claims].insert_conflict.insert(
         account_id: account_id, nonce: nonce, kind: kind, verdict: verdict, mode: mode.to_s,
-        amount: amount, accepted: accepted, map: map, trainers: Sequel.pg_jsonb(trainers), created_at: now
+        amount: amount, accepted: accepted, map: map, trainers: Sequel.pg_jsonb(trainers), credited: credited,
+        created_at: now
       )
     end
 
@@ -63,6 +66,12 @@ module PEMK
     end
 
     # -> what Pay Day claims credited this account today (UTC day)
+    # What the battles the game lets be fought again paid the account today (UTC).
+    def repeat_today(account_id, now: Time.now)
+      day = Time.utc(now.utc.year, now.utc.month, now.utc.day)
+      @db[:money_claims].where(account_id: account_id, kind: "repeatable").where { created_at >= day }.sum(:accepted).to_i
+    end
+
     def payday_today(account_id, now: Time.now)
       day = Time.utc(now.utc.year, now.utc.month, now.utc.day)
       @db[:money_claims].where(account_id: account_id, kind: "payday").where { created_at >= day }.sum(:accepted).to_i
@@ -96,14 +105,21 @@ module PEMK
     end
 
     # A fresh login: a claim still unsealed may be missing from the save that loads - the
-    # battle it paid for can be fought again, so its payouts go. -> the claims voided
+    # battle it paid for can be fought again, so its payouts go. The block, given each such
+    # claim, undoes its payment and says whether it could: a claim it could not undo is
+    # kept, sealed. -> the claims voided
     def void_unsealed(account_id, now: Time.now)
       rows = @db[:money_claims].where(account_id: account_id, sealed_at: nil, voided_at: nil, verdict: PAID).all
-      rows.each do |c|
-        @db[:money_payouts].where(account_id: account_id, nonce: c[:nonce]).delete
-        @db[:money_claims].where(account_id: account_id, nonce: c[:nonce]).update(voided_at: now)
+      rows.select do |c|
+        undone = block_given? ? yield(c) : true
+        if undone
+          @db[:money_payouts].where(account_id: account_id, nonce: c[:nonce]).delete
+          @db[:money_claims].where(account_id: account_id, nonce: c[:nonce]).update(voided_at: now)
+        else
+          @db[:money_claims].where(account_id: account_id, nonce: c[:nonce]).update(sealed_at: now)
+        end
+        undone
       end
-      rows
     end
   end
 end

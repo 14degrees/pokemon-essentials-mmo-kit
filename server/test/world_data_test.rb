@@ -135,6 +135,11 @@ class WorldDataTest < Minitest::Test
     assert_equal false, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["repeatable"]
     assert_equal 0, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["page"]
     assert_equal false, w.trainer_place(5, 4, "CAMPER", "Liam", 0)["no_money"]
+    refute w.battle_calls_known?, "an export from before the battle calls"
+    doc["maps"]["5"]["trainers"][0]["calls"] = [0]
+    w = load(doc)
+    assert w.battle_calls_known?
+    assert_equal [0], w.trainer_place(5, 4, "CAMPER", "Liam", 0)["calls"]
   end
 
   # Money authority: the partner trainers the game registers.

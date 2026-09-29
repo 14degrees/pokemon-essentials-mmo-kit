@@ -84,4 +84,65 @@ class EconReplyPluginTest < Minitest::Test
     assert_equal 1450, o[:plain]
     assert_equal [nil, 3], o[:badges]
   end
+
+  # M3: the money waits for the verdicts of this session's prizes; the other fields go.
+  # A money frame the server refused as unexplained tells the prize claims.
+  HOLD_RUNNER = <<~'RUBY'
+    $sent = []; $refused = 0
+    module Graphics; @f = 0; def self.frame_count; @f; end; end
+    class FakeClient
+      def connected?; true; end
+      def send_message(m, _body = nil); $sent << m; end
+    end
+    module PEMK
+      def self.client; @client ||= FakeClient.new; end
+      def self.log(_m); end
+      module Monsters; def self.pending_batch(_max = 64); [[], false]; end; def self.projection; nil; end; end
+      module Flags; def self.active?; false; end; end
+      module Trade; def self.busy?; false; end; end
+      module TeamReport; def self.build; nil; end; end
+      module Checkpoint; def self.request(_r); end; end
+      module Inventory; def self.full_bag; nil; end; def self.stores; nil; end; end
+      module PrizeClaim
+        @held = false
+        def self.holding?; @held; end
+        def self.hold(v); @held = v; end
+        def self.frame_refused; $refused += 1; end
+      end
+    end
+    $game_temp = Struct.new(:in_battle).new(false)
+    class Player
+      attr_accessor :money
+      def pokemmo_apply_economy(field, value); @money = value if field == :money; end
+    end
+    $player = Player.new
+    load ARGV[0]
+    load ARGV[1]
+    fields = -> { $sent.select { |m| m[:type] == :econ }.map { |m| [m[:field], m[:value]] } }
+    out = {}
+    PEMK::PrizeClaim.hold(true)
+    $player.money = 1400
+    PEMK::Sync.mark_econ(:money, 1400)
+    PEMK::Sync.mark_econ(:coins, 50)
+    PEMK::Sync.flush_primitives
+    out[:held] = [fields.call, PEMK::Sync.dirty?]
+    $sent.clear
+    PEMK::PrizeClaim.hold(false)
+    PEMK::Sync.flush_primitives
+    out[:released] = fields.call
+    frame = $sent.find { |m| m[:type] == :econ }
+    PEMK::Dispatch.handle({ type: :econ_rej, field: :money, value: 1000, seq: frame[:seq], reason: "unexplained" })
+    PEMK::Dispatch.handle({ type: :econ_rej, field: :money, value: 1000, seq: frame[:seq], reason: "cap" })
+    out[:refused] = [$refused, $player.money]
+    print out.inspect
+  RUBY
+
+  def test_the_money_waits_for_the_prize_verdicts
+    out = IO.popen([RbConfig.ruby, "-W0", "-e", HOLD_RUNNER, SYNC, DISPATCH], err: %i[child out], &:read)
+    assert $?.success?, "hold runner crashed:\n#{out}"
+    o = eval(out) # rubocop:disable Security/Eval -- our own runner's inspect output
+    assert_equal [[[:coins, 50]], true], o[:held], "the coins go; the money waits, still to send"
+    assert_equal [[:money, 1400]], o[:released]
+    assert_equal [1, 1000], o[:refused], "an unexplained refusal tells the claims; the game takes the balance"
+  end
 end

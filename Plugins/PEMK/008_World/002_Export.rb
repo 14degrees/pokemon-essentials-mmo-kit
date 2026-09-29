@@ -52,10 +52,11 @@ module PEMK
             t = { :event_id => event.id, :x => event.x, :y => event.y, :type => type, :name => name,
                   :version => version }
             t[:rematch] = true if rematch
-            once, page, free = fought[[type, name, version]]
+            once, page, free, calls = fought[[type, name, version]]
             t[:repeatable] = true unless rematch || once
             t[:page] = page if page && page > 0
             t[:no_money] = true if free
+            t[:calls] = calls if calls   # the battle calls naming it: one battle's trainers share one
             trainers << t
           end
         end
@@ -631,13 +632,20 @@ module PEMK
     # The trainer battles a script starts: [[type, name, version], ...] (literal arguments
     # only - a computed trainer would export a bogus id).
     def battle_ids(script)
-      out = []
+      battle_calls(script).flatten(1)
+    end
+
+    # ... one list per call: the trainers one battle faces together.
+    def battle_calls(script)
+      calls = []
       script.scan(/TrainerBattle\.start\(([^)]*)\)/) do |(args)|
+        ids = []
         args.scan(/:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, version|
-          out << [type, name, version.to_i]
+          ids << [type, name, version.to_i]
         end
+        calls << ids unless ids.empty?
       end
-      out
+      calls
     end
 
     # Money authority M3: what each battle an event starts is, by its commands.
@@ -652,6 +660,7 @@ module PEMK
     #   battle - the engine pays nothing, and claims nothing.
     def battle_marks(event)
       seen = {}
+      call = 0      # each TrainerBattle.start of the event, in order: the trainers of one battle
       event.pages.each_with_index do |pg, k|
         next unless pg && pg.list
 
@@ -669,13 +678,19 @@ module PEMK
             won = event.pages[(k + 1)..-1].any? { |p| p && p.condition && shows_after?(p.condition, marks) }
             free = rules.match?(NO_MONEY)
             rules = +""
-            battle_ids(params[1].to_s).each { |id| note_battle(seen, id, k, won, free) }
+            battle_calls(params[1].to_s).each do |ids|
+              ids.each { |id| note_battle(seen, id, k, won, free, call) }
+              call += 1
+            end
           when 355, 655
             rules << params[0].to_s << "\n"
             plain << params[0].to_s
           end
         end
-        battle_ids(plain.join("\n")).each { |id| note_battle(seen, id, k, false, false) }
+        battle_calls(plain.join("\n")).each do |ids|
+          ids.each { |id| note_battle(seen, id, k, false, false, call) }
+          call += 1
+        end
       end
       seen
     rescue
@@ -684,9 +699,14 @@ module PEMK
 
     NO_MONEY = /setBattleRule\([^)]*["']nomoney["']/i.freeze
 
-    def note_battle(seen, id, page, won, free)
+    # -> [once, page, no_money, the calls naming it]
+    def note_battle(seen, id, page, won, free, call)
       prev = seen[id]
-      seen[id] = prev ? [prev[0] && won && prev[1] == page, prev[1], prev[2] && free] : [won, page, free]
+      seen[id] = if prev
+                   [prev[0] && won && prev[1] == page, prev[1], prev[2] && free, prev[3] | [call]]
+                 else
+                   [won, page, free, [call]]
+                 end
     end
 
     # What the branch opened at +list[i]+ turns on at its own level: the commands one

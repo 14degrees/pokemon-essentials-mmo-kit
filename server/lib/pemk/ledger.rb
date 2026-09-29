@@ -15,6 +15,7 @@ module PEMK
     # with the sovereignty layer (flag_state); a fork that deliberately revokes badges
     # in a story beat must keep that off, or clear the balance through an operator path.
     MONOTONIC = %i[badges].freeze
+    SEQ_MAX   = 1 << 53   # a client frame's seq stays below this (and above zero)
 
     def initialize(db, caps, monotonic: false)
       @db   = db
@@ -29,10 +30,17 @@ module PEMK
     # -> [:ack, balance] | [:dup, recorded_balance] | [:rej, current_balance, reason]
     # +reason+ (M4 D4) attributes the ledger row (default "unattributed"); a caller can
     # pass "battle:<n>" / "battle_suspect:<n>". Backward-compatible — old call sites omit it.
-    def apply_econ(account_id, field, value, seq, now: Time.now, reason: "unattributed")
+    # +no_increase+ (money authority M3): every increase is a transaction the server
+    # makes itself, so a fresh value above the balance is refused - recorded under its seq
+    # with the balance unchanged, the ledger showing the refusal and the client's next
+    # frame never taken for a replay of it.
+    def apply_econ(account_id, field, value, seq, now: Time.now, reason: "unattributed", no_increase: false)
       key = field.to_s.to_sym
       cap = @caps[key]
       return [:rej, current(account_id, field), :bad_field] unless cap && value.is_a?(Integer) && seq.is_a?(Integer)
+      # A client frame's seq is positive and bounded: the server's own rows take the
+      # negative ones below the lowest (adjust), which a huge negative one would overflow.
+      return [:rej, current(account_id, field), :bad_seq] unless seq.positive? && seq < SEQ_MAX
 
       result = nil
       @db.transaction do
@@ -52,6 +60,13 @@ module PEMK
           value |= cur if monotonic?(key)
           if value.negative? || value > cap
             result = [:rej, cur, :cap]
+          elsif no_increase && value > cur
+            @db[:economy_balances]
+              .insert_conflict(target: %i[account_id field], update: { last_seq: seq })
+              .insert(account_id: account_id, field: field.to_s, balance: cur, last_seq: seq)
+            @db[:economy_ledger].insert(account_id: account_id, field: field.to_s, delta: 0,
+                                        reason: "refused:+#{value - cur}", seq: seq, balance_after: cur, created_at: now)
+            result = [:rej, cur, :unexplained]
           else
             @db[:economy_balances]
               .insert_conflict(target: %i[account_id field], update: { balance: value, last_seq: seq })

@@ -15,7 +15,7 @@ module PEMK
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
                 :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority,
-                :money_payday_daily, :money_local_daily
+                :money_payday_daily, :money_local_daily, :money_repeat_daily
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -219,6 +219,15 @@ module PEMK
                            elsif raw.match?(/\A\d+\z/) then raw.to_i
                            else 10_000
                            end
+      # The prizes an account may be credited per day for the battles the game lets be
+      # fought again (Champion Blue): a claim proves no fight until battle records do, so a
+      # client could claim one every 20 minutes without fighting. A number, or "none".
+      # Default 20000, as for Pay Day.
+      raw = env.fetch("PEMK_MONEY_REPEAT_DAILY", "").to_s.strip.downcase
+      @money_repeat_daily = if raw == "none" then nil
+                            elsif raw.match?(/\A\d+\z/) then raw.to_i
+                            else 20_000
+                            end
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {

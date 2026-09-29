@@ -500,7 +500,93 @@ Money conjured before is kept; a D5 review of large unattributed histories is th
 to that. The trainers an account beat before M1 can be claimed once more (one sum of
 one-shot prizes per existing account) until the flag mirror marks them paid.
 
+As built, a claim records what the server paid into L (`money_claims.credited`, 0 for
+one judged in shadow): a void takes back exactly that, so claims from before enforcement
+need no seal - their money came with the client's frames.
+
 ### Tests
 
 The `on` autotest needs a test-only waiver for blockers 3 and 4, and the harness grant
-must run on the account's mailbox and set the balance exactly.
+must run on the account's mailbox and set the balance exactly. With Sam's decisions no
+waiver is needed: in the demo nothing blocks once the gates are on (autotest 079). The
+harness grant sets L on the account's mailbox before the client's frame shows it.
+
+## 11. M3 as built (2026-09-29)
+
+Off by default; `PEMK_MONEY_AUTHORITY=on` enforces only once `money_blockers` is empty
+(D2 on, the Pay Day and local-sale allowances set, the shop gate and item enforcement on,
+complete exports, no event raising money by itself but the Triple Triad sales the client
+closes); with a blocker left it runs as shadow and the boot names each. The login tells
+the client the effective mode.
+
+Server:
+- A claim's accepted amount is paid into L in its verdict's transaction, up to the cap
+  (`prize:NONCE`, `payday:NONCE`), recorded as `credited`; the acknowledgement carries
+  what was paid. A void takes it back (`void:NONCE`).
+- A fresh money frame above L is refused with L (`econ_rej`, reason `unexplained`),
+  recorded under its seq (`refused:+N`, balance unchanged) and flagged.
+- An account without a money row starts from the exported start money, seeded by the
+  server at login - never from the save's value.
+- A login or resume without the `money_claims` capability is refused (`update_required`).
+- The sale rules (BP-bought units, the local allowance) refuse instead of logging.
+
+Client:
+- The money the engine adds for a claim this session is held back from the money frames
+  until its verdict (at most 60 seconds), then corrected to what the server paid; a frame
+  refused meanwhile already took it back, and the late verdict adds what was paid. A
+  fresh login's balance is the server's word.
+- A Mart waits for those verdicts (8 seconds) before it asks.
+- Triple Triad cards are not bought back.
+
+### Its review (2026-09-29), and what it changed
+
+An adversarial read found two ways to fill the ledger, both fixed before any merge:
+- Battle points into money: the BP count was lowered by a bag-only snapshot that hid the
+  units, and a full snapshot brought them back freed. It is now lowered only by judged
+  totals, and the units a sale may take are the judged ones less the debts less the BP
+  ones - padding a snapshot frees nothing. A traded Pokemon's BP-bought held item stays
+  one on the receiver's side, so an alt cannot sell it either.
+- A prize spent then voided: a Mart deal did not seal the claims before it, and a void
+  took back only what was left. A deal now seals them, and a void takes back the whole
+  payment or keeps the claim (its battle stays paid).
+And it found these, fixed too: a client frame's seq must be positive and bounded (a huge
+negative one broke every later payment); every void runs with its take-back in one
+transaction; a claim is judged by its own connection's position (a resume seeds the
+stored one), or where the last save stood (kept across a restart); one claim names a
+trainer once; a verdict after the hold was released no longer corrects twice; a claim
+left in the save at a fresh login and judged after it (`first` in the acknowledgement)
+brings its money in. And a claim proves no fight: battles fought again pay at most
+`PEMK_MONEY_REPEAT_DAILY` a day (default $20,000, as Pay Day; `none` is a blocker).
+
+A second review of those fixes found, all fixed too:
+- A new account's first snapshot was its trusted baseline, so declaring 999 Proteins
+  owned them. An account registered while item authority runs (`accounts.items_from_zero`)
+  is now judged from an empty inventory; an older one keeps its baseline.
+- The BP count still fell as a Pokemon holding BP units dropped out of a snapshot for a
+  while (or a traded one had not arrived yet). It now falls only by what the possession
+  really lost - the judged decrease less what vanished Pokemon took along - as the item
+  debts are settled.
+- A sale needed no Mart where it said it was; it does now, as a purchase does.
+- Phone rematches count in the daily allowance of battles fought again.
+- One claim named all three of the rival's branches. The export now records the battle
+  calls naming each trainer; the trainers a claim names from one event must share one.
+- A failed void no longer ends a login: the claims wait for the next.
+Its verification then found, fixed as well:
+- Dropping conjured units lowered the BP count (the decrease also settled their debts):
+  the units the server never recognized - the item's open debts - now leave first.
+- An account that had never played (no save, no record) when the flag came is flagged too,
+  once (migration 040): a live "has it saved?" check was satisfied by sending a save first,
+  so only facts about the past decide. And at every boot item authority runs, the
+  accounts that never played - no save, no record holding anything or judged - are
+  marked the same way (one registered while it was off, a new game's empty record): what
+  stays trusted is an account that really held items before judging began - the cutover.
+- A purchase before a new account's first judgment is credited (the record had no judged
+  totals to join), so judging it from nothing owes nothing for it.
+- The boot names an export that does not say which trainers share a battle; and where the
+  export names no calls (a phone contact's rematches, an older export), a claim names one
+  version of each trainer at most - two grunts of one name in one call stay one battle.
+Left as they are: a claim that waited past the save holding its battle can be voided by
+a crash before the next frame (narrow); the daily allowances count voided claims; an
+older account with a save keeps one trusted baseline, whenever its first full snapshot
+comes; a purchase credited before a new account's first judgment is dropped by a fresh
+login before it (only a client that sends no stores at first gets there).

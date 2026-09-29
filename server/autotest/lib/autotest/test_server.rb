@@ -41,13 +41,26 @@ module Autotest
 
     # Money authority: money a scenario hands out itself is a source the server knows, so
     # the shadow balance explains it (the harness's grant; nothing a client can send).
-    def explain_money(account_id, amount)
-      shadow = @server.instance_variable_get(:@money_shadow)
-      return unless shadow && amount.positive?
-
+    # Enforced (M3), the grant is the ledger's own: the balance becomes +total+ on the
+    # account's mailbox, before the client's frame shows it.
+    def explain_money(account_id, amount, total: nil)
       db = @server.instance_variable_get(:@db)
       before = db[:economy_balances].where(account_id: account_id, field: "money").get(:balance)
-      shadow.claim(account_id, amount, before: before)
+      grant_money(account_id, total) if total && @server.instance_variable_get(:@money_enforce)
+      shadow = @server.instance_variable_get(:@money_shadow)
+      shadow.claim(account_id, amount, before: before) if shadow && amount.positive?
+    end
+
+    def grant_money(account_id, total)
+      done = Queue.new
+      @server.instance_variable_get(:@mailbox).submit(account_id) do
+        ledger = @server.instance_variable_get(:@ledger)
+        delta = total - ledger.current(account_id, :money)
+        ledger.adjust(account_id, :money, delta, reason: "autotest") unless delta.zero?
+      ensure
+        done << true
+      end
+      Timeout.timeout(10) { done.pop }
     end
 
     # Keeps +account_id+'s mailbox busy for +seconds+: what the account asks meanwhile is
