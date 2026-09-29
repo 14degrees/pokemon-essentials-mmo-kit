@@ -328,6 +328,13 @@ harness's `a.money!` and the gift scenario's deliberate re-fight of Brock.
 
 ### M1c - Pay Day
 
+Built 2026-09-29 (`encounter_rolls.payday_at`; autotest 078), with two changes to the
+plan: the claim leaves with the prize's, from `pbGainMoney` (the mint was made at the
+battle's start, so D4's report is not needed), and a mint stays good for 30 minutes rather
+than 90 seconds, which a long battle outlasts. Without D2's mints a wild battle's Pay Day is
+only bounded, and says so ("unminted"). The party's levels and moves come from the team
+report the client always sends.
+
 - One claim per battle, sent at `:on_end_battle` after the D4 report. `in_battle` is still
   true there, so it reaches the server before the frame with the money. A wild battle's
   claim names all its foes; a trainer battle's names the trainer claim's nonce.
