@@ -172,8 +172,11 @@ module PEMK
       amount *= 2 if amulet
       amount *= 2 if happy
       partner = ($PokemonGlobal.partner rescue nil)
+      # Trainer proof P3: the seed the battle ran on names it - the replay of its record
+      # is the claim's verdict.
+      seed = (battle.pemk_rng_session&.seed rescue nil)
       entry = [new_nonce, opp.map { |t| t.pemk_key + t.pemk_event }, amount, amulet, happy, $game_map.map_id,
-               partner ? [partner[0].to_s, partner[1].to_s] : nil]
+               partner ? [partner[0].to_s, partner[1].to_s] : nil, seed.is_a?(Integer) ? seed : nil]
       claims << entry
       paid_here(entry[0], amount)
       send_claim(entry)
@@ -205,7 +208,7 @@ module PEMK
       return unless online?
 
       (PEMK::Presence.emit_now(:pos) rescue nil)   # judged by where the server last saw the player
-      nonce, what, amount, amulet, happy, map, extra = entry
+      nonce, what, amount, amulet, happy, map, extra, seed = entry
       msg = { :type => :money_claim, :nonce => nonce, :amount => amount, :amulet => amulet,
               :happy_hour => happy, :map => map }
       if what == :payday
@@ -215,6 +218,7 @@ module PEMK
       else
         msg[:trainers] = what
         msg[:partner] = extra if extra
+        msg[:seed] = seed if seed.is_a?(Integer)   # the battle's seed (older saves' claims have none)
       end
       PEMK.send_message(msg)
       @asked[nonce] = mono
