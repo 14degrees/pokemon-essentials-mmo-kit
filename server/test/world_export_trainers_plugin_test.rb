@@ -87,11 +87,17 @@ class WorldExportTrainersPluginTest < Minitest::Test
     out[:off] = once.(ev.(Page.new(none, [battle.(%q{:LASS, "Crissy"}), c.(123, ["A", 1], 1), c.(0, [], 1),
                                           c.(412, []), c.(0, [])]), after))
     # the demo's rival: one battle per starter, each in its own branch of a variable test
-    out[:rival] = once.(ev.(Page.new(none, [c.(111, [1, 7, 0, 1, 0]), battle.(%q{:RIVAL1, "Blue", 1}, 1),
-                                            c.(123, ["A", 0], 2), c.(0, [], 2), c.(412, [], 1), c.(0, [], 1),
-                                            c.(411, []), battle.(%q{:RIVAL1, "Blue", 0}, 1), c.(123, ["A", 0], 2),
-                                            c.(0, [], 2), c.(412, [], 1), c.(0, [], 1), c.(412, []), c.(0, [])]),
-                            after))
+    rival = ev.(Page.new(none, [c.(111, [1, 7, 0, 1, 0]), battle.(%q{:RIVAL1, "Blue", 1}, 1),
+                                c.(123, ["A", 0], 2), c.(0, [], 2), c.(412, [], 1), c.(0, [], 1),
+                                c.(411, []), battle.(%q{:RIVAL1, "Blue", 0}, 1), c.(123, ["A", 0], 2),
+                                c.(0, [], 2), c.(412, [], 1), c.(0, [], 1), c.(412, []), c.(0, [])]),
+                after)
+    out[:rival] = once.(rival)
+    out[:rival_calls] = PEMK::WorldExport.battle_marks(rival).transform_values { |m| m[3] }
+    # two trainers in one call: one battle
+    out[:pair] = PEMK::WorldExport.battle_marks(ev.(Page.new(none, [battle.(%q{:TWINS, "Amy", :TWINS, "May"}),
+                                                                   c.(123, ["A", 0], 1), c.(0, [], 1), c.(412, []),
+                                                                   c.(0, [])]), after)).transform_values { |m| m[3] }
     # the same battle also started by a plain script call elsewhere on the event
     out[:twice] = once.(ev.(Page.new(none, [battle.(%q{:BEAUTY, "Bridget"}), c.(123, ["A", 0], 1), c.(0, [], 1),
                                             c.(412, []), c.(0, [])]),
@@ -121,7 +127,10 @@ class WorldExportTrainersPluginTest < Minitest::Test
     assert_equal [], o[:off], "a self-switch turned off"
     assert_equal [["RIVAL1", "Blue", 1], ["RIVAL1", "Blue", 0]], o[:rival]
     assert_equal [], o[:twice], "one call that proves nothing is enough"
-    assert_equal({ ["YOUNGSTER", "Ben", 0] => [true, 0, false], ["YOUNGSTER", "Ben", 1] => [true, 1, true] }, o[:marks])
+    assert_equal({ ["YOUNGSTER", "Ben", 0] => [true, 0, false, [0]], ["YOUNGSTER", "Ben", 1] => [true, 1, true, [1]] },
+                 o[:marks])
+    assert_equal({ ["RIVAL1", "Blue", 1] => [0], ["RIVAL1", "Blue", 0] => [1] }, o[:rival_calls], "a battle per branch")
+    assert_equal({ ["TWINS", "Amy", 0] => [0], ["TWINS", "May", 0] => [0] }, o[:pair], "one call, one battle")
     assert_equal({ :list => [["POKEMONTRAINER_May", "May", 0], ["RIVAL1", "Blue", 2]], :computed => false }, o[:partners])
     assert_equal({ :list => [["RIVAL1", "Blue", 0]], :computed => true }, o[:computed], "a partner named at runtime")
   end

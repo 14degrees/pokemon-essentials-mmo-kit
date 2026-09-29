@@ -104,11 +104,14 @@ class ServerItemLedgerTest < Minitest::Test
     end
   end
 
-  def login(email, register: true, caps: %w[trade_redeliver])
+  # +older+: an account from before item authority ran, its first snapshot the baseline
+  # (these tests' own premise); false - one the server saw born, judged from nothing.
+  def login(email, register: true, caps: %w[trade_redeliver], older: true)
     s = TCPSocket.new("127.0.0.1", @port)
     if register
       send_env(s, { type: :register, email: email, password: "password1" })
       recv_type(s, :register_ok, :register_err)
+      @db[:accounts].where(email: email).update(items_from_zero: false) if older
     end
     send_env(s, { type: :login, email: email, password: "password1", caps: caps })
     [s, recv_type(s, :login_ok)]
@@ -204,6 +207,16 @@ class ServerItemLedgerTest < Minitest::Test
     s, lo = login("il2@t.co")
     inv(s, 1, { POTION: 5 }, st(pc: { ANTIDOTE: 2 }))
     assert_empty owing(lo[:account_id])
+  end
+
+  # ... unless the server saw the account born: then it starts from nothing, and a first
+  # snapshot declaring items owes them (the PC's start items excepted).
+  def test_a_new_account_starts_from_nothing
+    start_server
+    s, lo = login("il2n@t.co", older: false)
+    assert_equal true, @db[:accounts].where(id: lo[:account_id]).get(:items_from_zero)
+    inv(s, 1, { POTION: 5 }, st(pc: { ANTIDOTE: 2 }))
+    assert_equal [["ANTIDOTE", -2], ["POTION", -4]], owing(lo[:account_id]).sort, "the PC's start Potion excepted"
   end
 
   def test_a_granted_pickup_explains_its_quantity

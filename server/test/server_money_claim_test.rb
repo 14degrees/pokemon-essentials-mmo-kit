@@ -32,8 +32,10 @@ class ServerMoneyClaimTest < Minitest::Test
         { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 0, "rematch" => true },
         { "event_id" => 5, "x" => 1, "y" => 1, "type" => "CAMPER", "name" => "Jeff", "version" => 1, "rematch" => true },
         { "event_id" => 7, "x" => 2, "y" => 2, "type" => "LASS", "name" => "Anna", "version" => 0 },
-        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0 },
-        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1 },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 0, "calls" => [2] },
+        { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1, "calls" => [0] },
+        { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "Amy", "version" => 0, "calls" => [0] },
+        { "event_id" => 23, "x" => 8, "y" => 8, "type" => "TWINS", "name" => "May", "version" => 0, "calls" => [0] },
         { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 },
         { "event_id" => 3, "x" => 5, "y" => 5, "type" => "CHAMPION", "name" => "Blue", "version" => 0, "repeatable" => true },
         { "event_id" => 20, "x" => 6, "y" => 6, "type" => "YOUNGSTER", "name" => "Ben", "version" => 0 },
@@ -53,7 +55,7 @@ class ServerMoneyClaimTest < Minitest::Test
   BATTLE = Tempfile.new(["pemk_battle", ".json"])
   src = JSON.parse(File.read(File.expand_path("../data/battle_data.json", __dir__)))
   src["trainer_types"] = { "CAMPER" => { "base_money" => 16 }, "LASS" => { "base_money" => 20 },
-                           "RIVAL1" => { "base_money" => 60 }, "CHAMPION" => { "base_money" => 100 },
+                           "RIVAL1" => { "base_money" => 60 }, "CHAMPION" => { "base_money" => 100 }, "TWINS" => { "base_money" => 16 },
                            "YOUNGSTER" => { "base_money" => 16 } }
   src["trainers"] = [
     { "type" => "CAMPER", "name" => "Jeff", "version" => 0, "party" => [["SPEAROW", 16, nil, %w[PECK]]] },
@@ -67,7 +69,9 @@ class ServerMoneyClaimTest < Minitest::Test
     { "type" => "YOUNGSTER", "name" => "Ben", "version" => 1, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
     { "type" => "YOUNGSTER", "name" => "Joey", "version" => 0, "party" => [["RATTATA", 20, nil, %w[TACKLE]]] },
     { "type" => "POKEMONTRAINER", "name" => "May", "version" => 0, "party" => [["TORCHIC", 10, "AMULETCOIN", %w[EMBER]]] },
-    { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] }
+    { "type" => "RICHBOY", "name" => "Rich", "version" => 0, "party" => [["MEOWTH", 10, "AMULETCOIN", %w[SCRATCH]]] },
+    { "type" => "TWINS", "name" => "Amy", "version" => 0, "party" => [["PLUSLE", 10, nil, %w[SPARK]]] },
+    { "type" => "TWINS", "name" => "May", "version" => 0, "party" => [["MINUN", 10, nil, %w[SPARK]]] }
   ]
   BATTLE.write(JSON.generate(src))
   BATTLE.flush
@@ -777,6 +781,64 @@ class ServerMoneyClaimTest < Minitest::Test
     @server.send(:carry_bp_tags, a, b, [77])
     count = ->(acc) { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
     assert_equal [{ "PROTEIN" => 1 }, { "PROTEIN" => 1 }], [count.(a), count.(b)]
+  end
+
+  # --- second review ---------------------------------------------------------------
+
+  # BP units held by a Pokemon that drops out of a snapshot for a while stay BP units; the
+  # possession really losing units lowers the count.
+  def test_bp_units_leave_only_as_the_possession_loses_them
+    start_server
+    _, lo = login
+    acc = lo[:account_id]
+    @db[:inventory_snapshots].insert(account_id: acc, bag: Sequel.pg_jsonb({}), last_seq: 1, updated_at: Time.now,
+                                     bp_bought: Sequel.pg_jsonb({ "PROTEIN" => 3 }))
+    count = -> { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, Hash.new(0).merge("PROTEIN" => 2))
+    assert_equal({ "PROTEIN" => 3 }, count.call, "two went with Pokemon that dropped out: not spent")
+    @server.send(:lower_bp, acc, { "PROTEIN" => 3 }, { "PROTEIN" => 1 }, Hash.new(0))
+    assert_equal({ "PROTEIN" => 1 }, count.call, "two used")
+  end
+
+  # One claim, one battle: the trainers it names from one event share a battle call - the
+  # rival's branches are separate battles, a double battle's pair is one.
+  def test_a_claim_is_one_battle
+    start_server
+    s, = login
+    assert_equal ["unknown", 0], claim(s, 1, [blue(0), blue(1)], 1320).values_at(:verdict, :accepted), "two branches"
+    twins = [["TWINS", "Amy", 0, 31, 23], ["TWINS", "May", 0, 31, 23]]
+    assert_equal ["paid", 320], claim(s, 2, twins, 320).values_at(:verdict, :accepted), "10 x 16, twice"
+  end
+
+  # Nothing is bought back where there is no Mart.
+  def test_a_sale_needs_a_mart
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, = login
+    send_env(s, { type: :inv, bag: { POTION: 1 }, seq: 1 })
+    recv_type(s, :inv_ack)
+    send_env(s, { type: :shop_req, op: :sell, item: "POTION", quantity: 1, unit_price: 100, map: 31, event: 7, seq: 1 })
+    assert_equal "not_a_shop", recv_type(s, :shop_grant, :shop_deny)[:reason], "Anna's event"
+  end
+
+  # A phone rematch is fought again too: the same daily allowance bounds it.
+  def test_phone_rematches_share_the_daily_allowance
+    start_server("shadow", "PEMK_MONEY_REPEAT_DAILY" => "300")
+    s, lo = login
+    assert_equal ["paid", 256], claim(s, 1, [jeff(0)], 256).values_at(:verdict, :accepted)
+    assert_equal ["paid", 44], claim(s, 2, [jeff(1)], 480).values_at(:verdict, :accepted), "what the day has left"
+    assert_equal %w[repeatable repeatable], @db[:money_claims].where(account_id: lo[:account_id]).order(:nonce).select_map(:kind)
+  end
+
+  # Voiding a login's claims can fail: the login goes on, the claims wait for the next.
+  def test_a_failed_void_never_ends_a_login
+    s, lo = enforced_login
+    claim(s, 1, [ANNA], 400)
+    s.close
+    @server.define_singleton_method(:take_back) { |*_| raise "boom" }
+    _, again = login("claim@t.co", caps: %w[money_claims])
+    assert_equal lo[:account_id], again[:account_id]
+    assert_nil @db[:money_claims].where(account_id: lo[:account_id], nonce: 1).get(:voided_at)
+    assert(logs.any? { |l| l.include?("WARNING voiding the claims of account") })
   end
 
   def enforced_login(shop: false, email: "claim@t.co")

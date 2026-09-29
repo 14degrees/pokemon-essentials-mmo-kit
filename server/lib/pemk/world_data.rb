@@ -231,7 +231,13 @@ module PEMK
       return nil unless hit
 
       versions = places.select { |t| t[0] == hit[0] && t[1] == hit[1] && t[3] }.map { |t| t[2] }.sort
-      { "rematch" => hit[3], "repeatable" => hit[4], "page" => hit[5], "no_money" => hit[6], "versions" => versions }
+      { "rematch" => hit[3], "repeatable" => hit[4], "page" => hit[5], "no_money" => hit[6], "calls" => hit[7],
+        "versions" => versions }
+    end
+
+    # Does any placement battle a phone rematch?
+    def rematches_placed?
+      @trainer_places.any? { |_, events| events.any? { |_, list| list.any? { |t| t[3] } } }
     end
 
     # Money authority: the versions of +type+ / +name+ the game registers as a partner
@@ -409,9 +415,16 @@ module PEMK
 
         (by_event[t["event_id"]] ||= []) << [t["type"].to_s, t["name"].to_s, t["version"].to_i, t["rematch"] == true,
                                              t["repeatable"] == true, t["page"].is_a?(Integer) ? t["page"] : 0,
-                                             t["no_money"] == true].freeze
+                                             t["no_money"] == true, call_list(t["calls"])].freeze
       end
       @trainer_places[map_id] = by_event.transform_values(&:freeze).freeze unless by_event.empty?
+    end
+
+    # A placement's battle calls ([Integer]), or nil when the export does not say.
+    def call_list(value)
+      return nil unless value.is_a?(Array) && value.all? { |c| c.is_a?(Integer) }
+
+      value.uniq.freeze
     end
 
     # { "list" => [[type, name, version], ...], "computed" => bool } -> the list, or nil

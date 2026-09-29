@@ -656,7 +656,11 @@ client). The server then:
 - bounds what battles fought again pay per day (`PEMK_MONEY_REPEAT_DAILY`, default
   $20,000): a claim proves no fight until battle records do;
 - carries a BP-bought held item's mark to the receiver of a trade, and refuses a frame
-  whose seq is not positive and bounded.
+  whose seq is not positive and bounded;
+- judges a new account's first snapshot from an empty inventory (an account registered
+  while item authority runs), buys items back only at a Mart, counts phone rematches in
+  the daily allowance, and takes one battle per claim (the trainers one event names must
+  share a battle call).
 
 The client holds its money frames while this session's prizes wait for their verdicts (a
 minute at most), corrects the money to what the server paid, lets a Mart wait for those

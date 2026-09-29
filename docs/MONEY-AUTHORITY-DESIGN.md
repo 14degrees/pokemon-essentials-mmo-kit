@@ -557,3 +557,19 @@ trainer once; a verdict after the hold was released no longer corrects twice; a 
 left in the save at a fresh login and judged after it (`first` in the acknowledgement)
 brings its money in. And a claim proves no fight: battles fought again pay at most
 `PEMK_MONEY_REPEAT_DAILY` a day (default $20,000, as Pay Day; `none` is a blocker).
+
+A second review of those fixes found, all fixed too:
+- A new account's first snapshot was its trusted baseline, so declaring 999 Proteins
+  owned them. An account registered while item authority runs (`accounts.items_from_zero`)
+  is now judged from an empty inventory; an older one keeps its baseline.
+- The BP count still fell as a Pokemon holding BP units dropped out of a snapshot for a
+  while (or a traded one had not arrived yet). It now falls only by what the possession
+  really lost - the judged decrease less what vanished Pokemon took along - as the item
+  debts are settled.
+- A sale needed no Mart where it said it was; it does now, as a purchase does.
+- Phone rematches count in the daily allowance of battles fought again.
+- One claim named all three of the rival's branches. The export now records the battle
+  calls naming each trainer; the trainers a claim names from one event must share one.
+- A failed void no longer ends a login: the claims wait for the next.
+Left as they are: a claim that waited past the save holding its battle can be voided by
+a crash before the next frame (narrow); the daily allowances count voided claims.

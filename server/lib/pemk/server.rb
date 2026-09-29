@@ -361,6 +361,8 @@ module PEMK
         result =
           begin
             id = @accounts.create(email: email, password: pw, username: uname)
+            # Born while item authority runs: its items start from nothing the server did not see.
+            @db[:accounts].where(id: id).update(items_from_zero: true) if id && @item_ledger
             id ? { type: :register_ok, account_id: id } : { type: :register_err, reason: "taken" }
           rescue ArgumentError => e
             { type: :register_err, reason: e.message }
@@ -607,23 +609,24 @@ module PEMK
 
       @db.transaction(savepoint: true) do
         after  = canonical(Inventory.totals(bag, stores))
-        base   = prev && prev[:judged] && prev[:judged].to_h
+        # An account the server saw born starts from nothing: its first snapshot is judged,
+        # not trusted - an older one's first snapshot is its baseline.
+        base   = prev && prev[:judged] ? prev[:judged].to_h : from_zero(account_id)
         fields = { judged: Sequel.pg_jsonb(after) }
         if base
-          vanished = prev[:vanished].to_h
-          allow, hidden = arrivals(account_id, prev[:holders].to_h, stores[:holders], vanished)
-          if stores[:pc].is_a?(Hash) && !prev[:pc_started] && prev[:pc].nil?
+          was = prev || {}
+          vanished = was[:vanished].to_h
+          allow, hidden = arrivals(account_id, was[:holders].to_h, stores[:holders], vanished)
+          if stores[:pc].is_a?(Hash) && !was[:pc_started] && was[:pc].nil?
             pc_start_items.each { |i, n| allow[i] += n }   # the PC item storage appeared, with its start items
           end
           @item_ledger.judge(account_id, base, after, allow: allow, local: @judged_local)
           settle_spent(account_id, base, after, hidden) if @item_enforce
+          lower_bp(account_id, base, after, hidden)
           fields[:vanished] = Sequel.pg_jsonb(vanished)
         end
         fields[:pc_started] = true if stores[:pc].is_a?(Hash)   # a storage already there got its items long ago
         @db[:inventory_snapshots].where(account_id: account_id).update(fields)
-        # The units battle points bought, no more than the judged possession holds - never
-        # lowered by a bag-only snapshot, which could hide them and bring them back freed.
-        @inventory.clamp_bought(account_id, after, columns: %i[bp_bought])
       end
     rescue StandardError => e
       @log.call("inv: WARNING item judgment failed for account #{account_id} #{e.class}: #{e.message}")
@@ -649,6 +652,26 @@ module PEMK
     def possession(row)
       stores = { pc: row[:pc].to_h, mail: row[:mailbox].to_h, held: row[:held].to_h }
       canonical(Inventory.totals(row[:bag].to_h, stores))
+    end
+
+    # {} for an account registered while item authority ran (its inventory starts from
+    # nothing the server did not see), nil for an older one.
+    def from_zero(account_id)
+      @db[:accounts].where(id: account_id).get(:items_from_zero) ? {} : nil
+    end
+
+    # Money authority: the units battle points bought leave their count only as the
+    # possession really loses units - used, tossed, given away - never as a Pokemon holding
+    # one drops out of a snapshot for a while: it may come back, or arrive elsewhere
+    # carrying the mark.
+    def lower_bp(account_id, base, after, hidden)
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      bp = (row && row[:bp_bought]).to_h
+      return if bp.empty?
+
+      left = bp.to_h { |item, n| [item, n.to_i - [base[item].to_i - after[item].to_i - hidden[item].to_i, 0].max] }
+               .select { |_, n| n.positive? }
+      @db[:inventory_snapshots].where(account_id: account_id).update(bp_bought: Sequel.pg_jsonb(left)) unless left == bp
     end
 
     # E4: what left the possession settles its open debts - except what a vanished Pokemon
@@ -1774,6 +1797,7 @@ module PEMK
       map = env[:map]
       where = claim_away(conn, account_id, map)
       verdict = where ? "away" : nil
+      verdict ||= "unknown" unless one_battle?(trainers)
       bound = 0
       keys = []
       rematch = false
@@ -1798,9 +1822,10 @@ module PEMK
       amount = env[:amount]
       accepted = verdict ? 0 : [amount, bound].min
       verdict ||= amount > bound ? "suspect" : "paid"
-      # A battle the game lets be fought again: a claim proves no fight, so the day's
-      # allowance bounds what it pays until battle records do.
-      if again && (cap = @config.money_repeat_daily)
+      # A battle the game lets be fought again - by design, or by the phone: a claim
+      # proves no fight, so the day's allowance bounds what it pays until battle records do.
+      again_any = again || rematch
+      if again_any && (cap = @config.money_repeat_daily)
         left = [cap - @money_claims.repeat_today(account_id), 0].max
         if accepted > left
           @log.call("money: account #{account_id} prize #{accepted} held to #{left} (the day's allowance for battles fought again)")
@@ -1813,7 +1838,7 @@ module PEMK
         credited = pay_claim(account_id, nonce, "prize", accepted)
         @money_claims.record(account_id, nonce, verdict: verdict, mode: money_mode, amount: amount, accepted: accepted,
                                                 map: map, trainers: trainers, credited: credited,
-                                                kind: again ? "repeatable" : "trainer")
+                                                kind: again_any ? "repeatable" : "trainer")
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch || again) if MoneyClaims::PAID.include?(verdict)
         @money_shadow&.claim(account_id, accepted, before: before) if accepted.positive?
         # A battle paid before, fought again: its prize in the next frame is a repeat.
@@ -1825,6 +1850,18 @@ module PEMK
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where, again: again)
       [verdict, @money_enforce ? credited : accepted]   # M3: what the client keeps is what was paid
+    end
+
+    # The trainers one event battles in separate calls (a rival's branches) are not one
+    # battle's foes: those a claim names from the same event must share a battle call. An
+    # export that does not say lets them be.
+    def one_battle?(trainers)
+      trainers.group_by { |t| [t[3], t[4]] }.all? do |(tmap, event), group|
+        next true if group.length < 2
+
+        calls = group.map { |type, name, version, _, _| (@world.trainer_place(tmap, event, type, name, version) || {})["calls"] }
+        calls.include?(nil) || !calls.reduce(:&).empty?
+      end
     end
 
     # -> nil when +map+ is where the server last saw the player (or the map just left, or
@@ -1969,7 +2006,7 @@ module PEMK
       out << "the shop gate is not on (PEMK_SHOP_ENFORCE)" unless @config.shop_enforce == :on
       out << "item authority does not enforce (PEMK_ITEM_AUTHORITY=on and its preconditions)" unless @item_enforce
       out << "local sales have no daily allowance (PEMK_MONEY_LOCAL_DAILY=none)" unless @config.money_local_daily
-      if @config.money_repeat_daily.nil? && Array(@world.repeatable_trainers).any?
+      if @config.money_repeat_daily.nil? && (Array(@world.repeatable_trainers).any? || @world.rematches_placed?)
         out << "battles fought again have no daily allowance (PEMK_MONEY_REPEAT_DAILY=none)"
       end
       out << "the exports place no trainer battle" unless @world.trainers_known?
@@ -2025,6 +2062,9 @@ module PEMK
       return if kept.zero?
 
       @log.call("money: account #{account_id} kept #{kept} unsealed prize claim(s): their money was spent")
+    rescue StandardError => e
+      # Never a login's end: the claims stay as they were, for the next one.
+      @log.call("money: WARNING voiding the claims of account #{account_id} failed #{e.class}: #{e.message}")
     end
 
     # M3: a voided claim's payment leaves the ledger - all of it, or the claim is kept (its
@@ -2115,8 +2155,10 @@ module PEMK
         return "price" unless prices.include?(unit)
       else
         # Any Mart buys back at the catalogue's price; a clerk whose event sets prices may
-        # pay its own. One that never offers to buy anything back pays nothing.
-        return "not_sellable" if shop && shop["sells"] == false
+        # pay its own. One that never offers to buy anything back pays nothing - and where
+        # there is no Mart, nothing is bought back at all.
+        return "not_a_shop" unless shop && shop["kind"] == "mart"
+        return "not_sellable" if shop["sells"] == false
 
         prices = clerk_prices(shop, "sell_options", item, data["sell_price"]).select { |p| p > 0 }
         return "not_sellable" if data["important"] || prices.empty?
