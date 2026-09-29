@@ -302,6 +302,26 @@ class ServerItemLedgerTest < Minitest::Test
     assert_nil @server.send(:from_zero, ids["bf-recorded"]), "only the flag counts: nothing a client can still send"
   end
 
+  # At every boot item authority runs, the accounts that never played are marked the same
+  # way - registered while it was off, or with a new game's empty record and no save.
+  def test_a_boot_marks_the_accounts_that_never_played
+    start_server
+    ids = %w[bt-played bt-holding bt-empty bt-judged bt-never].to_h do |name|
+      id = @db[:accounts].insert(email: "#{name}@t.co", password_hash: "x", status: "active", created_at: Time.now)
+      [name, id]
+    end
+    PEMK::Characters.new(@db).store(ids["bt-played"], blob: "\x04\b0".b)
+    { "bt-holding" => { bag: Sequel.pg_jsonb({ "POTION" => 1 }) }, "bt-empty" => {},
+      "bt-judged" => { judged: Sequel.pg_jsonb({}) } }.each do |name, cols|
+      @db[:inventory_snapshots].insert({ account_id: ids[name], bag: Sequel.pg_jsonb({}), updated_at: Time.now }.merge(cols))
+    end
+    @server.send(:flag_accounts_from_zero)
+    flags = ids.transform_values { |id| @db[:accounts].where(id: id).get(:items_from_zero) }
+    assert_equal({ "bt-played" => false, "bt-holding" => false, "bt-empty" => true, "bt-judged" => false,
+                   "bt-never" => true }, flags)
+    assert(logs.any? { |l| l.include?("2 account(s) that never played start from nothing") })
+  end
+
   def test_a_bp_exchange_explains_its_item
     start_server("PEMK_SHOP_ENFORCE" => "on")
     s, lo = login("il5b@t.co")

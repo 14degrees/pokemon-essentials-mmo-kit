@@ -576,8 +576,10 @@ Its verification then found, fixed as well:
   the units the server never recognized - the item's open debts - now leave first.
 - An account that had never played (no save, no record) when the flag came is flagged too,
   once (migration 040): a live "has it saved?" check was satisfied by sending a save first,
-  so only facts about the past decide. An account registered while item authority is off
-  still gets one trusted baseline when it is turned on - the operator's cutover.
+  so only facts about the past decide. And at every boot item authority runs, the
+  accounts that never played - no save, no record holding anything or judged - are
+  marked the same way (one registered while it was off, a new game's empty record): what
+  stays trusted is an account that really held items before judging began - the cutover.
 - A purchase before a new account's first judgment is credited (the record had no judged
   totals to join), so judging it from nothing owes nothing for it.
 - The boot names an export that does not say which trainers share a battle; and where the

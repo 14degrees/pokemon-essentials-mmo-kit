@@ -112,6 +112,7 @@ module PEMK
                                     repeatable: method(:repeatable_gift?), extra: @config.item_local)
         @item_twins = item_twins
         @judged_local = @item_tiers.local.map { |i| @item_twins.fetch(i, i) }.to_set.freeze
+        flag_accounts_from_zero
       end
       # E4: enforcement only where every source is a credit the server hands out first.
       @item_enforce = @config.item_authority == :on && enforce_blockers.empty?
@@ -653,6 +654,23 @@ module PEMK
     def possession(row)
       stores = { pc: row[:pc].to_h, mail: row[:mailbox].to_h, held: row[:held].to_h }
       canonical(Inventory.totals(row[:bag].to_h, stores))
+    end
+
+    # Item authority, at every boot it runs: an account that never played - no save, and no
+    # record that holds anything or was judged - has no history to trust, whenever it was
+    # registered (item authority may have been off then): it starts from nothing, as one
+    # registered now does. Idempotent - a fact at the moment judging starts. What stays
+    # trusted is an account that really held items before: the cutover.
+    def flag_accounts_from_zero
+      saved = @db[:characters].where(account_id: Sequel[:accounts][:id])
+      held  = @db[:inventory_snapshots].where(account_id: Sequel[:accounts][:id]).where(
+        Sequel.lit("judged IS NOT NULL OR bag <> '{}'::jsonb OR COALESCE(pc, '{}'::jsonb) <> '{}'::jsonb " \
+                   "OR COALESCE(mailbox, '{}'::jsonb) <> '{}'::jsonb OR COALESCE(held, '{}'::jsonb) <> '{}'::jsonb")
+      )
+      n = @db[:accounts].where(items_from_zero: false).exclude(saved.exists).exclude(held.exists).update(items_from_zero: true)
+      @log.call("server: item authority: #{n} account(s) that never played start from nothing") if n.positive?
+    rescue StandardError => e
+      @log.call("server: WARNING item authority could not mark the accounts that never played #{e.class}: #{e.message}")
     end
 
     # {} for an account the server saw start from nothing - registered while item authority
