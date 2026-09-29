@@ -84,6 +84,23 @@ class PrizeClaimPluginTest < Minitest::Test
     out[:flushed] = [claims.call.map { |m| m[:nonce] } == [c[:nonce]], $sent.first]
     P.on_ack({ :type => :money_claim_ack, :nonce => c[:nonce], :verdict => "paid" })
     out[:answered] = $PokemonGlobal.pemk_prize_claims.length
+    # Pay Day: a wild battle's names its foes; a trainer battle's, the prize claim
+    Mon = Struct.new(:personalID)
+    class WildBattle < Battle
+      def trainerBattle?; false; end
+      def pbParty(_side); [Mon.new(4242)]; end
+    end
+    $sent.clear
+    WildBattle.new([], [], { 1 => false, 2 => true, 3 => 60 }).pbGainMoney
+    w = claims.call.last
+    out[:wild] = [w[:kind], w[:foes], w[:amount], w[:trainers]]
+    $sent.clear
+    Battle.new([first], [20], { 1 => false, 2 => false, 3 => 50 }).pbGainMoney
+    prize, pay = claims.call.last(2)
+    out[:trainer_payday] = [pay[:kind], pay[:trainer_claim] == prize[:nonce], pay[:amount]]
+    $sent.clear
+    WildBattle.new([], [], { 1 => false, 2 => false, 3 => 0 }).pbGainMoney
+    out[:no_coins] = claims.call.length
     # off: nothing is claimed
     P.adopt_mode("off"); $sent.clear
     b.pbGainMoney
@@ -107,6 +124,9 @@ class PrizeClaimPluginTest < Minitest::Test
     assert_equal [true, :pos], o[:resent], "again on a new connection, after a position"
     assert_equal [true, :pos], o[:flushed], "at once for a reconnect's reseed"
     assert_equal 0, o[:answered]
+    assert_equal [:payday, [4242], 120, nil], o[:wild], "the coins scattered, doubled by Happy Hour"
+    assert_equal [:payday, true, 50], o[:trainer_payday]
+    assert_equal 0, o[:no_coins]
     assert_equal 0, o[:off]
   end
 end

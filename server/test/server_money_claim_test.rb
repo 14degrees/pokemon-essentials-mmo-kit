@@ -59,7 +59,7 @@ class ServerMoneyClaimTest < Minitest::Test
 
   def setup
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
-    %i[money_claims money_payouts economy_ledger economy_balances inventory_snapshots party_snapshots
+    %i[money_claims money_payouts money_shadow encounter_rolls economy_ledger economy_balances inventory_snapshots party_snapshots monster_transfers monsters
        enforcement_events].each { |t| @db[t].delete rescue nil }
     @db[:accounts].delete
     @logs = Queue.new
@@ -253,6 +253,68 @@ class ServerMoneyClaimTest < Minitest::Test
     sleep 0.3
     lines = logs.grep(/money: account #{lo[:account_id]} (UNEXPLAINED|REPEAT)/).map { |l| l[/(UNEXPLAINED|REPEAT) \+\d+/] }
     assert_equal ["REPEAT +400"], lines
+  end
+
+  # --- M1c: Pay Day -------------------------------------------------------------
+
+  def team(s, *mons)
+    send_env(s, { type: :team_check, team: mons.map { |sp, lv, mv| { "species" => sp, "level" => lv, "moves" => mv } }, seq: 1 })
+    recv_type(s, :team_ack)
+  end
+
+  def mint(account_id, pid, species: "RATTATA", level: 5)
+    @db[:encounter_rolls].insert(account_id: account_id, species: species, level: level, pid: pid,
+                                 iv: Sequel.pg_jsonb([0, 0, 0, 0, 0, 0]), shiny: false, map: 31, enctype: "Land")
+  end
+
+  def payday(s, nonce, amount, **proof)
+    send_env(s, { type: :money_claim, kind: :payday, nonce: nonce, amount: amount, map: 31 }.merge(proof))
+    recv_type(s, :money_claim_ack)
+  end
+
+  # A wild battle's Pay Day needs the foe the server minted for it, once.
+  def test_pay_day_in_a_wild_battle_needs_its_mint
+    start_server("shadow", "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on")
+    s, lo = login
+    team(s, ["MEOWTH", 12, %w[SCRATCH PAYDAY]])
+    mint(lo[:account_id], 777)
+    assert_equal ["paid", 60], payday(s, 1, 60, foes: [777]).values_at(:verdict, :accepted), "5 x 12, used once"
+    refute_nil @db[:encounter_rolls].where(pid: 777).get(:payday_at)
+    assert_equal "unproven", payday(s, 2, 60, foes: [777])[:verdict], "the same mint again"
+    assert_equal "unproven", payday(s, 3, 60, foes: [888])[:verdict], "a foe never minted"
+  end
+
+  def test_pay_day_is_bounded_by_the_party
+    start_server("shadow", "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on")
+    s, lo = login
+    team(s, ["MEOWTH", 12, %w[SCRATCH PAYDAY]])
+    mint(lo[:account_id], 1)
+    assert_equal ["suspect", 600], payday(s, 1, 5000, foes: [1]).values_at(:verdict, :accepted),
+                 "5 x 12 x ten uses at most for one foe"
+    team(s, ["PIKACHU", 30, %w[THUNDERSHOCK]])
+    mint(lo[:account_id], 2)
+    assert_equal ["suspect", 0], payday(s, 2, 60, foes: [2]).values_at(:verdict, :accepted), "no one knows Pay Day"
+  end
+
+  def test_pay_day_without_mints_is_only_bounded
+    start_server
+    s, = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    assert_equal "paid", payday(s, 1, 60, foes: [4242])[:verdict]
+    assert(logs.any? { |l| l.include?("pay day 60 (bound 600) (unminted)") })
+  end
+
+  def test_pay_day_in_a_trainer_battle_follows_its_prize
+    start_server
+    s, = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    claim(s, 50, [ANNA], 400)
+    assert_equal "paid", payday(s, 1, 60, trainer_claim: 50)[:verdict]
+    assert_equal "unproven", payday(s, 2, 60, trainer_claim: 51)[:verdict], "no such prize claim"
+    s2, = login("claim2@t.co", map: 32)
+    team(s2, ["MEOWTH", 12, %w[PAYDAY]])
+    claim(s2, 60, [ANNA], 400)
+    assert_equal "unproven", payday(s2, 3, 60, trainer_claim: 60)[:verdict], "its prize was refused"
   end
 
   def test_the_login_says_how_claims_are_judged

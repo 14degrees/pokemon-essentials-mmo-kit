@@ -6,7 +6,9 @@
 # from and the event that started its battle - both tagged when GameData::Trainer builds
 # it (#to_trainer), so a rival's substituted name, and a trainer that spotted the player
 # first and waited for a second one, keep theirs - with the amount the engine is about
-# to pay and its multiplier facts (Amulet Coin, Happy Hour).
+# to pay and its multiplier facts (Amulet Coin, Happy Hour). The coins Pay Day scattered
+# are claimed apart (M1c): a wild battle's name its foes, a trainer battle's its prize
+# claim.
 #
 # The server judges it against the exports and records its verdict (money_claims at
 # login; shadow only logs). A fresh position goes first, since the claim is judged by
@@ -59,17 +61,26 @@ module PEMK
       nil
     end
 
-    # Battle#pbGainMoney, before the engine pays: what it is about to add, and for whom.
+    # Battle#pbGainMoney, before the engine pays: what it is about to add, and for whom -
+    # a trainer battle's prize, and the coins Pay Day scattered (M1c).
     def claim(battle)
-      return unless active? && battle.trainerBattle? && battle.internalBattle && battle.moneyGain
+      return unless active? && battle.internalBattle && battle.moneyGain
 
+      amulet = battle.field.effects[PBEffects::AmuletCoin] ? true : false
+      happy  = battle.field.effects[PBEffects::HappyHour] ? true : false
+      prize  = battle.trainerBattle? ? claim_prize(battle, amulet, happy) : nil
+      claim_payday(battle, amulet, happy, prize)
+    rescue StandardError => e
+      PEMK.log("prize: claim error #{e.class}: #{e.message}")
+    end
+
+    # -> the prize claim's nonce, or nil when its trainers were not built from data.
+    def claim_prize(battle, amulet, happy)
       opp = Array(battle.opponent)
-      return if opp.empty? || opp.any? { |t| !t.respond_to?(:pemk_key) || t.pemk_key.nil? || t.pemk_event.nil? }
+      return nil if opp.empty? || opp.any? { |t| !t.respond_to?(:pemk_key) || t.pemk_key.nil? || t.pemk_event.nil? }
 
       amount = 0
       opp.each_with_index { |t, i| amount += battle.pbMaxLevelInTeam(1, i) * t.base_money }
-      amulet = battle.field.effects[PBEffects::AmuletCoin] ? true : false
-      happy  = battle.field.effects[PBEffects::HappyHour] ? true : false
       amount *= 2 if amulet
       amount *= 2 if happy
       partner = ($PokemonGlobal.partner rescue nil)
@@ -77,18 +88,44 @@ module PEMK
                partner ? [partner[0].to_s, partner[1].to_s] : nil]
       claims << entry
       send_claim(entry)
-    rescue StandardError => e
-      PEMK.log("prize: claim error #{e.class}: #{e.message}")
+      entry[0]
+    end
+
+    # Pay Day's coins, doubled like the prize. A wild battle names its foes (the server
+    # minted them); a trainer battle, its prize claim.
+    def claim_payday(battle, amulet, happy, prize)
+      coins = battle.field.effects[PBEffects::PayDay].to_i
+      return unless coins.positive?
+
+      coins *= 2 if amulet
+      coins *= 2 if happy
+      if battle.trainerBattle?
+        return unless prize
+
+        proof = { "trainer_claim" => prize }
+      else
+        proof = { "foes" => Array(battle.pbParty(1)).map { |pk| pk.personalID }.first(2) }
+      end
+      entry = [new_nonce, :payday, coins, amulet, happy, $game_map.map_id, proof]
+      claims << entry
+      send_claim(entry)
     end
 
     def send_claim(entry)
       return unless online?
 
       (PEMK::Presence.emit_now(:pos) rescue nil)   # judged by where the server last saw the player
-      nonce, trainers, amount, amulet, happy, map, partner = entry
-      msg = { :type => :money_claim, :nonce => nonce, :trainers => trainers, :amount => amount,
-              :amulet => amulet, :happy_hour => happy, :map => map }
-      msg[:partner] = partner if partner
+      nonce, what, amount, amulet, happy, map, extra = entry
+      msg = { :type => :money_claim, :nonce => nonce, :amount => amount, :amulet => amulet,
+              :happy_hour => happy, :map => map }
+      if what == :payday
+        msg[:kind] = :payday
+        msg[:foes] = extra["foes"] if extra["foes"]
+        msg[:trainer_claim] = extra["trainer_claim"] if extra["trainer_claim"]
+      else
+        msg[:trainers] = what
+        msg[:partner] = extra if extra
+      end
       PEMK.send_message(msg)
       @asked[nonce] = mono
     end
@@ -134,7 +171,7 @@ module PEMK
 
       list = g.pemk_prize_claims
       list = g.pemk_prize_claims = [] unless list.is_a?(Array)
-      list.select! { |e| e.is_a?(Array) && e.length == 7 && e[0].is_a?(Integer) && e[1].is_a?(Array) }
+      list.select! { |e| e.is_a?(Array) && e.length == 7 && e[0].is_a?(Integer) && (e[1].is_a?(Array) || e[1] == :payday) }
       list
     end
 
