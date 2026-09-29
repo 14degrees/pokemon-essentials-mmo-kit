@@ -8,12 +8,17 @@
 # overworld frame (never mid-battle / menu / transfer), mirroring the NetStatus /
 # Checkpoint gate.
 #
+# A swimmer sent back stays one: dismounted on water it could neither step off (water
+# is a wall on foot) nor surf again (Surf and Dive start from the tile it stands on),
+# and a diver could never come up.
+#
 # Enforcement is OPT-IN server-side (PEMK_POS_ENFORCE=on); in the default :off /
 # :shadow modes the server never sends :pos_correct, so this stays dormant.
 #===============================================================================
 module PEMK
   module PosCorrect
-    @pending = nil   # [map, x, y] awaiting a safe frame
+    @pending    = nil   # [map, x, y] awaiting a safe frame
+    @swim_after = nil   # [map, :surf | :dive] once a cross-map snap-back has landed
 
     module_function
 
@@ -26,10 +31,12 @@ module PEMK
     end
 
     def reset
-      @pending = nil
+      @pending    = nil
+      @swim_after = nil
     end
 
     def tick
+      swim_again if @swim_after
       return unless @pending
       return unless safe?
 
@@ -50,8 +57,10 @@ module PEMK
     end
 
     def apply(map, x, y)
-      (pbCancelVehicles rescue nil)   # dismount bike/surf so the reposition is clean
+      swim = swim_for(map, x, y)
       if $game_map.map_id == map
+        (pbCancelVehicles(map, swim.nil?) rescue nil)   # off the bike where it cannot ride
+        swim_as(swim)
         $game_player.moveto(x, y)     # same map: instant + recentred (Game_Player#moveto)
       else
         $game_temp.player_new_map_id    = map
@@ -59,10 +68,47 @@ module PEMK
         $game_temp.player_new_y         = y
         $game_temp.player_new_direction = $game_player.direction   # keep facing
         $game_temp.player_transferring  = true                     # Scene_Map completes it
+        @swim_after = swim && [map, swim]   # ... on foot: a swimmer swims again once there
       end
-      PEMK.log("poscorrect: snapped to #{map}(#{x},#{y})")
+      PEMK.log("poscorrect: snapped to #{map}(#{x},#{y})#{swim ? " (#{swim})" : ''}")
     rescue => e
       PEMK.log("poscorrect: apply error #{e.class}: #{e.message}")
+    end
+
+    # How the player moves on the tile it is sent back to: diving on a map below (one
+    # some map's DiveMap names), surfing if it swims now and the tile is water, else on
+    # foot.
+    def swim_for(map, x, y)
+      return :dive if underwater?(map)
+      return nil unless $PokemonGlobal && ($PokemonGlobal.surfing || $PokemonGlobal.diving)
+
+      tag = ($map_factory.getTerrainTag(map, x, y) rescue nil)
+      tag && tag.can_surf ? :surf : nil
+    end
+
+    def underwater?(map)
+      found = false
+      GameData::MapMetadata.each { |md| found ||= md.dive_map_id == map }
+      found
+    rescue
+      false
+    end
+
+    def swim_as(swim)
+      return unless swim
+
+      $PokemonGlobal.surfing = (swim == :surf)
+      $PokemonGlobal.diving  = (swim == :dive)
+      (pbUpdateVehicle rescue nil)
+    end
+
+    # Scene_Map#transfer_player dismounts: once the snap-back has landed, swim again.
+    def swim_again
+      return unless safe?
+
+      map, swim = @swim_after
+      @swim_after = nil
+      swim_as(swim) if $game_map.map_id == map
     end
   end
 end

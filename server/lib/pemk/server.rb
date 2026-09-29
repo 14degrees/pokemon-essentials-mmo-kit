@@ -220,6 +220,10 @@ module PEMK
         end
       end
       @log.call("server: position enforcement = #{@config.position_enforcement} (M4 Layer B)")
+      if @config.position_enforcement != :off && @world.loaded? && !@world.water_marks?
+        @log.call("server: WARNING the world export predates the water marks - a surfer is not checked against " \
+                  "walls and a dive reads as an impossible warp (one debug launch regenerates it)")
+      end
       @log.call("server: moderation - #{@bans.in_force_list.size} account(s) banned (bin/pemk_admin.rb)")
       @log.call("server: pickup enforcement = #{@config.pickup_enforce ? 'on' : 'off'} (M4 Layer C server-mint)")
       @log.call("server: WARNING pickup reset ALLOWED (PEMK_ALLOW_PICKUP_RESET=on) — DEV ONLY, disable in production") if @config.pickup_reset_allowed
