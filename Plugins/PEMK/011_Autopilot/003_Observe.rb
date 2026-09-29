@@ -137,7 +137,8 @@ module PEMK
 
       def player_info
         { "x" => $game_player.x, "y" => $game_player.y, "dir" => $game_player.direction,
-          "moving" => $game_player.moving? ? true : false }
+          "moving" => $game_player.moving? ? true : false,
+          "mode" => (PEMK::Presence.movement_mode.to_s rescue nil) }   # walk, run, bike, surf, dive
       end
 
       def trainer_info

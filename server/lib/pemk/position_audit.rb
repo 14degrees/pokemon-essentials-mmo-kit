@@ -24,7 +24,6 @@ module PEMK
   # :teleport (same-map jump > 1 tile), :illegal_warp (cross-map move that matches no
   # warp / spawn / connection).
   class PositionAudit
-    SWIM_MODES  = %i[surf dive].freeze          # water flattens to blocked -> suppress no-clip
     ENFORCEABLE = %i[noclip illegal_warp].freeze # verdicts eligible for correction
     # The first frame after a warp can come a step past the arrival tile: a player
     # holding the arrow through a door, or a move route the arrival event starts (the
@@ -113,7 +112,7 @@ module PEMK
 
         :match
       else
-        legal_transfer?(pmap, map, x, y) ? :match : :illegal_warp
+        legal_transfer?(prev, map, x, y) ? :match : :illegal_warp
       end
     end
 
@@ -129,14 +128,42 @@ module PEMK
     end
 
     def noclip?(map, x, y, env)
-      return false if SWIM_MODES.include?(env[:mode])   # surfer/diver on "blocked" water
+      return false unless @world.walkable?(map, x, y) == false   # nil (no grid) is NEVER a violation
 
-      @world.walkable?(map, x, y) == false              # nil (no grid) is NEVER a violation
+      !(env[:mode] == :surf && swims?(map, x, y))
     end
 
-    def legal_transfer?(pmap, map, x, y)
+    # The passability grid counts water as walls: a surfer crosses only the water ones.
+    # An export from before the water marks cannot tell them apart, so a surfer is
+    # trusted there, as it always was. A diver walks the map below like the ground.
+    def swims?(map, x, y)
+      return true unless @world.water_marks?
+
+      @world.water?(map, x, y) != false
+    end
+
+    def legal_transfer?(prev, map, x, y)
+      pmap = prev[0]
       arrival?(pmap, map, x, y) ||            # a known warp from the old map, or a respawn
-        @world.connected?(pmap, map)          # coarse edge-connection between the two maps
+        @world.connected?(pmap, map) ||       # coarse edge-connection between the two maps
+        dive?(prev, map, x, y)                # down from deep water, or back up onto it
+    end
+
+    # Dive takes the player from deep water to the same tile of the map below (its
+    # DiveMap; Game_Character#moveto wraps it into a smaller map). Surfacing brings it
+    # back up to the same tile of the map the engine picks (the first whose DiveMap this
+    # is), where that tile is deep. The game reports the arrival tile itself, so no
+    # slack: a step off it could be a wall.
+    def dive?(prev, map, x, y)
+      pmap, px, py = prev
+      down = @world.dive_map(pmap) == map && @world.deep?(pmap, px, py) && [x, y] == wrap(map, px, py)
+      up   = @world.surface_map(pmap) == map && @world.deep?(map, px, py) && [x, y] == [px, py]
+      down || up
+    end
+
+    def wrap(map, x, y)
+      w, h = @world.dims(map)
+      w.to_i.positive? && h.to_i.positive? ? [x % w, y % h] : [x, y]
     end
 
     # On (or a step past) a tile a warp on +pmap+ lands on, or a start / home / heal

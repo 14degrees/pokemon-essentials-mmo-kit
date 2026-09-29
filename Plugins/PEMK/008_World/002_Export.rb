@@ -12,6 +12,10 @@
 # (Layer D); and top-level: map CONNECTIONS (edge stitching), HOME and START
 # (respawn/genesis whitelist). Passability is H hex-nibble row strings (W chars),
 # nibble = the ground tile's RMXP passage bits, 0x0f ('f') == fully blocked.
+# WATER rows mark where a surfer may be ('w'), where Dive also goes down or comes up
+# ('d'), and deep water under a rock ('x': a diver comes up there, no surfer goes);
+# DIVE_MAP is the map below, SURFACE_MAP (on a map below) the one a diver comes up to.
+# The passability grid counts water as walls.
 #
 # Triggered from the F9 debug menu ("PEMK: Export World"), so it never ships to
 # players and needs no core-script edit. JSON is hand-rolled (mkxp-z has no
@@ -30,7 +34,7 @@ module PEMK
       mapinfos = load_data("Data/MapInfos.rxdata")
       maps  = {}
       counts = { :objects => 0, :warps => 0, :passability => 0, :ledges => 0, :heal => 0, :encounters => 0,
-                 :trainers => 0 }
+                 :trainers => 0, :water => 0 }
 
       all_events = []   # [map_id, event] for the item sources (item authority E1b)
       @common_events = nil      # read again: the dev may have edited them since the last export
@@ -62,18 +66,24 @@ module PEMK
         end
         passability = map_passability(map)
         ledges      = map_ledges(map)
+        water       = map_water(map)
+        dive        = dive_map_of(map_id)
+        surface     = surface_map_of(map_id)
         heal        = map_heal(map_id)
         enc         = map_encounters(map_id)
 
         # Emit a map only if it carries at least one useful fact.
         next if objects.empty? && warps.empty? && passability.nil? && heal.nil? && enc.nil? && ledges.empty? &&
-                trainers.empty?
+                trainers.empty? && water.nil? && dive.nil? && surface.nil?
 
         entry = { :name => map_name(mapinfos, map_id), :width => map.width, :height => map.height,
                   :objects => objects }
         entry[:warps]       = warps       unless warps.empty?
         entry[:passability] = passability if passability
         entry[:ledges]      = ledges      unless ledges.empty?
+        entry[:water]       = water       if water
+        entry[:dive_map]    = dive        if dive
+        entry[:surface_map] = surface     if surface
         entry[:heal]        = heal        if heal
         entry[:encounters]  = enc         if enc
         entry[:trainers]    = trainers    unless trainers.empty?
@@ -83,6 +93,7 @@ module PEMK
         counts[:warps]      += warps.size
         counts[:passability] += 1 if passability
         counts[:ledges]     += ledges.size
+        counts[:water]      += 1 if water
         counts[:heal]       += 1 if heal
         counts[:encounters] += 1 if enc
         counts[:trainers]   += trainers.size
@@ -105,6 +116,7 @@ module PEMK
       money = (money_sources(all_events) rescue nil)
       doc[:money_sources] = money if money
       doc[:trainer_marks] = true   # the placements say which battles can be fought again
+      doc[:water_marks] = true     # the maps say where a surfer may be (none: no water there)
       partners = (partner_registrations(all_events) rescue nil)
       doc[:partners] = partners if partners
 
@@ -1109,6 +1121,103 @@ module PEMK
         end
       end
       nib
+    end
+
+    # === water — Layer B for surfers and divers =================================
+
+    # -> Array of H row strings (W chars) | nil when the map holds no water. 'w' where a
+    # surfer may be, 'd' where it may also dive or surface, 'x' deep water under a rock
+    # (terrain_tag skips the rock, so a diver may come up onto it; no surfer gets there),
+    # '.' elsewhere. The passability grid flattens water to walls; this says which of
+    # them a surfer crosses.
+    def map_water(map)
+      return nil unless $data_tilesets
+
+      tileset = $data_tilesets[map.tileset_id]
+      return nil unless tileset && tileset.respond_to?(:terrain_tags)
+
+      passages     = tileset.passages
+      priorities   = tileset.priorities
+      terrain_tags = tileset.terrain_tags
+      data = map.data
+      any  = false
+      rows = Array.new(map.height) do |y|
+        row = +""
+        map.width.times do |x|
+          surf = surf_tile?(data, x, y, passages, priorities, terrain_tags)
+          deep = deep_tile?(data, x, y, terrain_tags)
+          c = if surf && deep then "d"
+              elsif surf then "w"
+              elsif deep then "x"
+              else "."
+              end
+          any ||= c != "."
+          row << c
+        end
+        row
+      end
+      any ? rows : nil
+    rescue
+      nil
+    end
+
+    # Game_Map#playerPassable? for a surfer off a bridge: going down the layers, a water
+    # tile decides unless a blocking or ground tile comes first. A waterfall counts (it
+    # is climbed with through set). A tile blocked from some sides only does not stop
+    # the scan: the surfer may reach it from another.
+    def surf_tile?(data, x, y, passages, priorities, terrain_tags)
+      [2, 1, 0].each do |z|
+        tid = data[x, y, z]
+        next if tid.nil? || tid == 0
+
+        tt = terrain_of(terrain_tags, tid)
+        next if tt && tt.bridge
+        return true if tt && tt.can_surf
+        next if tt && tt.ignore_passability
+
+        return false if passages[tid] & 0x0f == 0x0f || priorities[tid] == 0
+      end
+      false
+    rescue
+      false
+    end
+
+    # Game_Map#terrain_tag off a bridge can dive: where Dive goes down, and where a
+    # diver comes up on the map above.
+    def deep_tile?(data, x, y, terrain_tags)
+      [2, 1, 0].each do |z|
+        tid = data[x, y, z]
+        next if tid.nil? || tid == 0
+
+        tt = terrain_of(terrain_tags, tid)
+        next unless tt
+        next if tt.id_number == 0 || tt.ignore_passability || tt.bridge
+
+        return tt.can_dive ? true : false
+      end
+      false
+    rescue
+      false
+    end
+
+    # The map Dive takes a player down to from this one (its metadata's DiveMap) | nil.
+    def dive_map_of(map_id)
+      md = (GameData::MapMetadata.try_get(map_id) rescue nil)
+      d = md && md.dive_map_id
+      d.is_a?(Integer) && d > 0 ? d : nil
+    rescue
+      nil
+    end
+
+    # The map a diver on this one comes up to: the first whose DiveMap it is, in the
+    # order pbSurfacing searches | nil.
+    def surface_map_of(map_id)
+      GameData::MapMetadata.each do |md|
+        return md.id if md.dive_map_id == map_id
+      end
+      nil
+    rescue
+      nil
     end
 
     # === spawns / connections / encounters =====================================

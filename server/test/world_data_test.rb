@@ -82,6 +82,50 @@ class WorldDataTest < Minitest::Test
     refute w.ledge?(7, 1, 2)   # map 7 has no ledges
   end
 
+  def with_water(doc = sample)
+    doc["water_marks"] = true
+    doc["maps"]["5"]["water"] = ["..w.", ".dwx", "...."]
+    doc["maps"]["5"]["dive_map"] = 7
+    doc["maps"]["7"]["surface_map"] = 5
+    doc
+  end
+
+  def test_water_and_dive_maps
+    w = load(with_water)
+    assert w.water_marks?
+    assert_equal true,  w.water?(5, 2, 0)
+    assert_equal true,  w.water?(5, 1, 1)        # deep water is water too
+    assert_equal false, w.water?(5, 3, 1)        # ... not under a rock: no surfer goes there
+    assert_equal false, w.water?(5, 0, 0)
+    assert_nil w.water?(5, 9, 0)                 # outside the grid
+    assert_equal false, w.water?(7, 0, 0)        # the export marks water: no grid, no water
+    assert w.deep?(5, 1, 1)
+    assert w.deep?(5, 3, 1)                      # a diver may come up under the rock
+    refute w.deep?(5, 2, 1)
+    assert_equal 7, w.dive_map(5)
+    assert_nil w.dive_map(7)
+    assert_equal 5, w.surface_map(7)
+    assert_nil w.surface_map(5)
+    assert_equal [4, 3], w.dims(5)
+    assert_nil w.dims(999)
+    assert_match(/1 water grids, 1 dive maps/, w.summary)
+  end
+
+  def test_an_export_without_water_marks_says_nothing_of_water
+    w = load(sample)
+    refute w.water_marks?
+    assert_nil w.water?(5, 2, 1)
+    refute w.deep?(5, 2, 1)
+  end
+
+  def test_malformed_water_is_boot_error
+    doc = with_water
+    doc["maps"]["5"]["water"] = ["..w.", ".q..", "...."]
+    assert_raises(RuntimeError) { load(doc) }
+    doc["maps"]["5"]["water"] = ["..w.", "...."]
+    assert_raises(RuntimeError) { load(doc) }
+  end
+
   def test_warp_dest
     w = load(sample)
     assert w.warp_dest?(5, 7, 10, 20)            # the exported warp's exact dest

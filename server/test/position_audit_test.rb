@@ -9,7 +9,8 @@ require "pemk/position_audit"   # DB-free — no full pemk load / no Postgres
 class PositionAuditTest < Minitest::Test
   # Minimal world stub so this stays a pure unit (no filesystem / no WorldData).
   class FakeWorld
-    def initialize(walk: {}, warps: {}, spawns: [], conns: [], ledges: [], srcs: [], empty: false)
+    def initialize(walk: {}, warps: {}, spawns: [], conns: [], ledges: [], srcs: [], empty: false,
+                   water: nil, deep: [], rocky: [], dives: {}, surfaces: {}, dims: {})
       @walk   = walk     # [map,x,y] => true/false  (absent key => nil = no grid)
       @warps  = warps    # [from,to,x,y] => true
       @spawns = spawns   # [[map,x,y], ...]
@@ -17,11 +18,23 @@ class PositionAuditTest < Minitest::Test
       @ledges = ledges   # [[map,x,y], ...]
       @srcs   = srcs     # [[map,x,y], ...] warp event tiles (doors, stairs)
       @empty  = empty
+      @water  = water    # nil = an export without water marks; else [[map,x,y], ...] surfable
+      @deep   = deep     # [[map,x,y], ...] where Dive goes down / comes up (surfable too)
+      @rocky  = rocky    # [[map,x,y], ...] deep water under a rock: a diver comes up, no surfer
+      @dives  = dives    # map => the map below it
+      @surfaces = surfaces # dive map => the map a diver comes up to
+      @dims   = dims     # map => [width, height]
     end
 
     def empty?;                @empty;                      end
     def walkable?(m, x, y);    @walk.fetch([m, x, y], nil); end
     def warp_src?(m, x, y);    @srcs.include?([m, x, y]);   end
+    def water_marks?;          !@water.nil?;                end
+    def water?(m, x, y);       @water && (@water.include?([m, x, y]) || @deep.include?([m, x, y])); end
+    def deep?(m, x, y);        @deep.include?([m, x, y]) || @rocky.include?([m, x, y]); end
+    def dive_map(m);           @dives[m];                   end
+    def surface_map(m);        @surfaces[m];                end
+    def dims(m);               @dims[m];                    end
 
     def warp_dest?(f, t, x, y, reach: 0)
       @warps.keys.any? { |ff, tt, dx, dy| ff == f && tt == t && (dx - x).abs <= reach && (dy - y).abs <= reach }
@@ -71,10 +84,94 @@ class PositionAuditTest < Minitest::Test
     assert(@logs.any? { |m| m.include?("noclip") && m.include?("account 1") })
   end
 
-  def test_noclip_suppressed_while_surfing
-    w = FakeWorld.new(walk: { [5, 2, 1] => false })   # "blocked" water tile
+  # --- surfers and divers --------------------------------------------------------
+  # The passability grid counts water as walls: the export's water marks say which.
+
+  def test_a_surfer_crosses_water
+    w = FakeWorld.new(walk: { [5, 2, 1] => false }, water: [[5, 2, 1]])
     assert_equal :match, pa(w).check(1, env(map: 5, x: 2, y: 1, mode: :surf), { last_pos: [5, 1, 1] })
     assert_empty @logs
+  end
+
+  def test_a_surfer_does_not_cross_a_wall
+    w = FakeWorld.new(walk: { [5, 2, 1] => false }, water: [[5, 3, 1]])
+    assert_equal :noclip, pa(w).check(1, env(map: 5, x: 2, y: 1, mode: :surf), { last_pos: [5, 1, 1] })
+    assert(@logs.any? { |m| m.include?("noclip") && m.include?("mode=surf") })
+  end
+
+  def test_a_surfer_through_a_wall_is_snapped_back
+    w = FakeWorld.new(walk: { [5, 2, 1] => false }, water: [])
+    cd = { last_pos: [5, 1, 1] }
+    assert_equal :noclip, pa_mode(w, :on).check(1, env(map: 5, x: 2, y: 1, mode: :surf), cd)
+    assert_equal [5, 1, 1], cd[:correct_to]
+  end
+
+  def test_a_surfer_lands_on_the_shore
+    w = FakeWorld.new(walk: { [5, 2, 1] => true }, water: [])
+    assert_equal :match, pa(w).check(1, env(map: 5, x: 2, y: 1, mode: :surf), { last_pos: [5, 1, 1] })
+  end
+
+  def test_a_surfer_is_trusted_by_an_export_without_water_marks
+    w = FakeWorld.new(walk: { [5, 2, 1] => false })   # water: nil - it cannot tell water from walls
+    assert_equal :match, pa(w).check(1, env(map: 5, x: 2, y: 1, mode: :surf), { last_pos: [5, 1, 1] })
+    assert_empty @logs
+  end
+
+  def test_a_diver_walks_the_map_below_like_the_ground
+    w = FakeWorld.new(walk: { [70, 2, 1] => false })   # with or without water marks
+    assert_equal :noclip, pa(w).check(1, env(map: 70, x: 2, y: 1, mode: :dive), { last_pos: [70, 1, 1] })
+  end
+
+  def sea(**more)
+    FakeWorld.new(water: [[69, 3, 3]], deep: [[69, 10, 12]], dives: { 69 => 70 }, surfaces: { 70 => 69 }, **more)
+  end
+
+  def test_dive_goes_down_from_deep_water_to_the_same_tile
+    assert_equal :match, pa(sea).check(1, env(map: 70, x: 10, y: 12, mode: :dive), { last_pos: [69, 10, 12] })
+    assert_empty @logs
+  end
+
+  def test_surfacing_comes_up_onto_deep_water
+    assert_equal :match, pa(sea).check(1, env(map: 69, x: 10, y: 12, mode: :surf), { last_pos: [70, 10, 12] })
+    assert_empty @logs
+  end
+
+  # The game reports the arrival tile itself: a step off it could be a wall.
+  def test_no_dive_from_shallow_water_off_the_tile_or_to_another_map
+    assert_equal :illegal_warp, pa(sea).check(1, env(map: 70, x: 3, y: 3), { last_pos: [69, 3, 3] })
+    assert_equal :illegal_warp, pa(sea).check(1, env(map: 70, x: 11, y: 13), { last_pos: [69, 10, 12] })
+    assert_equal :illegal_warp, pa(sea).check(1, env(map: 69, x: 11, y: 13), { last_pos: [70, 10, 12] })
+    assert_equal :illegal_warp, pa(sea).check(1, env(map: 71, x: 10, y: 12), { last_pos: [69, 10, 12] })
+    assert_equal :illegal_warp, pa(sea).check(1, env(map: 69, x: 3, y: 3), { last_pos: [70, 3, 3] })
+  end
+
+  # The engine surfaces into the first map whose DiveMap this is, and nowhere else.
+  def test_surfacing_only_into_the_engine_s_surface_map
+    w = sea(dives: { 69 => 70, 72 => 70 }, deep: [[69, 10, 12], [72, 10, 12]])
+    assert_equal :illegal_warp, pa(w).check(1, env(map: 72, x: 10, y: 12, mode: :surf), { last_pos: [70, 10, 12] })
+  end
+
+  # Metadata naming each map the other's DiveMap: the engine branches on diving, so
+  # the way up is still the surface map's deep water.
+  def test_a_dive_map_that_names_its_surface_as_its_own_dive_map
+    w = sea(dives: { 69 => 70, 70 => 69 })
+    assert_equal :match, pa(w).check(1, env(map: 69, x: 10, y: 12, mode: :surf), { last_pos: [70, 10, 12] })
+    assert_equal :match, pa(w).check(1, env(map: 70, x: 10, y: 12, mode: :dive), { last_pos: [69, 10, 12] })
+  end
+
+  # Game_Character#moveto wraps the tile into a smaller map below.
+  def test_a_smaller_map_below_wraps_the_arrival
+    w = sea(deep: [[69, 30, 25]], dims: { 70 => [20, 20] })
+    assert_equal :match, pa(w).check(1, env(map: 70, x: 10, y: 5, mode: :dive), { last_pos: [69, 30, 25] })
+    assert_equal :illegal_warp, pa(w).check(1, env(map: 70, x: 30, y: 25, mode: :dive), { last_pos: [69, 30, 25] })
+  end
+
+  # Deep water under a rock: the engine lets a diver come up onto it, a surfer never
+  # goes there (nor dives from it).
+  def test_deep_water_under_a_rock
+    w = sea(walk: { [69, 5, 5] => false }, rocky: [[69, 5, 5]])
+    assert_equal :match, pa(w).check(1, env(map: 69, x: 5, y: 5, mode: :surf), { last_pos: [70, 5, 5] })
+    assert_equal :noclip, pa(w).check(1, env(map: 69, x: 5, y: 5, mode: :surf), { last_pos: [69, 4, 5] })
   end
 
   def test_unknown_passability_is_not_noclip
