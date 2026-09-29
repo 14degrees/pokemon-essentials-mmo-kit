@@ -25,10 +25,11 @@ module PEMK
     # KEPT. Operators override via PEMK_CORPUS_RETENTION_DAYS (0 = keep forever).
     RETENTION_DAYS = 30
 
-    def initialize(db, mode: :off, logger: nil)
+    def initialize(db, mode: :off, logger: nil, trainer_battles: nil)
       @db   = db
       @mode = mode   # the SERVER's configured rng mode (masquerade detection)
       @log  = logger || ->(_m) {}
+      @trainer_battles = trainer_battles   # trainer proof P2: the seeds of trainer battles
     end
 
     # Boot-time retention: drop MATCHED records older than +days+ (0 disables).
@@ -60,13 +61,18 @@ module PEMK
       end
 
       roll_id = nil
+      trainer_battle_id = nil
       seed = env[:battle_seed]
       if seed.is_a?(Integer) && seed.positive?
         roll_id = @db[:encounter_rolls].where(account_id: account_id, battle_seed: seed).get(:id)
+        # ... or a trainer battle's (P2): each attempt at a placement names its seed.
+        trainer_battle_id = @trainer_battles&.row_for_seed(account_id, seed)&.[](:id) unless roll_id
         # an unknown seed is recorded UNBOUND, and loudly — either a stale relogin
         # or a fabricated claim; part 3's parity stats treat unbound `on` records
         # as first-class suspects.
-        @log.call("battlerec: account #{account_id} claimed unknown seed #{seed} (recording unbound)") unless roll_id
+        unless roll_id || trainer_battle_id
+          @log.call("battlerec: account #{account_id} claimed unknown seed #{seed} (recording unbound)")
+        end
       end
 
       # THE SEED WALK — the part-1 security check. An `on` record bound to a roll
@@ -79,7 +85,7 @@ module PEMK
       # a failure (review-caught: :ok and :skipped both landing on "pending" made
       # log-stripping silent).
       walk = :unbound
-      if roll_id
+      if roll_id || trainer_battle_id
         if mode == "on"
           walk = verify_walk(account_id, seed, env, body)
         elsif @mode == :on
@@ -95,6 +101,7 @@ module PEMK
       @db[:battle_records].insert(
         account_id:        account_id,
         encounter_roll_id: roll_id,
+        trainer_battle_id: trainer_battle_id,
         mode:              mode,
         battle_seed:       (seed.is_a?(Integer) && seed.positive? ? seed : nil),
         engine_fp:         str_or_nil(env[:engine_fp], 64),
