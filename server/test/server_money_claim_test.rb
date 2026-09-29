@@ -409,6 +409,35 @@ class ServerMoneyClaimTest < Minitest::Test
     s2, = login("claim2@t.co")
     assert_equal "wait", claim(s2, 3, [ANNA], 800, happy_hour: true)[:verdict], "Happy Hour: no team yet"
     assert_equal "paid", claim(s2, 4, [blue(0)], 600)[:verdict], "a prize alone needs no team"
+    # a prize claim refused as malformed never holds its Pay Day
+    team(s2, ["MEOWTH", 12, %w[PAYDAY]])
+    assert_equal "bad", claim(s2, 5, [ANNA], -1)[:verdict]
+    assert_equal "unproven", payday(s2, 6, 60, trainer_claim: 5)[:verdict]
+  end
+
+  # A prize claim dropped over its frame budget goes out again: the Pay Day that gets
+  # through after it waits for it.
+  def test_a_pay_day_waits_for_a_prize_over_its_budget
+    start_server
+    s, = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    10.times { |i| send_env(s, { type: :money_claim, nonce: 100 + i, trainers: [ANNA], amount: 400, map: 31 }) }
+    send_env(s, { type: :money_claim, nonce: 1, trainers: [blue(0)], amount: 600, map: 31 })   # over budget
+    10.times { recv_type(s, :money_claim_ack) }
+    sleep 0.8   # the budget grows back by one
+    assert_equal "wait", payday(s, 2, 60, trainer_claim: 1)[:verdict], "its prize is coming"
+    sleep 1.2   # room for both
+    assert_equal "paid", claim(s, 1, [blue(0)], 600)[:verdict]
+    assert_equal "paid", payday(s, 2, 60, trainer_claim: 1)[:verdict]
+    # a malformed one dropped the same way, then refused, holds nothing
+    s2, = login("claim2@t.co")
+    team(s2, ["MEOWTH", 12, %w[PAYDAY]])
+    10.times { |i| send_env(s2, { type: :money_claim, nonce: 200 + i, trainers: [ANNA], amount: 400, map: 31 }) }
+    send_env(s2, { type: :money_claim, nonce: 3, trainers: [ANNA], amount: -1, map: 31 })   # over budget
+    10.times { recv_type(s2, :money_claim_ack) }
+    sleep 1.2
+    assert_equal "bad", claim(s2, 3, [ANNA], -1)[:verdict]
+    assert_equal "unproven", payday(s2, 4, 60, trainer_claim: 3)[:verdict]
   end
 
   def test_pay_day_in_a_trainer_battle_follows_its_prize

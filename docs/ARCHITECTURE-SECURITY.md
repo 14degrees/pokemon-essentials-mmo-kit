@@ -585,7 +585,8 @@ repeat Grunt): the boot names them, and a re-fight's refusal says so.
 
 A claim is judged with what its connection reported, and answered "wait" (nothing recorded,
 the client asks again) before that: its position; for Pay Day or a stated Happy Hour, its
-team; for a trainer battle's Pay Day, its prize claim, while that one waits. A claim that
+team; for a trainer battle's Pay Day, the verdict of the prize claim the connection sent
+ahead of it (one dropped over its frame budget included: it goes out again). A claim that
 neither a money frame nor a save followed is voided at a fresh login (the save may lack
 the battle); a checkpoint waits for the battle's event to end, so a save after a claim
 holds its win.

@@ -269,6 +269,7 @@ module PEMK
       # debounced cadence, so the budgets are generous.
       if authed && !frame_budget_ok?(conn, type)
         @log.call("server: account #{authed} over budget on #{type.inspect} -> drop")
+        claim_sent(conn, env[:nonce]) if type == :money_claim   # a Pay Day after it waits for it
         return
       end
 
@@ -1474,42 +1475,51 @@ module PEMK
       foes = payday ? claim_foes(env[:foes]) : nil
       proof = payday ? (foes || MoneyClaims.nonce(env[:trainer_claim])) : trainers
       unless nonce && proof && amount.is_a?(Integer) && amount.between?(0, money_cap) && env[:map].is_a?(Integer)
+        (conn.data[:claims_sent] || {}).delete(nonce)   # judged, and never recorded
         return reply(conn, type: :money_claim_ack, nonce: nonce, verdict: "bad")
       end
 
-      waiting = (conn.data[:claims_waiting] ||= {})   # nonces this connection was told to wait on
+      # A trainer battle's Pay Day whose prize claim this connection sent first.
+      prize_sent = payday && (conn.data[:claims_sent] || {}).key?(MoneyClaims.nonce(env[:trainer_claim]))
+      claim_sent(conn, nonce)
       @mailbox.submit(account_id) do
         done = @money_claims.find(account_id, nonce)
         verdict, accepted =
           if done && done[:voided_at] then ["void", 0]   # a fresh login undid it: never paid again by its nonce
           elsif done then [done[:verdict], done[:accepted]]
-          elsif claim_waits?(conn, account_id, env, payday, waiting) then ["wait", 0]
+          elsif claim_waits?(conn, account_id, env, payday, prize_sent) then ["wait", 0]
           elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
           end
-        if verdict == "wait"
-          waiting[nonce] = true
-          waiting.shift if waiting.size > CLAIMS_WAITING_MAX
-        else
-          waiting.delete(nonce)
-        end
         @reactor.post { reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted) if @reactor.alive?(conn) }
       rescue StandardError => e
         @log.call("money: claim failed #{e.class}: #{e.message}")
       end
     end
 
-    CLAIMS_WAITING_MAX = 64
+    CLAIMS_SENT_MAX = 64
+
+    # The claims this connection sent, in order - its reactor's alone, over-budget ones
+    # included (they go out again): the prize claim a Pay Day follows is known coming.
+    def claim_sent(conn, value)
+      nonce = MoneyClaims.nonce(value)
+      return unless nonce
+
+      sent = (conn.data[:claims_sent] ||= {})
+      sent[nonce] = true
+      sent.shift if sent.size > CLAIMS_SENT_MAX
+    end
 
     # A claim is judged with what this connection reported: none before its position
     # (where the trainer stood), nor - Pay Day, or a claim stating Happy Hour - before its
-    # team (what bounds the one and brings the other); and a trainer battle's Pay Day
-    # never while its prize claim waits. "wait" is not recorded: the client asks again.
-    def claim_waits?(conn, account_id, env, payday, waiting)
+    # team (what bounds the one and brings the other); and a trainer battle's Pay Day not
+    # before the prize claim sent ahead of it has a verdict. "wait" is not recorded: the
+    # client asks again.
+    def claim_waits?(conn, account_id, env, payday, prize_sent)
       return true if !payday && claim_away(conn, account_id, env[:map]) == :unknown
       return true if (payday || env[:happy_hour] == true) && conn.data[:team].nil?
 
-      payday && waiting.key?(MoneyClaims.nonce(env[:trainer_claim]))
+      prize_sent && @money_claims.find(account_id, MoneyClaims.nonce(env[:trainer_claim])).nil?
     end
 
     # -> a wild battle's foes' pids (one or two, distinct) | nil

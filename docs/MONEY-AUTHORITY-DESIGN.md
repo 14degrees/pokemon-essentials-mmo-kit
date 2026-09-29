@@ -426,9 +426,11 @@ client's stated amount (now the server's bound).
   without `Shop.ask` waiting would let a Mart purchase adopt a balance without the prize.
 - A Pay Day claim, or one stating Happy Hour, gets "wait" until the connection's first
   team report; a reconnect's reseed sends position, bag and team before re-sending claims.
-  Built in shadow (2026-09-29), with a trainer battle's Pay Day waiting while its prize
-  claim waits on the connection (the account's mailbox judges them in order); the client
-  already sends its team on every new connection.
+  Built in shadow (2026-09-29), with a trainer battle's Pay Day waiting until the prize
+  claim its connection sent ahead of it has a verdict - the reactor notes each claim a
+  connection sends, those over the frame budget too, and forgets a malformed one; the
+  account's mailbox judges them in order. The client already sends its team on every new
+  connection.
 - Claims made while disconnected are flagged by the client and judged without the place
   check (logged); the once-per-battle rule still binds. A resume does not seed the
   position from the save, and the last map of each account is kept across restarts.
