@@ -121,6 +121,7 @@ module PEMK
         apply_login(reply)
       else
         PEMK.log("auth: config login failed (#{reply && reply[:reason]})")
+        (PEMK::NetStatus.notify(:banned, PEMK::NetStatus.ban_text(reply)) rescue nil) if reply && reply[:reason] == "banned"
       end
     end
 
@@ -197,10 +198,16 @@ module PEMK
       true
     end
 
+    # The last resume the server refused as banned (its :until and :note).
+    def self.last_refusal
+      @refusal
+    end
+
     # Mid-session re-auth after a reconnect (NetStatus FSM). Deliberately does NOT
     # hydrate pending_state/econ/inv — restoring server state onto a LIVE player
     # would rewind them; the client re-seeds the server instead (absolute values).
-    # -> :ok | :auth_err (token unusable, retrying can never work) | :net (retry)
+    # -> :ok | :auth_err (token unusable, retrying can never work) | :banned (the account
+    # is suspended: last_refusal says until when) | :net (retry)
     def self.relogin(c)
       token = load_token
       return :auth_err unless token && @account_id   # nothing to retry with
@@ -210,6 +217,10 @@ module PEMK
       reply = send_and_wait(c, { :type => :auth, :token => token, :caps => CAPS, :resume => true },
                             [:auth_ok, :auth_err], 3.0)
       return :net unless reply                        # timeout / transport — retry
+      if reply[:type] == :auth_err && reply[:reason] == "banned"
+        @refusal = reply                              # until when and why, for the notice
+        return :banned
+      end
       return :auth_err unless reply[:type] == :auth_ok && reply[:account_id] == @account_id
 
       PEMK.set_self_id(@account_id)

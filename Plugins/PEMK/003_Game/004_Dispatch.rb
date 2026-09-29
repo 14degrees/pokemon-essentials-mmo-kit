@@ -13,11 +13,16 @@ module PEMK
   CHARSET_NAME = /\A[A-Za-z0-9_\- ]{1,64}\z/   # a Graphics/Characters file, no path
 
   def self.plain_name(value)
+    plain_text(value, NAME_MAX)
+  end
+
+  # Any text the server relays for the player to read (a name, a ban's reason).
+  def self.plain_text(value, max)
     return nil unless value.is_a?(String)
 
     s = value.dup.force_encoding(Encoding::UTF_8).scrub("")
     s = s.gsub(/[[:cntrl:]\p{Cf}\\<>]/, "").squeeze(" ").strip
-    s = s[0, NAME_MAX].to_s.strip
+    s = s[0, max].to_s.strip
     s.empty? ? nil : s
   end
 
@@ -50,6 +55,8 @@ module PEMK
         Remotes.remove(msg[:id])
       when :session_replaced
         NetStatus.on_replaced            # logged in elsewhere: this window stays offline
+      when :banned
+        NetStatus.on_banned(msg)         # the operator suspended the account: offline, told why
       when :flag_repair
         Flags.note_repair(msg)           # step 5: owned values back to the server's
       when :inv_correct
