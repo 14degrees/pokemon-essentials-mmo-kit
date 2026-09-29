@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-09-29T02:18:12",
+  "generated_at": "2026-09-29T05:47:00",
   "maps": {
     "1": {
       "name": "Intro",
@@ -1471,11 +1471,9 @@
         }
       },
       "trainers": [
-        {"event_id": 5, "x": 7, "y": 14, "type": "CAMPER", "name": "Jeff", "version": 0, "rematch": true},
-        {"event_id": 5, "x": 7, "y": 14, "type": "CAMPER", "name": "Jeff", "version": 1, "rematch": true},
+        {"event_id": 5, "x": 7, "y": 14, "type": "CAMPER", "name": "Jeff", "version": 0},
         {"event_id": 11, "x": 14, "y": 13, "type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0},
-        {"event_id": 6, "x": 7, "y": 17, "type": "PICNICKER", "name": "Susie", "version": 0, "rematch": true},
-        {"event_id": 6, "x": 7, "y": 17, "type": "PICNICKER", "name": "Susie", "version": 1, "rematch": true},
+        {"event_id": 6, "x": 7, "y": 17, "type": "PICNICKER", "name": "Susie", "version": 0},
         {"event_id": 12, "x": 15, "y": 13, "type": "COOLCOUPLE", "name": "Alice & Bob", "version": 0},
         {"event_id": 7, "x": 10, "y": 13, "type": "BEAUTY", "name": "Bridget", "version": 0},
         {"event_id": 8, "x": 9, "y": 14, "type": "HIKER", "name": "Ford", "version": 0},

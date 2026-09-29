@@ -602,6 +602,12 @@ Metronome, or a copying move when a foe knows Pay Day) x the uses its PP and the
 doubled per multiplier fact. Without mints a wild battle's Pay Day is only bounded, and the
 log says `unminted`. Autotest 078 lets a Meowth scatter coins on Route 1.
 
+A mint is handed out on request, so it does not prove a fought battle: a wild claim pays at
+most one use per second since its mint, and Pay Day is capped per account and day
+(`PEMK_MONEY_PAYDAY_DAILY`, default $20,000; `none` lifts it) until battle records prove
+each use. A trainer battle's prize backs one Pay Day claim. A phone rematch is placed only
+in a game whose settings or events can turn rematches on.
+
 A sale of items the server never judged - a local tier such as the Pickup table's Nuggets,
 or any sale without item authority - moves the client's balance but not S: the log says
 `UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.

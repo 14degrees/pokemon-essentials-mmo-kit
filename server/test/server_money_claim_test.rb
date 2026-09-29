@@ -248,11 +248,11 @@ class ServerMoneyClaimTest < Minitest::Test
     money(s, 3000, 1)
     claim(s, 1, [ANNA], 400)
     money(s, 3400, 2)
-    assert_equal "repeat", claim(s, 2, [ANNA], 400)[:verdict]
-    money(s, 3800, 3)
+    assert_equal "repeat", claim(s, 2, [ANNA], 5000)[:verdict], "stating more than the battle pays"
+    money(s, 8400, 3)
     sleep 0.3
     lines = logs.grep(/money: account #{lo[:account_id]} (UNEXPLAINED|REPEAT)/).map { |l| l[/(UNEXPLAINED|REPEAT) \+\d+/] }
-    assert_equal ["REPEAT +400"], lines
+    assert_equal ["REPEAT +400", "UNEXPLAINED +4600"], lines, "a repeat of what the battle pays, no more"
   end
 
   # --- M1c: Pay Day -------------------------------------------------------------
@@ -262,9 +262,11 @@ class ServerMoneyClaimTest < Minitest::Test
     recv_type(s, :team_ack)
   end
 
-  def mint(account_id, pid, species: "RATTATA", level: 5)
+  # A foe the server minted +age+ seconds ago (a battle takes time: one use per second).
+  def mint(account_id, pid, species: "RATTATA", level: 5, age: 120)
     @db[:encounter_rolls].insert(account_id: account_id, species: species, level: level, pid: pid,
-                                 iv: Sequel.pg_jsonb([0, 0, 0, 0, 0, 0]), shiny: false, map: 31, enctype: "Land")
+                                 iv: Sequel.pg_jsonb([0, 0, 0, 0, 0, 0]), shiny: false, map: 31, enctype: "Land",
+                                 created_at: Time.now - age)
   end
 
   def payday(s, nonce, amount, **proof)
@@ -296,6 +298,26 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal ["suspect", 0], payday(s, 2, 60, foes: [2]).values_at(:verdict, :accepted), "no one knows Pay Day"
   end
 
+  # A mint is handed out on request: its claim pays at most one use per second since.
+  def test_pay_day_is_bounded_by_the_battles_time
+    start_server("shadow", "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on")
+    s, lo = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    mint(lo[:account_id], 5, age: 3)
+    assert_equal ["suspect", 180], payday(s, 1, 600, foes: [5]).values_at(:verdict, :accepted), "5 x 12 x three uses"
+  end
+
+  # Until battle records prove each use, the day's Pay Day is capped.
+  def test_pay_day_is_capped_per_day
+    start_server("shadow", "PEMK_BATTLE_ENFORCE_ENCOUNTERS" => "on", "PEMK_MONEY_PAYDAY_DAILY" => "100")
+    s, lo = login
+    team(s, ["MEOWTH", 12, %w[PAYDAY]])
+    mint(lo[:account_id], 7)
+    mint(lo[:account_id], 8)
+    assert_equal ["paid", 60], payday(s, 1, 60, foes: [7]).values_at(:verdict, :accepted)
+    assert_equal ["capped", 40], payday(s, 2, 60, foes: [8]).values_at(:verdict, :accepted)
+  end
+
   def test_pay_day_without_mints_is_only_bounded
     start_server
     s, = login
@@ -310,6 +332,8 @@ class ServerMoneyClaimTest < Minitest::Test
     team(s, ["MEOWTH", 12, %w[PAYDAY]])
     claim(s, 50, [ANNA], 400)
     assert_equal "paid", payday(s, 1, 60, trainer_claim: 50)[:verdict]
+    assert_equal ["spent", 0], payday(s, 4, 60, trainer_claim: 50).values_at(:verdict, :accepted),
+                 "a battle scatters its coins once"
     assert_equal "unproven", payday(s, 2, 60, trainer_claim: 51)[:verdict], "no such prize claim"
     s2, = login("claim2@t.co", map: 32)
     team(s2, ["MEOWTH", 12, %w[PAYDAY]])

@@ -1490,6 +1490,8 @@ module PEMK
       label = nil
       rolls = nil
       trainers = []
+      prize = nil
+      turns = nil
       if foes
         if @config.battle_enforce_encounters == :on
           rolls = @money_claims.payday_rolls(account_id, foes)
@@ -1499,34 +1501,54 @@ module PEMK
         end
         foe_count = foes.length
         foe_moves = Array(rolls).flat_map { |r| wild_moves(r[:species], r[:level]) }
+        # A mint is handed out on request: at most one use per second of the battle it
+        # was minted for, since the claim leaves when that battle pays.
+        turns = (Time.now - rolls.map { |r| r[:created_at] }.min).floor if rolls
       else
         prize = @money_claims.find(account_id, MoneyClaims.nonce(env[:trainer_claim]))
         ok = prize && MoneyClaims::PAID.include?(prize[:verdict]) && prize[:voided_at].nil?
         verdict = "unproven" unless ok
+        verdict ||= "spent" if prize && prize[:payday_at]   # a battle scatters its coins once
         trainers = ok ? prize[:trainers].to_a : []
         parties = trainers.map { |t| @battle.trainer_party(t[0], t[1], t[2]) || [] }
         foe_count = [parties.sum(&:length), 1].max
         foe_moves = parties.flatten(1).flat_map { |p| Array(p[3]) }
       end
-      bound = payday_bound(conn, foe_count, foe_moves)
+      bound = payday_bound(conn, foe_count, foe_moves, turns: turns)
       bound *= 2 if env[:amulet] == true && prize_item_held?(account_id, env[:partner])
       bound *= 2 if env[:happy_hour] == true && happy_hour_possible?(conn, trainers)
       accepted = verdict ? 0 : [amount, bound].min
       verdict ||= amount > bound ? "suspect" : "paid"
+      left = payday_left(account_id)
+      if accepted > left
+        accepted = left
+        verdict = "capped"   # the day's Pay Day allowance, until battle records prove the uses
+      end
       @db.transaction do
         @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
                                                 accepted: accepted, map: env[:map], trainers: trainers, kind: "payday")
-        @money_claims.stamp_payday(rolls) if rolls && MoneyClaims::PAID.include?(verdict)
+        if MoneyClaims::PAYDAY_SPENDS.include?(verdict)
+          @money_claims.stamp_payday(rolls) if rolls
+          @money_claims.stamp_prize_payday(account_id, prize[:nonce]) if prize
+        end
         @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
       end
       note_payday(account_id, verdict, amount, accepted, bound, label)
       [verdict, accepted]
     end
 
+    # -> what the account may still be credited for Pay Day today.
+    def payday_left(account_id)
+      cap = @config.money_payday_daily
+      return Float::INFINITY unless cap
+
+      [cap - @money_claims.payday_today(account_id), 0].max
+    end
+
     # 5 x level per use, as the engine scatters it (AddMoneyGainedFromBattle): the party
     # Pokemon that know Pay Day or Metronome - or a copying move, when a foe knows Pay Day
     # - bound the level and the uses their PP allows; the foes bound the turns.
-    def payday_bound(conn, foes, foe_moves)
+    def payday_bound(conn, foes, foe_moves, turns: nil)
       copying = foe_moves.map(&:to_s).include?("PAYDAY")
       best = 0
       pp = 0
@@ -1540,7 +1562,9 @@ module PEMK
       end
       return 0 if best.zero?
 
-      5 * best * [pp, PAYDAY_USES_PER_FOE * foes].min
+      uses = [pp, PAYDAY_USES_PER_FOE * foes].min
+      uses = [uses, turns].min if turns
+      5 * best * uses
     end
 
     # A wild foe's moves: the last four it learned by its level (Pokemon#reset_moves).
@@ -1558,6 +1582,8 @@ module PEMK
       when "suspect"
         @log.call("money: account #{account_id} SUSPECT pay day #{amount} over its bound #{bound}#{tag}")
         flag_anomaly(account_id, :money_suspect)
+      when "capped"
+        @log.call("money: account #{account_id} pay day #{amount} capped at #{accepted} (the day's allowance)#{tag}")
       else
         @log.call("money: account #{account_id} WOULD-REFUSE pay day #{amount} (#{verdict})")
         flag_anomaly(account_id, :money_claim)
@@ -1615,7 +1641,8 @@ module PEMK
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch) if MoneyClaims::PAID.include?(verdict)
         @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
         # A battle paid before, fought again: its prize in the next frame is a repeat.
-        @money_shadow&.repeat(account_id, amount, before: money_row(account_id)) if verdict == "repeat"
+        # (what the battle pays by the server's own count, not what the client states)
+        @money_shadow&.repeat(account_id, [amount, bound].min, before: money_row(account_id)) if verdict == "repeat"
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
       [verdict, accepted]
