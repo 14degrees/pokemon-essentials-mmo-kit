@@ -239,7 +239,8 @@ module Autotest
     # sends that Pokemon in on the first turn instead, so the lead only takes part.
     # A fainted Pokemon is replaced by the first able one; no new move is learnt;
     # anything else takes its first choice. Bounded.
-    def fight_battle(swap_to: nil, seconds: 180)
+    # +prefer+: a move id used whenever it is usable (else the strongest usable move).
+    def fight_battle(swap_to: nil, prefer: nil, seconds: 180)
       battle!("mode", "agent")
       deadline = Autotest.mono + seconds
       swapped = swap_to.nil?
@@ -253,7 +254,9 @@ module Autotest
         case awaiting["kind"]
         when "command" then decide!(swapped ? "fight" : "pokemon")
         when "fight"
-          best = options.select { |o| o["usable"] }.max_by { |o| [o["power"].to_i, -o["index"].to_i] }
+          usable = options.select { |o| o["usable"] }
+          best = (prefer && usable.find { |o| o["id"] == prefer }) ||
+                 usable.max_by { |o| [o["power"].to_i, -o["index"].to_i] }
           decide!(best ? best["index"].to_s : "0")
         when "party"
           pick = swapped ? options.find { |o| o["able"] && !o["active"] } : options.find { |o| o["index"] == swap_to }

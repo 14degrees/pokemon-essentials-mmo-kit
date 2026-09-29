@@ -30,12 +30,30 @@ module PEMK
       @db[:money_claims].where(account_id: account_id, nonce: nonce).first
     end
 
-    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, now: Time.now)
+    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, kind: "trainer", now: Time.now)
       @db[:money_claims].insert_conflict.insert(
-        account_id: account_id, nonce: nonce, kind: "trainer", verdict: verdict, mode: mode.to_s,
+        account_id: account_id, nonce: nonce, kind: kind, verdict: verdict, mode: mode.to_s,
         amount: amount, accepted: accepted, map: map, trainers: Sequel.pg_jsonb(trainers), created_at: now
       )
     end
+
+    # M1c: a wild battle's foes, as the server minted them for this account - each roll
+    # younger than MINT_SEC and never claimed for Pay Day. -> the rolls, or nil when one
+    # is missing.
+    MINT_SEC = 30 * 60
+
+    def payday_rolls(account_id, pids, now: Time.now)
+      rolls = pids.map do |pid|
+        @db[:encounter_rolls].where(account_id: account_id, pid: pid, payday_at: nil)
+                             .where { created_at > now - MINT_SEC }.order(Sequel.desc(:id)).first
+      end
+      rolls.all? ? rolls : nil
+    end
+
+    def stamp_payday(rolls, now: Time.now)
+      @db[:encounter_rolls].where(id: rolls.map { |r| r[:id] }).update(payday_at: now)
+    end
+
 
     # -> the payout row for +key+, or nil
     def payout(account_id, key)

@@ -594,6 +594,14 @@ that undid the save's record of the win, or a save edit re-arming it) is refused
 repeat, and the money that follows is logged `REPEAT`, outside the review queue: the flag
 audit is the one that sees save edits.
 
+Pay Day's coins are claimed the same way. A wild battle's claim names the foes, which must
+be the server's own mints for the account (D2 on), fresh, and never claimed for Pay Day
+before; a trainer battle's names its prize claim, which must have been judged payable. The
+bound is 5 x the level of the strongest party Pokemon that could use it (Pay Day,
+Metronome, or a copying move when a foe knows Pay Day) x the uses its PP and the foes allow,
+doubled per multiplier fact. Without mints a wild battle's Pay Day is only bounded, and the
+log says `unminted`. Autotest 078 lets a Meowth scatter coins on Route 1.
+
 A sale of items the server never judged - a local tier such as the Pickup table's Nuggets,
 or any sale without item authority - moves the client's balance but not S: the log says
 `UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.

@@ -1043,9 +1043,11 @@ module PEMK
     def note_team_moves(conn, team)
       return unless team.is_a?(Array)
 
-      mons = team.select { |m| m.is_a?(Hash) }
+      mons = team.select { |m| m.is_a?(Hash) }.first(6)
       conn.data[:team_moves] = mons.flat_map { |m| Array(m["moves"] || m[:moves]) }.map(&:to_s).uniq.first(64)
       conn.data[:team_imposter] = mons.any? { |m| (m["ability"] || m[:ability]).to_s == "IMPOSTER" }
+      # M1c: each Pokemon's level and moves, which bound Pay Day.
+      conn.data[:team] = mons.map { |m| [(m["level"] || m[:level]).to_i, Array(m["moves"] || m[:moves]).map(&:to_s).first(4)] }
     end
 
     # Audit item 5: lock each owned mon's identity traits on first sight and flag a
@@ -1440,9 +1442,12 @@ module PEMK
       return unless @money_claims
 
       nonce = MoneyClaims.nonce(env[:nonce])
-      trainers = claim_trainers(env[:trainers])
       amount = env[:amount]
-      unless nonce && trainers && amount.is_a?(Integer) && amount.between?(0, money_cap) && env[:map].is_a?(Integer)
+      payday = env[:kind].to_s == "payday"   # M1c: a battle's Pay Day, apart from its prize
+      trainers = payday ? nil : claim_trainers(env[:trainers])
+      foes = payday ? claim_foes(env[:foes]) : nil
+      proof = payday ? (foes || MoneyClaims.nonce(env[:trainer_claim])) : trainers
+      unless nonce && proof && amount.is_a?(Integer) && amount.between?(0, money_cap) && env[:map].is_a?(Integer)
         return reply(conn, type: :money_claim_ack, nonce: nonce, verdict: "bad")
       end
 
@@ -1451,11 +1456,111 @@ module PEMK
         verdict, accepted =
           if done && done[:voided_at] then ["void", 0]   # a fresh login undid it: never paid again by its nonce
           elsif done then [done[:verdict], done[:accepted]]
+          elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
           end
         @reactor.post { reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted) if @reactor.alive?(conn) }
       rescue StandardError => e
         @log.call("money: claim failed #{e.class}: #{e.message}")
+      end
+    end
+
+    # -> a wild battle's foes' pids (one or two, distinct) | nil
+    def claim_foes(list)
+      return nil unless list.is_a?(Array) && list.length.between?(1, 2) && list.uniq.length == list.length
+      return nil unless list.all? { |p| p.is_a?(Integer) && p.between?(0, 0xFFFF_FFFF) }
+
+      list
+    end
+
+    # === money authority M1c: Pay Day ==============================================
+
+    PAYDAY_USES_PER_FOE = 10    # the turns one foe Pokemon can last, generously
+    PP_UP_FACTOR        = 1.6   # three PP Ups
+
+    # A battle's Pay Day, claimed where the engine pays it. A wild battle's foes must be the
+    # server's own mints for this account, fresh and never claimed for Pay Day - without
+    # D2's mints nothing proves the battle, and the claim is only bounded ("unminted"). A
+    # trainer battle's prize claim must have been judged payable. The bound: 5 x the level
+    # of the strongest party Pokemon that could use it x the uses its PP and the foes
+    # allow, doubled per multiplier fact.
+    def judge_payday(conn, account_id, nonce, env, foes)
+      amount = env[:amount]
+      verdict = nil
+      label = nil
+      rolls = nil
+      trainers = []
+      if foes
+        if @config.battle_enforce_encounters == :on
+          rolls = @money_claims.payday_rolls(account_id, foes)
+          verdict = "unproven" unless rolls
+        else
+          label = "unminted"
+        end
+        foe_count = foes.length
+        foe_moves = Array(rolls).flat_map { |r| wild_moves(r[:species], r[:level]) }
+      else
+        prize = @money_claims.find(account_id, MoneyClaims.nonce(env[:trainer_claim]))
+        ok = prize && MoneyClaims::PAID.include?(prize[:verdict]) && prize[:voided_at].nil?
+        verdict = "unproven" unless ok
+        trainers = ok ? prize[:trainers].to_a : []
+        parties = trainers.map { |t| @battle.trainer_party(t[0], t[1], t[2]) || [] }
+        foe_count = [parties.sum(&:length), 1].max
+        foe_moves = parties.flatten(1).flat_map { |p| Array(p[3]) }
+      end
+      bound = payday_bound(conn, foe_count, foe_moves)
+      bound *= 2 if env[:amulet] == true && prize_item_held?(account_id, env[:partner])
+      bound *= 2 if env[:happy_hour] == true && happy_hour_possible?(conn, trainers)
+      accepted = verdict ? 0 : [amount, bound].min
+      verdict ||= amount > bound ? "suspect" : "paid"
+      @db.transaction do
+        @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
+                                                accepted: accepted, map: env[:map], trainers: trainers, kind: "payday")
+        @money_claims.stamp_payday(rolls) if rolls && MoneyClaims::PAID.include?(verdict)
+        @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
+      end
+      note_payday(account_id, verdict, amount, accepted, bound, label)
+      [verdict, accepted]
+    end
+
+    # 5 x level per use, as the engine scatters it (AddMoneyGainedFromBattle): the party
+    # Pokemon that know Pay Day or Metronome - or a copying move, when a foe knows Pay Day
+    # - bound the level and the uses their PP allows; the foes bound the turns.
+    def payday_bound(conn, foes, foe_moves)
+      copying = foe_moves.map(&:to_s).include?("PAYDAY")
+      best = 0
+      pp = 0
+      Array(conn.data[:team]).each do |level, moves|
+        usable = moves & %w[PAYDAY METRONOME]
+        usable |= (moves & COPYING_MOVES) if copying
+        next if usable.empty?
+
+        best = [best, level.to_i].max
+        pp += usable.sum { |mv| ((@battle.move(mv) || {})["pp"].to_i * PP_UP_FACTOR).floor }
+      end
+      return 0 if best.zero?
+
+      5 * best * [pp, PAYDAY_USES_PER_FOE * foes].min
+    end
+
+    # A wild foe's moves: the last four it learned by its level (Pokemon#reset_moves).
+    def wild_moves(species, level)
+      learned = Array((@battle.species(species.to_s) || {})["level_up_moves"])
+                .select { |lvl, _| lvl.to_i <= level.to_i }.map { |_, mv| mv.to_s }
+      learned.reverse.uniq.reverse.last(4)
+    end
+
+    def note_payday(account_id, verdict, amount, accepted, bound, label)
+      tag = label ? " (#{label})" : ""
+      case verdict
+      when "paid"
+        @log.call("money: account #{account_id} pay day #{amount} (bound #{bound})#{tag}")
+      when "suspect"
+        @log.call("money: account #{account_id} SUSPECT pay day #{amount} over its bound #{bound}#{tag}")
+        flag_anomaly(account_id, :money_suspect)
+      else
+        @log.call("money: account #{account_id} WOULD-REFUSE pay day #{amount} (#{verdict})")
+        flag_anomaly(account_id, :money_claim)
       end
     end
 
@@ -1614,7 +1719,7 @@ module PEMK
       gaps << "the exports place no trainer battle" unless @world.trainers_known?
       gaps << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
       gaps << "positions are the client's word (PEMK_POS_ENFORCE is not on)" unless @config.position_enforcement == :on
-      gaps << "no team reports (D1 off), so Happy Hour is never allowed" if @config.battle_enforce_teams == :off
+      gaps << "no wild mints (D2 not on), so a wild battle's Pay Day is only bounded" unless @config.battle_enforce_encounters == :on
       @log.call("server: money claims cannot rely on: #{gaps.join('; ')}") unless gaps.empty?
     end
 
