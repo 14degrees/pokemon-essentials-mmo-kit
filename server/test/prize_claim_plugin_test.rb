@@ -77,6 +77,11 @@ class PrizeClaimPluginTest < Minitest::Test
     P.reset; P.adopt_mode("shadow")      # a new connection
     P.tick
     out[:resent] = [claims.call.map { |m| m[:nonce] } == [c[:nonce]], $sent.first]
+    # a reconnect's reseed sends them at once, before its money frame
+    $sent.clear
+    P.reset; P.adopt_mode("shadow")
+    P.flush
+    out[:flushed] = [claims.call.map { |m| m[:nonce] } == [c[:nonce]], $sent.first]
     P.on_ack({ :type => :money_claim_ack, :nonce => c[:nonce], :verdict => "paid" })
     out[:answered] = $PokemonGlobal.pemk_prize_claims.length
     # off: nothing is claimed
@@ -100,6 +105,7 @@ class PrizeClaimPluginTest < Minitest::Test
     assert_equal 0, o[:no_money]
     assert_equal 1, o[:wait]
     assert_equal [true, :pos], o[:resent], "again on a new connection, after a position"
+    assert_equal [true, :pos], o[:flushed], "at once for a reconnect's reseed"
     assert_equal 0, o[:answered]
     assert_equal 0, o[:off]
   end

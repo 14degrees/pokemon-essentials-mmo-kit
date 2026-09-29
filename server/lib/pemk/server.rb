@@ -96,6 +96,11 @@ module PEMK
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @shop_deals = ShopDeals.new(@db) if @config.shop_enforce == :on   # E3: a deal runs once, asked again by its nonce
       @money_claims = MoneyClaims.new(@db) if @config.money_authority != :off   # money authority M1a: prize claims judged
+      if @config.money_authority == :off
+        (MoneyShadow.clear(@db) rescue nil)   # M1b: rows would go stale without the measurement
+      else
+        @money_shadow = MoneyShadow.new(@db, start_money: @battle.start_money, cap: @config.economy_caps.fetch(:money))
+      end
       @last_maps = {}   # account_id => the map its last connection ended on (M1a claims)
       @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
@@ -489,6 +494,7 @@ module PEMK
       field = env[:field]
       value = env[:value]
       seq   = env[:seq]
+      current = @online[account_id].equal?(conn)   # read on the reactor: a replaced session's frames do not count (M1b)
       @mailbox.submit(account_id) do
         # D4: attribute a fresh MONEY change to a recent wild battle's budget window
         # (reason "battle:<n>"/"battle_suspect:<n>"), else "unattributed". Only on a
@@ -503,10 +509,14 @@ module PEMK
             flag_anomaly(account_id, :reward_money)
           end
         end
+        before = money_row(account_id) if @money_shadow && field.to_s == "money"
         status = @ledger.apply_econ(account_id, field, value, seq, reason: reason)
-        # M1a: a fresh money frame carries the prizes claimed before it - they reached the
-        # ledger, so a fresh login no longer voids them.
-        @money_claims.seal(account_id) if @money_claims && field.to_s == "money" && status.first == :ack
+        if field.to_s == "money" && status.first == :ack
+          # M1a: a fresh money frame carries the prizes claimed before it - they reached
+          # the ledger, so a fresh login no longer voids them.
+          @money_claims&.seal(account_id)
+          shadow_frame(account_id, value, before) if current   # M1b: what no source explains
+        end
         @reactor.post do
           case status.first
           when :ack, :dup then reply(conn, type: :econ_ack, field: field, value: status[1], seq: seq)
@@ -1346,6 +1356,7 @@ module PEMK
             st, value, = @ledger.adjust(account_id, field, delta, reason: "#{shop}:#{op}:#{item}x#{qty}")
             if st == :ack
               balance = value
+              shadow_deal(account_id, delta, value - delta, item) if field == :money
             else
               why = bp ? "bp" : "money"
               raise Sequel::Rollback   # nothing moves: not the items either
@@ -1491,6 +1502,7 @@ module PEMK
         @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
                                                 accepted: accepted, map: map, trainers: trainers)
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch) if MoneyClaims::PAID.include?(verdict)
+        @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
       [verdict, accepted]
@@ -1604,7 +1616,41 @@ module PEMK
       return unless @money_claims
 
       voided = @money_claims.void_unsealed(account_id)
-      @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login") unless voided.empty?
+      return if voided.empty?
+
+      voided.each { |c| @money_shadow&.void(account_id, c[:accepted], before: money_row(account_id)) if c[:accepted].positive? }
+      @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login")
+    end
+
+    # --- money authority M1b: the shadow balance -----------------------------------
+
+    # -> the ledger's money balance, or nil when the account has no money row yet.
+    def money_row(account_id)
+      @db[:economy_balances].where(account_id: account_id, field: "money").get(:balance)
+    end
+
+    # A deal the server made moved the money: the shadow balance moves with it. A
+    # purchase it cannot cover spent money no source explains.
+    def shadow_deal(account_id, delta, before, item)
+      return unless @money_shadow
+
+      short = @money_shadow.deal(account_id, delta, before: before)
+      return unless short.positive?
+
+      @log.call("money: account #{account_id} BOUGHT-UNEXPLAINED #{item} with #{short} no source explains")
+      flag_anomaly(account_id, :money_unexplained)
+    end
+
+    # A fresh, acked money frame from the account's current connection: what it shows
+    # that no source explains. Frames of a session another login replaced do not count.
+    def shadow_frame(account_id, value, before)
+      return unless @money_shadow
+
+      d = @money_shadow.frame(account_id, value, before: before)
+      return unless d.positive?
+
+      @log.call("money: account #{account_id} UNEXPLAINED +#{d}")
+      flag_anomaly(account_id, :money_unexplained)
     end
 
     # -> nil when the export allows it, else why not. A purchase needs a clerk the world
@@ -2221,6 +2267,7 @@ module PEMK
       @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
       @item_ledger&.drop_credits(account_id) if fresh # E2: nor any item a waiting credit was for
       void_claims(account_id) if fresh                 # M1a: nor a prize whose battle it may lack
+      @money_shadow&.login(account_id, money_row(account_id).to_i) if fresh   # M1b: the client adopts the ledger's
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       stores = @config.item_record == :full ? inv[:stores] : nil
