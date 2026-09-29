@@ -161,6 +161,31 @@ class ServerTrainerSeedTest < Minitest::Test
     [env, body]
   end
 
+  # P3: the prize claim names its battle's seed; once the record is replayed, the claim
+  # gets the verdict and a proven win spends the placement's seed.
+  def test_a_claim_on_the_seed_gets_the_replay_s_verdict
+    ENV["PEMK_MONEY_AUTHORITY"] = "shadow"
+    start_server
+    c, = authed_conn("ts6@t.co")
+    seed = ask(c, LIAM)[:seed]
+    row = @db[:trainer_battles].where(seed: seed).get(:id)
+    send_env(c, *walk_body(seed, [100, 16]))
+    rec = wait_for { @db[:battle_records].first }
+    send_env(c, { type: :money_claim, nonce: 41, amount: 176, amulet: false, happy_hour: false, map: 10,
+                  trainers: [LIAM], seed: seed })
+    wait_for { @db[:money_claims].where(nonce: 41).get(:trainer_battle_id) == row }
+    # the replay tool's verdict, as it writes it
+    @db[:battle_records].where(id: rec[:id]).update(replay_status: "match", replay_prize: 176, team_check: "ok")
+    @server.instance_variable_set(:@last_proof_sweep, nil)
+    wait_for { @db[:money_claims].where(nonce: 41).get(:proof) == "proven" }
+    assert(@logs.any? { |l| l.include?("claim 41 PROVEN") }, @logs.grep(/trainerproof/).inspect)
+    assert_equal "proven", @db[:trainer_battles].where(id: row).get(:state)
+    refute_equal seed, ask(c, LIAM)[:seed], "the next battle here gets a new seed"
+    c.close
+  ensure
+    ENV.delete("PEMK_MONEY_AUTHORITY")
+  end
+
   def test_each_attempt_on_the_seed_is_bound_and_walked
     start_server
     c, = authed_conn("ts5@t.co")
