@@ -48,9 +48,9 @@ module PEMK
     # A deal the server made (Ledger#adjust, acked) moves both - but S only for a source
     # the server owns (+credit+ false: a sale of items it never judged). -> what S could not
     # cover of a purchase (0 when it could).
-    def deal(account_id, delta, before:, credit: true)
+    def deal(account_id, delta, before:, credit: delta)
       s, c = row(account_id, before)
-      s2 = credit ? s + delta : s
+      s2 = s + credit
       set(account_id, s: s2, c: c + delta)
       return 0 if delta >= 0 || s2 >= 0
 

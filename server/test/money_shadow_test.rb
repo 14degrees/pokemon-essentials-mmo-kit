@@ -78,7 +78,7 @@ class MoneyShadowTest < Minitest::Test
   # echo is not unexplained, but spending it beyond S is.
   def test_a_sale_of_items_never_judged
     @m.frame(@aid, 1000, before: 1000)
-    assert_equal 0, @m.deal(@aid, 500, before: 1000, credit: false)
+    assert_equal 0, @m.deal(@aid, 500, before: 1000, credit: 0)
     assert_equal [1000, 1500], sc
     assert_equal 0, @m.frame(@aid, 1500, before: 1500)[0], "the client's echo of the sale"
     assert_equal 400, @m.deal(@aid, -1400, before: 1500), "400 of it spent beyond what S holds"

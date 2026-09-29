@@ -124,4 +124,18 @@ class InventoryTest < Minitest::Test
     @inv.apply_inv(@acct, incoming, 2)
     assert(@logs.any? { |m| m.include?("divergence") }, "expected a coarse divergence log line")
   end
+
+  # Money authority: the units the server sold are counted; a judged snapshot lowers the
+  # count to what is still held, and a sale spends it first.
+  def test_the_units_the_server_sold
+    @inv.apply_inv(@acct, { POTION: 1 }, 1)
+    assert @inv.add_bought(@acct, { "POTION" => 3 })
+    bought = -> { @db[:inventory_snapshots].where(account_id: @acct).get(:bought).to_h }
+    assert_equal({ "POTION" => 3 }, bought.call)
+    @inv.clamp_bought(@acct, { "POTION" => 2 })                 # two used: two left in all
+    assert_equal({ "POTION" => 2 }, bought.call)
+    assert_equal 2, @inv.take_bought(@acct, "POTION", 5), "a sale of five spends the two first"
+    assert_equal({}, bought.call)
+    assert_equal 0, @inv.take_bought(@acct, "POTION", 1)
+  end
 end
