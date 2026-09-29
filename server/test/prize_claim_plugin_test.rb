@@ -219,16 +219,29 @@ class PrizeClaimPluginTest < Minitest::Test
     $player.money = 1550
     P.on_ack(ack.(n, "paid", 400))
     out[:late] = $player.money
+    # released, its frame not answered yet: that frame brings the server's balance
+    n = fight.call
+    $now += 61
+    P.holding?
+    was = $player.money
+    P.on_ack(ack.(n, "cadence", 0))
+    out[:released_verdict] = $player.money - was
     # near the cap the engine adds what fits, and so does the server
     $player.money = 999_700
     n = fight.call
     P.on_ack(ack.(n, "paid", 299))
     out[:cap] = $player.money
-    # a fresh login adopts the ledger's balance: nothing left to correct
+    # a fresh login adopts the ledger's balance: nothing left to correct - but a claim
+    # still in the save, judged only after the login, brings what it paid
     $player.money = 2000
+    fight.call
     fight.call
     P.adopted
     out[:adopted] = [P.holding?, $player.money]
+    late1, late2 = $PokemonGlobal.pemk_prize_claims.last(2).map(&:first)
+    P.on_ack(ack.(late1, "paid", 400).merge(:first => true))
+    P.on_ack(ack.(late2, "paid", 400).merge(:first => false))
+    out[:late_login] = $player.money
     # a Mart waits for the verdicts - bounded
     n = fight.call
     $ack = ack.(n, "paid", 400); $now = 100.0; start = $now
@@ -260,8 +273,10 @@ class PrizeClaimPluginTest < Minitest::Test
     assert_equal 1550, o[:repeat], "nothing paid"
     assert_equal false, o[:released], "past HOLD_MAX the frames go"
     assert_equal 1950, o[:late], "the refused frame dropped it: what the server paid comes back"
+    assert_equal 0, o[:released_verdict], "the frame that carries it brings the balance - never a second correction"
     assert_equal 999_999, o[:cap], "the engine and the server both stop at the cap"
-    assert_equal [false, 2400], o[:adopted]
+    assert_equal [false, 2800], o[:adopted]
+    assert_equal 3200, o[:late_login], "only what was judged after the login is added"
     assert_equal [true, true], o[:settled], "a Mart waits for the verdict"
     assert_equal false, o[:unsettled], "and gives up after its bound"
     assert_equal [1, 1], o[:triad], "closed while enforced (a message), open in shadow"

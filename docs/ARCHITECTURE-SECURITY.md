@@ -650,7 +650,13 @@ client). The server then:
 - refuses a money frame above the balance (`econ_rej`, `unexplained`), recorded under its
   seq and flagged - the game adopts the balance;
 - starts an account without money from the exported start money, never the save's;
-- refuses a client without the `money_claims` capability (`update_required`).
+- refuses a client without the `money_claims` capability (`update_required`);
+- seals the claims before a Mart deal, and voids a claim at a fresh login only when its
+  whole payment comes back (else its battle stays paid);
+- bounds what battles fought again pay per day (`PEMK_MONEY_REPEAT_DAILY`, default
+  $20,000): a claim proves no fight until battle records do;
+- carries a BP-bought held item's mark to the receiver of a trade, and refuses a frame
+  whose seq is not positive and bounded.
 
 The client holds its money frames while this session's prizes wait for their verdicts (a
 minute at most), corrects the money to what the server paid, lets a Mart wait for those

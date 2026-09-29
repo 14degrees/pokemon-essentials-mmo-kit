@@ -15,6 +15,7 @@ module PEMK
     # with the sovereignty layer (flag_state); a fork that deliberately revokes badges
     # in a story beat must keep that off, or clear the balance through an operator path.
     MONOTONIC = %i[badges].freeze
+    SEQ_MAX   = 1 << 53   # a client frame's seq stays below this (and above zero)
 
     def initialize(db, caps, monotonic: false)
       @db   = db
@@ -37,6 +38,9 @@ module PEMK
       key = field.to_s.to_sym
       cap = @caps[key]
       return [:rej, current(account_id, field), :bad_field] unless cap && value.is_a?(Integer) && seq.is_a?(Integer)
+      # A client frame's seq is positive and bounded: the server's own rows take the
+      # negative ones below the lowest (adjust), which a huge negative one would overflow.
+      return [:rej, current(account_id, field), :bad_seq] unless seq.positive? && seq < SEQ_MAX
 
       result = nil
       @db.transaction do

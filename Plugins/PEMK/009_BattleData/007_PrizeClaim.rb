@@ -33,6 +33,7 @@ module PEMK
     @mode  = :off
     @asked = {}   # nonce => when this connection last sent it (monotonic)
     @local = {}   # M3: nonce => [money the engine added here, when, released, dropped]
+    @late  = {}   # M3: nonces still waiting in the save when a fresh login adopted the balance
     @rng   = nil
 
     module_function
@@ -124,18 +125,27 @@ module PEMK
       true
     end
 
-    # M3: the money the engine added becomes what the server paid. A refused frame that
-    # carried it already brought the game back to the server's balance, without it.
-    def correct(nonce, accepted)
+    # M3: the money the engine added becomes what the server paid. Held back, it is
+    # corrected here; released (past HOLD_MAX), the frame that carries it brings the
+    # server's balance on its own - unless that frame was refused before this verdict,
+    # which took it all out. A claim left over from before a fresh login, judged only now
+    # (+first+), was never in the balance the login brought.
+    def correct(nonce, accepted, first = false)
       e = @local.delete(nonce)
-      return unless e && enforced? && $player
+      late = @late.delete(nonce)
+      return unless enforced? && $player
 
       paid = accepted.is_a?(Integer) ? accepted : 0
-      delta = e[3] ? paid : paid - e[0]
+      delta = if e && e[3] then paid
+              elsif e && e[2] then 0
+              elsif e then paid - e[0]
+              elsif late && first == true then paid
+              else 0
+              end
       return if delta.zero?
 
       $player.money = [$player.money + delta, 0].max
-      PEMK.log("prize: claim #{nonce} paid #{paid} of the #{e[0]} added: money #{delta.positive? ? '+' : ''}#{delta}")
+      PEMK.log("prize: claim #{nonce} paid #{paid}: money #{delta.positive? ? '+' : ''}#{delta}")
     end
 
     # M3: the server refused a money frame - the game is back at its balance, and the
@@ -145,9 +155,11 @@ module PEMK
     end
 
     # A fresh login adopted the ledger's balance: the prizes added here are in it or not,
-    # as the server says - nothing is left to correct.
+    # as the server says. The claims still waiting in the save are paid into it only once
+    # judged - those judged from now on are added then.
     def adopted
       @local.clear
+      @late = claims.to_h { |e| [e[0], true] }
     end
 
     # -> the prize claim's nonce, or nil when its trainers were not built from data.
@@ -218,7 +230,7 @@ module PEMK
       claims.reject! { |e| e[0] == n }
       @asked.delete(n)
       PEMK.log("prize: claim #{n} judged #{msg[:verdict]} (#{msg[:accepted]})")
-      correct(n, msg[:accepted])
+      correct(n, msg[:accepted], msg[:first])
     end
 
     # :on_start_battle, before the battle sets in_battle (which holds every flush): the

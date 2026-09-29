@@ -164,6 +164,18 @@ class ServerMoneyClaimTest < Minitest::Test
                "its event is its clock"
   end
 
+  # A claim proves no fight: what battles fought again pay is bounded per day.
+  def test_battles_fought_again_are_bounded_per_day
+    start_server("shadow", "PEMK_MONEY_REPEAT_DAILY" => "7000")
+    s, lo = login
+    champion = ["CHAMPION", "Blue", 0, 31, 3]
+    assert_equal ["paid", 5000], claim(s, 1, [champion], 5000).values_at(:verdict, :accepted)
+    @db[:money_payouts].where(account_id: lo[:account_id]).update(paid_at: Time.now - (21 * 60))
+    assert_equal ["paid", 2000], claim(s, 2, [champion], 5000).values_at(:verdict, :accepted), "what the day has left"
+    assert_equal %w[repeatable repeatable], @db[:money_claims].where(account_id: lo[:account_id]).order(:nonce).select_map(:kind)
+    assert(logs.any? { |l| l.include?("prize 5000 held to 2000 (the day's allowance for battles fought again)") })
+  end
+
   # The battle rules say it pays nothing: the engine claims nothing, so a claim is forged.
   def test_a_battle_that_pays_nothing
     start_server
@@ -671,10 +683,106 @@ class ServerMoneyClaimTest < Minitest::Test
     assert_equal "update_required", recv_type(s, :login_ok, :login_err)[:reason]
   end
 
-  def enforced_login
-    start_server("on")
+  # --- M3 review (2026-09-29): what an adversarial read found -------------------------
+
+  # Units battle points bought, hidden from a bag-only snapshot and shown again by a full
+  # one, are still theirs: the count is lowered only by judged totals.
+  def test_bp_units_hidden_from_a_bag_only_snapshot_stay_bp_units
+    s, lo = enforced_login(shop: true)
+    send_env(s, { type: :econ, field: :battle_points, value: 50, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    stores = { pc: {}, mail: {}, held: {}, holders: {} }
+    send_env(s, { type: :inv, bag: {}, stores: stores, seq: 1 })   # the judged baseline
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set.new)
+    protein = @server.instance_variable_get(:@battle).item("PROTEIN")
+    send_env(s, { type: :shop_req, op: :buy, item: "PROTEIN", quantity: 3, unit_price: protein["bp_price"], bp: true,
+                  map: 32, event: 22, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    send_env(s, { type: :inv, bag: {}, seq: 2 })                      # hidden, bag-only
+    recv_type(s, :inv_ack)
+    send_env(s, { type: :inv, bag: { PROTEIN: 3 }, stores: stores, seq: 3 })   # back
+    recv_type(s, :inv_ack)
+    assert_equal({ "PROTEIN" => 3 }, @db[:inventory_snapshots].where(account_id: lo[:account_id]).get(:bp_bought).to_h)
+    assert_equal "bp_bought", sell(s, "PROTEIN", 1, protein["sell_price"], 2)[:reason]
+  end
+
+  # A claim whose payment was spent is kept at a fresh login - taking back part of it
+  # would let the battle be claimed again for the rest; a deal after it seals it.
+  def test_a_spent_prize_is_never_claimed_twice
+    s, lo = enforced_login(shop: true)
+    claim(s, 1, [ANNA], 400)
+    s.close
+    @db[:economy_balances].where(account_id: lo[:account_id], field: "money").update(balance: 100)   # spent
+    s, = login("claim@t.co", caps: %w[money_claims])
+    assert_equal 100, balance(lo), "nothing taken back"
+    assert_equal "repeat", claim(s, 2, [ANNA], 400)[:verdict], "kept, still paid"
+    assert(logs.any? { |l| l.include?("kept 1 unsealed prize claim(s): their money was spent") })
+    s.close
+    s, lo = enforced_login(shop: true, email: "deal@t.co")
+    claim(s, 3, [ANNA], 400)
+    send_env(s, { type: :inv, bag: {}, seq: 1 })
+    recv_type(s, :inv_ack)
+    potion = @server.instance_variable_get(:@battle).item("POTION")
+    send_env(s, { type: :shop_req, op: :buy, item: "POTION", quantity: 1, unit_price: potion["price"], map: 32,
+                  event: 20, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    refute_nil @db[:money_claims].where(account_id: lo[:account_id], nonce: 3).get(:sealed_at), "sealed by the deal"
+  end
+
+  # A client frame's seq is positive and bounded.
+  def test_a_frame_seq_is_positive_and_bounded
+    s, = enforced_login
+    assert_equal "bad_seq", money(s, 100, -(2**63))[:reason]
+    assert_equal "bad_seq", money(s, 100, 0)[:reason]
+    assert_equal "bad_seq", money(s, 100, 2**60)[:reason]
+    assert_equal ["paid", 400], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted), "the ledger still pays"
+  end
+
+  # A claim is judged by this connection's own position, or where the last save stood.
+  def test_a_claim_is_judged_where_this_connection_reported
+    start_server
+    s, lo = login(map: nil)
+    @server.instance_variable_get(:@characters).store(lo[:account_id], blob: "\x04\b0".b, position: [31, 5, 5])
+    s.close
+    s, = login(map: nil)   # the login seeds the stored position: not this connection's word
+    assert_equal "wait", claim(s, 1, [ANNA], 400)[:verdict]
+    send_env(s, { type: :pos, map: 32, x: 5, y: 5, dir: 2 })
+    assert_equal "paid", claim(s, 1, [ANNA], 400)[:verdict], "walked on since the save that stood by Anna"
+  end
+
+  # One battle names a trainer once; the ack says when this request judged it.
+  def test_one_trainer_once_and_the_first_verdict
+    start_server
+    s, = login
+    assert_equal "bad", claim(s, 1, [ANNA, ["LASS", "Anna", 0, 31, 8]], 800)[:verdict], "one trainer, two events"
+    r = claim(s, 2, [ANNA], 400)
+    assert_equal ["paid", true], r.values_at(:verdict, :first)
+    assert_equal ["paid", false], claim(s, 2, [ANNA], 400).values_at(:verdict, :first), "asked again"
+  end
+
+  # A held item battle points bought stays one when its Pokemon is traded.
+  def test_a_traded_bp_item_stays_a_bp_item
+    start_server
+    _, lo = login
+    _, lo2 = login("claim2@t.co")
+    a = lo[:account_id]
+    b = lo2[:account_id]
+    [a, b].each do |acc|
+      @db[:inventory_snapshots].insert(account_id: acc, bag: Sequel.pg_jsonb({}), last_seq: 1, distinct_items: 0, total_qty: 0,
+                                       updated_at: Time.now)
+    end
+    @db[:inventory_snapshots].where(account_id: a).update(holders: Sequel.pg_jsonb({ "77" => "PROTEIN" }),
+                                                          bp_bought: Sequel.pg_jsonb({ "PROTEIN" => 2 }))
+    @server.send(:carry_bp_tags, a, b, [77])
+    count = ->(acc) { @db[:inventory_snapshots].where(account_id: acc).get(:bp_bought).to_h }
+    assert_equal [{ "PROTEIN" => 1 }, { "PROTEIN" => 1 }], [count.(a), count.(b)]
+  end
+
+  def enforced_login(shop: false, email: "claim@t.co")
+    start_server("on", shop ? { "PEMK_SHOP_ENFORCE" => "on" } : {}) unless @server
     @server.instance_variable_set(:@money_enforce, true)
-    login("claim@t.co", caps: %w[money_claims])
+    login(email, caps: %w[money_claims])
   end
 
   def balance(lo)

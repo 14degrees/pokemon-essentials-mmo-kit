@@ -621,6 +621,9 @@ module PEMK
         end
         fields[:pc_started] = true if stores[:pc].is_a?(Hash)   # a storage already there got its items long ago
         @db[:inventory_snapshots].where(account_id: account_id).update(fields)
+        # The units battle points bought, no more than the judged possession holds - never
+        # lowered by a bag-only snapshot, which could hide them and bring them back freed.
+        @inventory.clamp_bought(account_id, after, columns: %i[bp_bought])
       end
     rescue StandardError => e
       @log.call("inv: WARNING item judgment failed for account #{account_id} #{e.class}: #{e.message}")
@@ -633,9 +636,9 @@ module PEMK
     def clamp_bought(account_id)
       @db.transaction(savepoint: true) do
         row = @db[:inventory_snapshots].where(account_id: account_id).first
-        next unless row && (row[:bought] || row[:bp_bought])
+        next unless row && row[:bought]
 
-        @inventory.clamp_bought(account_id, possession(row))
+        @inventory.clamp_bought(account_id, possession(row))   # the BP count: only by judged totals
       end
     rescue StandardError => e
       @log.call("inv: WARNING bought count failed for account #{account_id} #{e.class}: #{e.message}")
@@ -1422,6 +1425,8 @@ module PEMK
                       else unit * (qty - bp_units - local_units)
                       end
               shadow_deal(account_id, delta, value - delta, item, owned: owned) if field == :money
+              # A deal moves the money the prizes before it brought: those claims stay paid.
+              @money_claims&.seal(account_id) if field == :money
               if op == :sell && @money_claims
                 @inventory.take_bought(account_id, canon(item), bp_units, column: :bp_bought) if bp_units.positive?
                 @money_daily&.add_local(account_id, unit * local_units)
@@ -1465,14 +1470,38 @@ module PEMK
     end
 
     # Money authority: of a sale of +qty+ +item+, the units battle points bought - those
-    # the possession cannot leave out, since the others go first. Read before any unit
-    # leaves.
+    # the possession cannot leave out, since the others go first. The possession is what
+    # the server judged, less what it is owed (units it never recognized): a snapshot
+    # padded with conjured units frees none. Read before any unit leaves.
     def bp_units_in_sale(account_id, item, qty)
       row = @db[:inventory_snapshots].where(account_id: account_id).first
       bp = (row && row[:bp_bought]).to_h[canon(item)].to_i
       return 0 unless bp.positive?
 
-      [qty - (possession(row)[canon(item)].to_i - bp), 0].max
+      held = if row[:judged]
+               owed = @item_enforce ? @item_ledger.open_debts(account_id)[canon(item)].to_i : 0
+               row[:judged].to_h[canon(item)].to_i - owed
+             else
+               possession(row)[canon(item)].to_i
+             end
+      [qty - (held - bp), 0].max
+    end
+
+    # Money authority: a traded Pokemon's held item that battle points bought is one on the
+    # receiver's side too - otherwise a second account would sell it for money (BP laundered
+    # through an alt). The giver's BP units go first, as they go last in a sale.
+    def carry_bp_tags(from, to, uids)
+      row = @db[:inventory_snapshots].where(account_id: from).first
+      return unless row && row[:bp_bought]
+
+      holders = row[:holders].to_h
+      uids.each do |u|
+        item = holders[u.to_s]
+        next unless item
+
+        moved = @inventory.take_bought(from, canon(item), 1, column: :bp_bought)
+        @inventory.add_bp_tag(to, canon(item), moved) if moved.positive?
+      end
     end
 
     # Money authority (Sam, 2026-09-29): a sale may not reach into the units battle points
@@ -1559,7 +1588,11 @@ module PEMK
           elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
           end
-        @reactor.post { reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted) if @reactor.alive?(conn) }
+        # first: judged by this request - money a login's balance could not hold yet (M3).
+        first = done.nil? && verdict != "wait"
+        @reactor.post do
+          reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted, first: first) if @reactor.alive?(conn)
+        end
       rescue StandardError => e
         @log.call("money: claim failed #{e.class}: #{e.message}")
       end
@@ -1727,7 +1760,9 @@ module PEMK
 
         [t[0].to_s[0, 32], t[1].to_s[0, 32], t[2], t[3], t[4]]
       end
-      out.uniq.length == out.length ? out : nil
+      # One battle names each trainer once - the same one placed on two events (a double
+      # battle's pair) is not two prizes.
+      out.map { |t| t[0, 3] }.uniq.length == out.length ? out : nil
     end
 
     def money_cap
@@ -1763,12 +1798,22 @@ module PEMK
       amount = env[:amount]
       accepted = verdict ? 0 : [amount, bound].min
       verdict ||= amount > bound ? "suspect" : "paid"
+      # A battle the game lets be fought again: a claim proves no fight, so the day's
+      # allowance bounds what it pays until battle records do.
+      if again && (cap = @config.money_repeat_daily)
+        left = [cap - @money_claims.repeat_today(account_id), 0].max
+        if accepted > left
+          @log.call("money: account #{account_id} prize #{accepted} held to #{left} (the day's allowance for battles fought again)")
+          accepted = left
+        end
+      end
       credited = 0
       @db.transaction do
         before = money_row(account_id)
         credited = pay_claim(account_id, nonce, "prize", accepted)
         @money_claims.record(account_id, nonce, verdict: verdict, mode: money_mode, amount: amount, accepted: accepted,
-                                                map: map, trainers: trainers, credited: credited)
+                                                map: map, trainers: trainers, credited: credited,
+                                                kind: again ? "repeatable" : "trainer")
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch || again) if MoneyClaims::PAID.include?(verdict)
         @money_shadow&.claim(account_id, accepted, before: before) if accepted.positive?
         # A battle paid before, fought again: its prize in the next frame is a repeat.
@@ -1786,13 +1831,16 @@ module PEMK
     # where the account's previous connection ended), :unknown when this connection has
     # sent no position yet, else the map the player is on.
     def claim_away(conn, account_id, map)
-      cur = conn.data[:map_id] || (conn.data[:last_pos] || [])[0]
+      cur = conn.data[:map_id]   # this connection's own report: a resume seeds last_pos from the save
       return :unknown unless cur.is_a?(Integer)
       return nil if cur == map
 
       left = conn.data[:left_map]
       return nil if left && left[0] == map && Process.clock_gettime(Process::CLOCK_MONOTONIC) - left[1] <= GIFT_LEFT_MAP_SEC
       return nil if @last_maps[account_id] == map
+      # ... or where its last save stood, kept across a restart: a battle that ended while
+      # the server was down is claimed from wherever the player walked since.
+      return nil if (@characters.load_position(account_id) rescue nil)&.first == map
 
       cur
     end
@@ -1921,6 +1969,9 @@ module PEMK
       out << "the shop gate is not on (PEMK_SHOP_ENFORCE)" unless @config.shop_enforce == :on
       out << "item authority does not enforce (PEMK_ITEM_AUTHORITY=on and its preconditions)" unless @item_enforce
       out << "local sales have no daily allowance (PEMK_MONEY_LOCAL_DAILY=none)" unless @config.money_local_daily
+      if @config.money_repeat_daily.nil? && Array(@world.repeatable_trainers).any?
+        out << "battles fought again have no daily allowance (PEMK_MONEY_REPEAT_DAILY=none)"
+      end
       out << "the exports place no trainer battle" unless @world.trainers_known?
       out << "the exports do not say which trainer battles can be fought again" if @world.repeatable_trainers.nil?
       out << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
@@ -1958,23 +2009,34 @@ module PEMK
     def void_claims(account_id)
       return unless @money_claims
 
-      voided = @money_claims.void_unsealed(account_id)
-      return if voided.empty?
-
-      voided.each do |c|
-        @money_shadow&.void(account_id, c[:accepted], before: money_row(account_id)) if c[:accepted].positive?
-        take_back(account_id, c) if c[:credited].to_i.positive?
+      kept = 0
+      voided = @db.transaction do   # every void with its take-back, or none
+        @money_claims.void_unsealed(account_id) do |c|
+          undone = take_back(account_id, c)
+          if undone
+            @money_shadow&.void(account_id, c[:accepted], before: money_row(account_id)) if c[:accepted].positive?
+          else
+            kept += 1
+          end
+          undone
+        end
       end
-      @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login")
+      @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login") unless voided.empty?
+      return if kept.zero?
+
+      @log.call("money: account #{account_id} kept #{kept} unsealed prize claim(s): their money was spent")
     end
 
-    # M3: a voided claim's payment leaves the ledger - what is left of it (the balance
-    # never goes below zero).
+    # M3: a voided claim's payment leaves the ledger - all of it, or the claim is kept (its
+    # battle stays paid): taking back only part would let it be claimed again for the rest.
+    # -> undone?
     def take_back(account_id, claim)
-      amount = [claim[:credited].to_i, money_row(account_id).to_i].min
-      return unless amount.positive?
+      amount = claim[:credited].to_i
+      return true unless amount.positive?
+      return false if money_row(account_id).to_i < amount
 
-      @ledger.adjust(account_id, :money, -amount, reason: "void:#{claim[:nonce]}")
+      st, = @ledger.adjust(account_id, :money, -amount, reason: "void:#{claim[:nonce]}")
+      st == :ack
     end
 
     # M3: what the server itself pays for an accepted claim, in its verdict's transaction -
@@ -2339,6 +2401,9 @@ module PEMK
               @trade_deliveries.store(deliveries) unless deliveries.empty?
               credit_traded(b, a, a_gives, trade_id) if deliveries.none? { |d| d[:account_id] == b }
               credit_traded(a, b, b_gives, trade_id) if deliveries.none? { |d| d[:account_id] == a }
+              # A held item battle points bought stays one on the other side.
+              carry_bp_tags(a, b, a_gives)
+              carry_bp_tags(b, a, b_gives)
               # The given Pokemon take their held items out of the senders' records.
               a_gives.each { |u| @inventory.drop_holder(a, u) }
               b_gives.each { |u| @inventory.drop_holder(b, u) }

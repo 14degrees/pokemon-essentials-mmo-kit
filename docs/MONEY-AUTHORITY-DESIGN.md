@@ -537,3 +537,23 @@ Client:
   fresh login's balance is the server's word.
 - A Mart waits for those verdicts (8 seconds) before it asks.
 - Triple Triad cards are not bought back.
+
+### Its review (2026-09-29), and what it changed
+
+An adversarial read found two ways to fill the ledger, both fixed before any merge:
+- Battle points into money: the BP count was lowered by a bag-only snapshot that hid the
+  units, and a full snapshot brought them back freed. It is now lowered only by judged
+  totals, and the units a sale may take are the judged ones less the debts less the BP
+  ones - padding a snapshot frees nothing. A traded Pokemon's BP-bought held item stays
+  one on the receiver's side, so an alt cannot sell it either.
+- A prize spent then voided: a Mart deal did not seal the claims before it, and a void
+  took back only what was left. A deal now seals them, and a void takes back the whole
+  payment or keeps the claim (its battle stays paid).
+And it found these, fixed too: a client frame's seq must be positive and bounded (a huge
+negative one broke every later payment); every void runs with its take-back in one
+transaction; a claim is judged by its own connection's position (a resume seeds the
+stored one), or where the last save stood (kept across a restart); one claim names a
+trainer once; a verdict after the hold was released no longer corrects twice; a claim
+left in the save at a fresh login and judged after it (`first` in the acknowledgement)
+brings its money in. And a claim proves no fight: battles fought again pay at most
+`PEMK_MONEY_REPEAT_DAILY` a day (default $20,000, as Pay Day; `none` is a blocker).

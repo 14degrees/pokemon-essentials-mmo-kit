@@ -139,7 +139,8 @@ class InventoryTest < Minitest::Test
     assert_equal 0, @inv.take_bought(@acct, "POTION", 1)
   end
 
-  # ... and the units battle points bought are counted apart, clamped the same way.
+  # ... and the units battle points bought are counted apart, lowered only when asked -
+  # by judged totals: a lower count frees units to sell.
   def test_the_units_battle_points_bought
     @inv.apply_inv(@acct, {}, 1)
     assert @inv.add_bought(@acct, { "PROTEIN" => 3 }, paid: false)
@@ -148,6 +149,8 @@ class InventoryTest < Minitest::Test
     assert_equal({ "PROTEIN" => 3 }, count.(:bp_bought))
     assert_equal 3, row[:bag]["PROTEIN"]
     @inv.clamp_bought(@acct, { "PROTEIN" => 1 })
+    assert_equal({ "PROTEIN" => 3 }, count.(:bp_bought), "not by any snapshot")
+    @inv.clamp_bought(@acct, { "PROTEIN" => 1 }, columns: %i[bp_bought])
     assert_equal({ "PROTEIN" => 1 }, count.(:bp_bought))
     assert_equal 1, @inv.take_bought(@acct, "PROTEIN", 4, column: :bp_bought)
     assert_equal({}, count.(:bp_bought))
