@@ -1,0 +1,109 @@
+# frozen_string_literal: true
+
+module PEMK
+  # Trainer proof P3 (docs/TRAINER-PROOF-DESIGN.md): a prize claim that names its battle's
+  # seed gets a verdict from that battle's replay. The live server is the one writer: it
+  # links a claim to its seed's row as it judges the claim, and a sweep reads the replay
+  # tool's verdicts into the claims:
+  #   proven     - a won battle, replayed to a match, the same prize, the player's team the
+  #                server's own; the placement's seed is spent, the next battle gets another;
+  #   refuted    - the record's draws are not the seed's, the replay disagrees, the team is
+  #                not the server's, or the prize differs;
+  #   unprovable - no record of a won battle on the seed, a record that cannot be replayed,
+  #                a team the server cannot check yet (held and paid from a small daily
+  #                allowance under enforcement - Sam, 2026-09-29).
+  # P3 is shadow: the verdicts are written and logged; nothing is held yet.
+  class TrainerProofs
+    RECORD_WAIT = 600   # seconds a claim waits for its battle's record and its replay
+    REPLAY_CHANNEL = "pemk_replay"   # NOTIFY: a record to replay (the replay daemon LISTENs)
+
+    def initialize(db, logger: nil)
+      @db  = db
+      @log = logger || ->(_m) {}
+    end
+
+    # The claim names its battle's seed: link it to the seed's row when the row is this
+    # account's and names the claim's own trainer. -> the row id | nil.
+    def link_claim(account_id, nonce, seed, trainers)
+      return nil unless seed.is_a?(Integer) && seed.positive? && trainers.is_a?(Array) && trainers.length == 1
+
+      # an open seed only (a spent one's win already paid), of this account, for this trainer
+      row = @db[:trainer_battles].where(account_id: account_id, seed: seed, state: "open").first
+      return nil unless row && trainers[0] == [row[:tr_type], row[:tr_name], row[:tr_version], row[:map_id], row[:event_id]]
+
+      linked = @db[:money_claims].where(account_id: account_id, nonce: nonce, trainer_battle_id: nil)
+                                 .update(trainer_battle_id: row[:id])
+      linked.positive? ? row[:id] : nil
+    rescue Sequel::UniqueConstraintViolation   # another claim holds this battle: one win, one prize
+      @log.call("trainerproof: account #{account_id} claim #{nonce} names a battle another claim holds")
+      nil
+    end
+
+    # One pass over the linked claims still without a verdict.
+    # -> [[account_id, nonce, proof, reason], ...] for the claims judged now.
+    def sweep(now: Time.now)
+      judged = []
+      # "repeatable": a trainer fought again (the placements enforcement starts with)
+      @db[:money_claims].where(proof: nil, kind: %w[trainer repeatable]).exclude(trainer_battle_id: nil)
+                        .order(:created_at).limit(200).all.each do |claim|
+        proof, record, reason = judge(claim, now)
+        next unless proof
+
+        settle(claim, proof, record, now)
+        judged << [claim[:account_id], claim[:nonce], proof, reason]
+      end
+      judged
+    end
+
+    private
+
+    # -> [proof, record | nil, reason | nil], or nil while the verdict is still to come.
+    def judge(claim, now)
+      record = record_for(claim)
+      late = now - claim[:created_at] > RECORD_WAIT
+      return (late ? [:unprovable, nil, "no record of a won battle on its seed"] : nil) unless record
+
+      case record[:replay_status]
+      when "walk_mismatch", "mode_mismatch", "no_log"
+        [:refuted, record, "the record's draws are not its seed's (#{record[:replay_status]})"]
+      when "mismatch"
+        [:refuted, record, "the replay disagrees: #{record[:replay_detail]}"]
+      when "error", "not_replayable"
+        [:unprovable, record, "the record could not be replayed (#{record[:replay_status]})"]
+      when "match"
+        judge_match(claim, record)
+      else   # pending, walk_ok, walk_skipped: not replayed yet
+        late ? [:unprovable, record, "not replayed in time"] : nil
+      end
+    end
+
+    def judge_match(claim, record)
+      case record[:team_check]
+      when "refuted"    then return [:refuted, record, "the player's team: #{record[:replay_detail]}"]
+      when "unprovable" then return [:unprovable, record, "the player's team: #{record[:replay_detail]}"]
+      end
+      prize = record[:replay_prize]
+      return [:unprovable, record, "the replay paid no prize"] unless prize.is_a?(Integer)
+      return [:refuted, record, "claimed #{claim[:amount]}, the replay paid #{prize}"] if prize != claim[:amount]
+
+      [:proven, record, nil]
+    end
+
+    # The won battle on the claim's seed: a seed holds one (migration 044), and a claim holds
+    # the seed - one win, one prize.
+    def record_for(claim)
+      @db[:battle_records].where(trainer_battle_id: claim[:trainer_battle_id], outcome: 1).first
+    end
+
+    def settle(claim, proof, record, now)
+      @db.transaction do
+        @db[:money_claims].where(account_id: claim[:account_id], nonce: claim[:nonce], proof: nil)
+                          .update(proof: proof.to_s, proof_record_id: record && record[:id], proof_at: now)
+        if proof == :proven   # the seed is spent: the next battle at this placement gets another
+          @db[:trainer_battles].where(id: claim[:trainer_battle_id], state: "open")
+                               .update(state: "proven", record_id: record[:id], closed_at: now)
+        end
+      end
+    end
+  end
+end

@@ -100,6 +100,10 @@ module PEMK
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @shop_deals = ShopDeals.new(@db) if @config.shop_enforce == :on   # E3: a deal runs once, asked again by its nonce
       @money_claims = MoneyClaims.new(@db) if @config.money_authority != :off   # money authority M1a: prize claims judged
+      # Trainer proof P3: a claim naming its battle's seed gets the replay's verdict (shadow).
+      @trainer_proofs = TrainerProofs.new(@db, logger: @log) if @trainer_battles && @money_claims
+      @last_proof_sweep = nil
+      @proof_sweeping   = false
       if @config.money_authority == :off
         (MoneyShadow.clear(@db) rescue nil)   # M1b: rows would go stale without the measurement
       else
@@ -1673,6 +1677,9 @@ module PEMK
           elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
           end
+        # Trainer proof P3: the battle the claim names, for its replay's verdict.
+        @trainer_proofs.link_claim(account_id, nonce, env[:seed], trainers) if @trainer_proofs && trainers && !done &&
+                                                                              verdict != "wait"
         # first: judged by this request - money a login's balance could not hold yet (M3).
         first = done.nil? && verdict != "wait"
         @reactor.post do
@@ -2341,6 +2348,8 @@ module PEMK
           result = @battle_records.ingest(account_id, env, body)
           # the seed walk refuted the claimed draws -> D5 review-queue counter
           flag_anomaly(account_id, :rng_desync) if result == :desync
+          # Trainer proof P3: a replay daemon listening replays it now, not at its next poll.
+          (@db.notify(TrainerProofs::REPLAY_CHANNEL) rescue nil) if @trainer_proofs && %i[ok desync].include?(result)
         rescue StandardError => e
           @log.call("battlerec: ingest job failed #{e.class}: #{e.message}")
         end
@@ -2685,10 +2694,39 @@ module PEMK
     def on_tick
       sweep_trades
       maybe_ban_sweep
+      maybe_proof_sweep
       maybe_anomaly_sweep
       maybe_resim_sweep
       maybe_item_sweep
       maybe_prune_deals
+    end
+
+    PROOF_SWEEP_SEC = 5
+
+    # Trainer proof P3: the replay's verdicts into the prize claims, on a worker. Shadow:
+    # what enforcement would hold is logged (WOULD-HOLD), nothing is held.
+    def maybe_proof_sweep
+      return unless @trainer_proofs
+      return if @proof_sweeping
+
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      return if @last_proof_sweep && (now - @last_proof_sweep) < PROOF_SWEEP_SEC
+
+      @last_proof_sweep = now
+      @proof_sweeping   = true
+      @pool.submit do
+        @trainer_proofs.sweep.each do |account_id, nonce, proof, reason|
+          if proof == :proven
+            @log.call("trainerproof: account #{account_id} claim #{nonce} PROVEN")
+          else
+            @log.call("trainerproof: account #{account_id} claim #{nonce} WOULD-HOLD (#{proof}): #{reason}")
+          end
+        end
+      rescue StandardError => e
+        @log.call("trainerproof: sweep failed #{e.class}: #{e.message}")
+      ensure
+        @reactor.post { @proof_sweeping = false }
+      end
     end
 
     BAN_SWEEP_SEC = 10

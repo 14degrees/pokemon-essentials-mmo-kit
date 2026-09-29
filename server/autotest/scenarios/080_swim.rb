@@ -47,9 +47,15 @@ Autotest.scenario "a surfer crosses water, and only water", flags: { PEMK_POS_EN
   a.walk_to!(13, 22, timeout: 30)
   # A snap-back (what `on` sends for a refused move) keeps a swimmer swimming: on foot
   # on water it could never move again, and a diver could never come up.
+  # A snap-back the server itself sent would name a tile it holds; this one is the
+  # harness's, so the player turns on the spot (which reports the tile) and the server
+  # holds it before the next move is judged.
   sent_back = lambda do |to, what|
     s.server.tell(id, type: :pos_correct, map: to[0], x: to[1], y: to[2])
-    (s.wait_for(what, seconds: 15) { where.call == to } rescue false)
+    ok = (s.wait_for(what, seconds: 15) { where.call == to } rescue false)
+    a.face!("up")
+    a.face!("down")
+    ok && (s.wait_for("the server holds it", seconds: 10) { s.server.last_pos(id) == to[0, 3] } rescue false)
   end
   s.check("a diver sent back still dives") { sent_back.([UNDERWATER, 12, 21, "dive"], "the diver sent back") }
   a.walk_to!(13, 22, timeout: 30)
