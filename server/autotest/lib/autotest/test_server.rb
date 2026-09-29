@@ -77,6 +77,16 @@ module Autotest
       Timeout.timeout(10) { done.pop }
     end
 
+    # The last position the server holds for +account_id+'s connection ([map, x, y] | nil).
+    def last_pos(account_id)
+      done = Queue.new
+      @server.instance_variable_get(:@reactor).post do
+        conn = @server.instance_variable_get(:@online)[account_id]
+        done << (conn && conn.data[:last_pos])
+      end
+      Timeout.timeout(10) { done.pop }
+    end
+
     # The next +times+ saves of +account_id+ are not written, as on a database error.
     def fail_saves(account_id, times = 1)
       left = times

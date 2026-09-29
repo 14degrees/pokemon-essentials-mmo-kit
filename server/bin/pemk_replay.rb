@@ -19,6 +19,7 @@ $LOAD_PATH.unshift(File.expand_path("../protocol", server_root))
 require "sequel"
 require "pemk_wire"
 require "pemk_prng"
+require "pemk/proof_checks"
 require_relative "../harness/harness"
 
 game_root = ENV["PEMK_GAME_ROOT"] || File.expand_path("..", server_root)
@@ -52,10 +53,19 @@ def replay_pass(db, dry:, limit:)
   rows.each do |row|
     rec = PEMK::Wire.decode_primitive(row[:record].to_s)
     result = rec.is_a?(Hash) ? PEMK::Harness.replay(rec) : { verdict: :error, detail: "record body undecodable" }
+    # Trainer proof P3: a trainer battle's player team must be the server's own (owned,
+    # locked, no more EXP than seen) - the replay alone takes the record's word for it.
+    team, team_why = rec.is_a?(Hash) && rec[:kind] == "trainer" ? PEMK::ProofChecks.player_team(db, row[:account_id], rec) : nil
+    result[:detail] ||= team_why if team && team != :ok
     # verdict_at stamps EVERY pass (the live server's harness-liveness detector
     # reads it); the state machine only lets us land the four terminal statuses.
     db[:battle_records].where(id: row[:id])
-       .update(replay_status: STATUS.fetch(result[:verdict]), verdict_at: Time.now) unless dry
+       .update(replay_status: STATUS.fetch(result[:verdict]), verdict_at: Time.now,
+               replay_prize: result[:prize], replay_detail: result[:detail]&.to_s&.[](0, 1000),
+               team_check: team&.to_s) unless dry
+    if team && team != :ok
+      result[:detail] = [result[:detail], "team #{team}"].compact.join(" - ")
+    end
     tally[result[:verdict]] += 1
     line = "  ##{row[:id]} #{row[:mode]} outcome=#{row[:outcome]} rounds=#{row[:rounds]}: #{result[:verdict].to_s.upcase}"
     line += " — #{result[:detail]}" if result[:detail]
@@ -78,7 +88,13 @@ if loop_secs.match?(/\A[1-9]\d*\z/)
     t = replay_pass(db, dry: dry, limit: (ENV["REPLAY_LIMIT"] || 500).to_i)
     puts format("replay: pass — %d match / %d mismatch / %d error / %d skipped",
                 t[:match], t[:mismatch], t[:error], t[:skipped]) if t.values.sum.positive?
-    sleep interval
+    # Trainer proof P3: the server NOTIFYs each record it ingests - a trainer's prize
+    # waits on this replay, so it runs within a second, not at the next poll.
+    begin
+      db.listen("pemk_replay", timeout: interval)
+    rescue StandardError
+      sleep interval
+    end
   end
 end
 

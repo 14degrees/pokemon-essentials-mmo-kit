@@ -109,6 +109,16 @@ class PrizeClaimPluginTest < Minitest::Test
     $sent.clear
     P.before_battle
     out[:facts] = $sent.dup
+    # trainer proof P3: a battle run on a seed names it, and the kept claim still does
+    Session = Struct.new(:seed)
+    class Battle; attr_accessor :pemk_rng_session; end
+    P.adopt_mode("shadow"); $sent.clear
+    s3 = Battle.new([first], [20], { 1 => false, 2 => false, 3 => 0 }); s3.pemk_rng_session = Session.new(4242)
+    s3.pbGainMoney
+    seeded = claims.call.last
+    P.reset; P.adopt_mode("shadow"); $sent.clear
+    P.tick
+    out[:seeded] = [seeded[:seed], claims.call.map { |m| m[:seed] }.include?(4242)]
     # off: nothing is claimed
     P.adopt_mode("off"); $sent.clear
     b.pbGainMoney
@@ -131,6 +141,7 @@ class PrizeClaimPluginTest < Minitest::Test
     assert_equal 0, o[:no_money]
     assert_equal 1, o[:wait]
     assert_equal [true, :pos], o[:resent], "again on a new connection, after a position"
+    assert_equal [4242, true], o[:seeded], "the battle's seed, sent and kept for a resend"
     assert_equal [true, :pos], o[:flushed], "at once for a reconnect's reseed"
     assert_equal 0, o[:answered]
     assert_equal [:payday, [4242], 120, nil], o[:wild], "the coins scattered, doubled by Happy Hour"
