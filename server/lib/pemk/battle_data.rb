@@ -97,6 +97,8 @@ module PEMK
       party.any? { |p| (p[3] & wanted).any? }
     end
 
+    def trainer_types_list; @trainer_types.keys; end
+
     # The money a new game starts with (metadata), or nil.
     def start_money
       money = @money_rules["start_money"]

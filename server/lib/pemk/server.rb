@@ -95,6 +95,8 @@ module PEMK
       @gift_grants = GiftGrants.new(@db, logger: @log) if @config.gift_enforce != :off   # step 6
       @trade_deliveries = TradeDeliveries.new(@db, logger: @log) if @config.trade_redelivery
       @shop_deals = ShopDeals.new(@db) if @config.shop_enforce == :on   # E3: a deal runs once, asked again by its nonce
+      @money_claims = MoneyClaims.new(@db) if @config.money_authority != :off   # money authority M1a: prize claims judged
+      @last_maps = {}   # account_id => the map its last connection ended on (M1a claims)
       @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
       if @item_ledger   # E2b: which items this game can produce unseen, under the gates that are on
@@ -181,6 +183,7 @@ module PEMK
       @log.call("server: gift enforcement = #{@config.gift_enforce} (one-shot gifts paid once when on)")
       @log.call("server: peer body check = #{@config.peer_check} (relayed Pokemon may name #{@config.peer_classes.join(', ')})")
       @log.call("server: shop enforcement = #{@config.shop_enforce} (Mart purchases and sales made server-side when on)")
+      log_money_authority
       @log.call("server: item authority = #{@config.item_authority} (item increases judged against server-known sources; logs only)")
       if @config.item_authority == :on
         if @item_enforce
@@ -280,7 +283,7 @@ module PEMK
       save: [10, 1.0], econ: [10, 4], inv: [10, 4], uid_req: [10, 4], mon_party: [10, 4],
       flags: [10, 1.0], flag_delta: [20, 4], gift_claim: [20, 4], gift_req: [10, 1.0], gift_applied: [10, 1.0],
       encounter_req: [10, 2], catch_req: [20, 6], battle_record: [6, 1], trade_commit: [6, 2],
-      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2], shop_req: [10, 2],
+      team_check: [10, 2], pickup_req: [20, 6], interact_claim: [30, 10], trade_applied: [6, 2], trade_owed: [4, 0.2], shop_req: [10, 2], money_claim: [10, 2],
       pos: [40, 20], dir: [40, 20], step: [40, 20], spawn: [10, 2]
     }.freeze
     FRAME_BUDGET_DEFAULT = [30, 10].freeze
@@ -327,6 +330,7 @@ module PEMK
       when :trade_applied then handle_trade_applied(env, authed)
       when :trade_owed then handle_trade_owed(conn, authed)
       when :shop_req then handle_shop_req(conn, env, authed)
+      when :money_claim then handle_money_claim(conn, env, authed)
       when :pos, :dir, :step, :spawn then handle_presence(conn, env, authed)
       when *ADDRESSED then handle_addressed(conn, env, body, authed)
       else
@@ -500,6 +504,9 @@ module PEMK
           end
         end
         status = @ledger.apply_econ(account_id, field, value, seq, reason: reason)
+        # M1a: a fresh money frame carries the prizes claimed before it - they reached the
+        # ledger, so a fresh login no longer voids them.
+        @money_claims.seal(account_id) if @money_claims && field.to_s == "money" && status.first == :ack
         @reactor.post do
           case status.first
           when :ack, :dup then reply(conn, type: :econ_ack, field: field, value: status[1], seq: seq)
@@ -1017,7 +1024,18 @@ module PEMK
     def handle_team_check(conn, env, account_id)
       verdict = @team_audit.check(account_id, env[:team])
       observe_blocks(account_id, env[:team])
+      note_team_moves(conn, env[:team])
       reply(conn, type: :team_ack, seq: env[:seq], legal: (verdict[:legal] != false))
+    end
+
+    # Money authority M1a: the moves the party knows, from its last team report, and
+    # whether one has Imposter - what can bring Happy Hour into a battle.
+    def note_team_moves(conn, team)
+      return unless team.is_a?(Array)
+
+      mons = team.select { |m| m.is_a?(Hash) }
+      conn.data[:team_moves] = mons.flat_map { |m| Array(m["moves"] || m[:moves]) }.map(&:to_s).uniq.first(64)
+      conn.data[:team_imposter] = mons.any? { |m| (m["ability"] || m[:ability]).to_s == "IMPOSTER" }
     end
 
     # Audit item 5: lock each owned mon's identity traits on first sight and flag a
@@ -1387,6 +1405,206 @@ module PEMK
       return { type: :shop_grant, delta: done[:delta], bonus: done[:bonus].to_i } if done[:outcome] == "grant"
 
       { type: :shop_deny, reason: "void" }
+    end
+
+    # === money authority M1a: trainer prize claims ================================
+
+    CLAIM_TRAINERS_MAX = 3   # the engine fields three trainers at most
+    # Moves that set Happy Hour on the player's side, and those that can copy one (or
+    # Metronome) from a battler that knows it.
+    HAPPY_HOUR_MOVES = %w[HAPPYHOUR METRONOME].freeze
+    COPYING_MOVES    = %w[MIMIC COPYCAT MIRRORMOVE SKETCH TRANSFORM].freeze
+    PRIZE_ITEMS      = %w[AMULETCOIN LUCKINCENSE].freeze
+
+    # A trainer battle's prize, claimed where the engine pays it (Battle#pbGainMoney).
+    # Judged against the exports and recorded with its verdict; a nonce asked again gets
+    # its first verdict. In shadow nothing moves: the verdicts are what M2 would pay.
+    def handle_money_claim(conn, env, account_id)
+      return unless @money_claims
+
+      nonce = MoneyClaims.nonce(env[:nonce])
+      trainers = claim_trainers(env[:trainers])
+      amount = env[:amount]
+      unless nonce && trainers && amount.is_a?(Integer) && amount.between?(0, money_cap) && env[:map].is_a?(Integer)
+        return reply(conn, type: :money_claim_ack, nonce: nonce, verdict: "bad")
+      end
+
+      @mailbox.submit(account_id) do
+        done = @money_claims.find(account_id, nonce)
+        verdict, accepted =
+          if done && done[:voided_at] then ["void", 0]   # a fresh login undid it: never paid again by its nonce
+          elsif done then [done[:verdict], done[:accepted]]
+          else judge_claim(conn, account_id, nonce, env, trainers)
+          end
+        @reactor.post { reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted) if @reactor.alive?(conn) }
+      rescue StandardError => e
+        @log.call("money: claim failed #{e.class}: #{e.message}")
+      end
+    end
+
+    # -> [[type, name, version, map, event], ...] (distinct, at most three) | nil
+    def claim_trainers(list)
+      return nil unless list.is_a?(Array) && list.length.between?(1, CLAIM_TRAINERS_MAX)
+
+      out = list.map do |t|
+        return nil unless t.is_a?(Array) && t.length == 5 && t[2].is_a?(Integer) && t[3].is_a?(Integer) && t[4].is_a?(Integer)
+
+        [t[0].to_s[0, 32], t[1].to_s[0, 32], t[2], t[3], t[4]]
+      end
+      out.uniq.length == out.length ? out : nil
+    end
+
+    def money_cap
+      @config.economy_caps.fetch(:money, 999_999)
+    end
+
+    # -> [verdict, accepted]. "wait" (no position on this connection yet) is not recorded:
+    # the claim is judged when it comes again.
+    def judge_claim(conn, account_id, nonce, env, trainers)
+      map = env[:map]
+      where = claim_away(conn, account_id, map)
+      return ["wait", 0] if where == :unknown
+
+      verdict = where ? "away" : nil
+      bound = 0
+      keys = []
+      rematch = false
+      trainers.each do |type, name, version, tmap, event|
+        prize = @battle.trainer_prize(type, name, version)
+        place = tmap == map ? @world.trainer_place(tmap, event, type, name, version) : nil
+        unless prize && place
+          verdict ||= "unknown"
+          next
+        end
+        bound += prize
+        verdict ||= claim_repeat(account_id, type, name, version, tmap, event, place)
+        rematch ||= place["rematch"]
+        keys << MoneyClaims.trainer_key(type, name, version)
+        keys << MoneyClaims.event_key(tmap, event) unless place["rematch"]
+      end
+      bound *= 2 if env[:amulet] == true && prize_item_held?(account_id, env[:partner])
+      bound *= 2 if env[:happy_hour] == true && happy_hour_possible?(conn, trainers)
+      amount = env[:amount]
+      accepted = verdict ? 0 : [amount, bound].min
+      verdict ||= amount > bound ? "suspect" : "paid"
+      @db.transaction do
+        @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
+                                                accepted: accepted, map: map, trainers: trainers)
+        @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch) if MoneyClaims::PAID.include?(verdict)
+      end
+      note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
+      [verdict, accepted]
+    end
+
+    # -> nil when +map+ is where the server last saw the player (or the map just left, or
+    # where the account's previous connection ended), :unknown when this connection has
+    # sent no position yet, else the map the player is on.
+    def claim_away(conn, account_id, map)
+      cur = conn.data[:map_id] || (conn.data[:last_pos] || [])[0]
+      return :unknown unless cur.is_a?(Integer)
+      return nil if cur == map
+
+      left = conn.data[:left_map]
+      return nil if left && left[0] == map && Process.clock_gettime(Process::CLOCK_MONOTONIC) - left[1] <= GIFT_LEFT_MAP_SEC
+      return nil if @last_maps[account_id] == map
+
+      cur
+    end
+
+    # -> nil when this trainer may be paid now, else why not: a battle paid already
+    # ("repeat"), a rematch before its cadence ("cadence") or before the version below it
+    # ("order").
+    def claim_repeat(account_id, type, name, version, map, event, place)
+      paid = @money_claims.payout(account_id, MoneyClaims.trainer_key(type, name, version))
+      unless place["rematch"]
+        return "repeat" if paid || @money_claims.payout(account_id, MoneyClaims.event_key(map, event))
+
+        return nil
+      end
+      versions = place["versions"]
+      if version > versions.min && !@money_claims.payout(account_id, MoneyClaims.trainer_key(type, name, version - 1))
+        return "order"
+      end
+      last = @money_claims.rematch_clock(account_id, type, name)
+      return "cadence" if paid && last && Time.now - last < MoneyClaims::REMATCH_SEC
+
+      nil
+    end
+
+    # An Amulet Coin or a Luck Incense the item record holds on a party Pokemon (and
+    # recognizes, with item authority on), or one the partner trainer's export gives.
+    def prize_item_held?(account_id, partner)
+      party = @db[:party_snapshots].where(account_id: account_id).get(:party).to_a
+      uids = party.filter_map { |m| (m["uid"] || m[:uid]).to_s if m.is_a?(Hash) && (m["uid"] || m[:uid]) }
+      row = @db[:inventory_snapshots].where(account_id: account_id).first
+      holders = (row && row[:holders]).to_h
+      held = uids.filter_map { |u| holders[u] }.map(&:to_s) & PRIZE_ITEMS
+      if held.any?
+        return true unless @item_ledger && row[:judged]
+
+        judged = row[:judged].to_h
+        debts = @item_ledger.open_debts(account_id)
+        return true if held.any? { |i| judged[i].to_i - debts[i].to_i >= 1 }
+      end
+      partner_holds?(partner)
+    end
+
+    def partner_holds?(partner)
+      return false unless partner.is_a?(Array) && partner.length >= 2
+
+      (0..9).any? do |v|
+        party = @battle.trainer_party(partner[0].to_s, partner[1].to_s, v)
+        party && party.any? { |p| PRIZE_ITEMS.include?(p[2].to_s) }
+      end
+    end
+
+    # Happy Hour doubles the prize only when the player's side uses it (the engine sets
+    # the effect for that side alone): a party Pokemon knows it or Metronome, or copies
+    # either from a foe that knows it. The party's moves are those of the last team report.
+    def happy_hour_possible?(conn, trainers)
+      moves = Array(conn.data[:team_moves]).map(&:to_s)
+      return true if (moves & HAPPY_HOUR_MOVES).any?
+      return false if (moves & COPYING_MOVES).empty? && !conn.data[:team_imposter]
+
+      trainers.any? { |type, name, version, _, _| @battle.trainer_knows_any?(type, name, version, HAPPY_HOUR_MOVES) }
+    end
+
+    def note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
+      names = trainers.map { |t| "#{t[0]} #{t[1]} v#{t[2]}" }.join(", ")
+      case verdict
+      when "paid"
+        @log.call("money: account #{account_id} prize #{amount} for #{names} (bound #{bound})")
+      when "suspect"
+        @log.call("money: account #{account_id} SUSPECT prize #{amount} over its bound #{bound} for #{names}")
+        flag_anomaly(account_id, :money_suspect)
+      else
+        @log.call("money: account #{account_id} WOULD-REFUSE prize #{amount} for #{names} (#{verdict}" \
+                  "#{where ? ", on map #{where}" : ''})")
+        flag_anomaly(account_id, :money_claim) unless verdict == "repeat"
+      end
+    end
+
+    # At boot: the mode, and what the claims cannot be judged by in this configuration.
+    def log_money_authority
+      @log.call("server: money authority = #{@config.money_authority} (trainer prizes claimed and judged; logs only)")
+      return if @config.money_authority == :off
+
+      @log.call("server: WARNING money authority 'on' runs as shadow until enforcement ships") if @config.money_authority == :on
+      gaps = []
+      gaps << "the exports place no trainer battle" unless @world.trainers_known?
+      gaps << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
+      gaps << "positions are the client's word (PEMK_POS_ENFORCE is not on)" unless @config.position_enforcement == :on
+      gaps << "no team reports (D1 off), so Happy Hour is never allowed" if @config.battle_enforce_teams == :off
+      @log.call("server: money claims cannot rely on: #{gaps.join('; ')}") unless gaps.empty?
+    end
+
+    # A fresh login: a claim no money frame sealed may be missing from the save it loads,
+    # so its battle may be fought and claimed again.
+    def void_claims(account_id)
+      return unless @money_claims
+
+      voided = @money_claims.void_unsealed(account_id)
+      @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login") unless voided.empty?
     end
 
     # -> nil when the export allows it, else why not. A purchase needs a clerk the world
@@ -2002,6 +2220,7 @@ module PEMK
       @gift_grants&.void_unsealed(account_id) if fresh
       @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
       @item_ledger&.drop_credits(account_id) if fresh # E2: nor any item a waiting credit was for
+      void_claims(account_id) if fresh                 # M1a: nor a prize whose battle it may lack
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
       stores = @config.item_record == :full ? inv[:stores] : nil
@@ -2026,6 +2245,7 @@ module PEMK
         shop_gate: @config.shop_enforce != :off,                             # E3: Mart purchases asked first
         bp_shop_gate: @config.shop_enforce != :off,                          # ... and Battle Point exchanges
         shop_recheck: !@shop_deals.nil?,                                     # ... a deal given up on is asked again
+        money_claims: @config.money_authority.to_s,                          # money authority M1: prizes claimed
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }
@@ -2280,6 +2500,7 @@ module PEMK
       map = conn.data[:map_id]
       return unless map
 
+      @last_maps[aid] = map if aid && @last_maps   # M1a: a claim re-sent after a reconnect may name it
       @zones[map].delete(conn)
       broadcast_zone(map, conn, Wire.encode_split({ type: :leave, id: aid })) if aid
       @zones.delete(map) if @zones[map].empty?   # reap AFTER the broadcast

@@ -57,6 +57,13 @@ module PEMK
       PEMK.send_message(h)
     end
 
+    # A position the server must have now (a prize claim is judged by it): sent even
+    # when it did not change since the last one.
+    def self.emit_now(type)
+      @last_key = nil
+      emit(type)
+    end
+
     # Ask for a fresh position broadcast on the next idle frame. Used on map
     # entry: emitting there directly would send a stale position (the transfer
     # hasn't finalised $game_player's tile yet), so we defer to the heartbeat,

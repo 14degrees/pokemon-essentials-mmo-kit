@@ -14,7 +14,7 @@ module PEMK
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
-                :shop_enforce, :item_authority, :item_local, :item_grace
+                :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -195,6 +195,13 @@ module PEMK
       # message closes.
       raw = env.fetch("PEMK_ITEM_GRACE_SEC", "").to_s.strip
       @item_grace = raw.match?(/\A\d+\z/) ? raw.to_i.clamp(10, 3600) : 120
+
+      # Money authority M1: the prize a trainer battle pays is claimed, and judged against
+      # the exports - each trainer placed where the player is, each battle paid once, the
+      # amount within its bound. off = nothing; shadow = each claim is judged and logged,
+      # the ledger unchanged. on is enforcement (M3); until it exists, on runs as shadow.
+      mmode = env.fetch("PEMK_MONEY_AUTHORITY", "off").to_s.strip.downcase
+      @money_authority = %w[off shadow on].include?(mmode) ? mmode.to_sym : :off
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
