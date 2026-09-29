@@ -134,6 +134,13 @@ module Autotest
       PEMK::ItemLedger.new(db).credit(account_id(player), item.to_s.upcase, [qty.to_i, 1].max, source: "autotest")
     end
 
+    # Money authority: the money a scenario hands out itself is explained to the shadow
+    # balance first, so only the game's own sources are judged.
+    def explain_money_setup(player, value)
+      cur = player.state.dig("trainer", "money").to_i
+      server.explain_money(account_id(player), value.to_i - cur)
+    end
+
     def item_authority?
       mode = @flags.transform_keys(&:to_s).fetch("PEMK_ITEM_AUTHORITY", ENV["PEMK_ITEM_AUTHORITY"])
       %w[shadow on].include?(mode.to_s.strip.downcase)
