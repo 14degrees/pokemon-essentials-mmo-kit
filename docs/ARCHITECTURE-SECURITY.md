@@ -631,12 +631,31 @@ spends the count first, and each snapshot lowers it to what the possession may s
 (a bag-only one with the stores last known), so a Mart Potion resold is owned and a used
 one conjured back is not.
 
-Sam's rules (2026-09-29), logged `WOULD-REFUSE` until enforcement ships: the units bought
+Sam's rules (2026-09-29), logged `WOULD-REFUSE` until enforcement runs: the units bought
 with battle points are counted apart and never sell for money (a sale takes the others
 first; past them it is refused, `bp_bought`); the local units the server never sold sell
 for at most `PEMK_MONEY_LOCAL_DAILY` a day (default $10,000; `local_daily`); and a battle
 the game lets be fought again pays at most once per 20 minutes (`cadence`, its prize
 logged as a repeat).
+
+#### Enforcement (`PEMK_MONEY_AUTHORITY=on`)
+
+Off by default. With `on`, money rises only through the server's own transactions, once
+nothing blocks it (the boot names each blocker and runs as shadow meanwhile): D2 on, the
+Pay Day and local-sale allowances set, the shop gate and item enforcement on, complete
+exports, and no event that raises money by itself (Triple Triad sales are closed by the
+client). The server then:
+- pays each accepted claim into the ledger itself, up to the balance cap, and takes it
+  back if a fresh login voids the claim;
+- refuses a money frame above the balance (`econ_rej`, `unexplained`), recorded under its
+  seq and flagged - the game adopts the balance;
+- starts an account without money from the exported start money, never the save's;
+- refuses a client without the `money_claims` capability (`update_required`).
+
+The client holds its money frames while this session's prizes wait for their verdicts (a
+minute at most), corrects the money to what the server paid, lets a Mart wait for those
+verdicts, and does not buy Triple Triad cards back. Autotest 079 has Camper Liam's prize
+paid by the server and a memory edit refused.
 
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 

@@ -28,15 +28,18 @@ end
 module PEMK
   module PrizeClaim
     RESEND_AFTER = 10.0   # seconds before an unanswered claim goes out again
+    HOLD_MAX     = 60.0   # M3: seconds a money frame waits at most for this session's verdicts
 
     @mode  = :off
     @asked = {}   # nonce => when this connection last sent it (monotonic)
+    @local = {}   # M3: nonce => [money the engine added here, when, released, dropped]
     @rng   = nil
 
     module_function
 
     # Sync.reset on (re)connect: every claim goes out again on the new socket, and the
-    # mode waits for the server to say it again.
+    # mode waits for the server to say it again. The money the engine added is still in
+    # the game: it keeps waiting for its verdicts.
     def reset
       @mode  = :off
       @asked = {}
@@ -49,6 +52,11 @@ module PEMK
 
     def active?
       @mode != :off
+    end
+
+    # M3: the server pays the prizes itself and refuses money it cannot explain.
+    def enforced?
+      @mode == :on
     end
 
     # GameData::Trainer#to_trainer: the data the trainer was built from, and the event
@@ -68,10 +76,78 @@ module PEMK
 
       amulet = battle.field.effects[PBEffects::AmuletCoin] ? true : false
       happy  = battle.field.effects[PBEffects::HappyHour] ? true : false
+      @room  = nil   # M3: what the engine can still add this battle (read at the first claim)
       prize  = battle.trainerBattle? ? claim_prize(battle, amulet, happy) : nil
       claim_payday(battle, amulet, happy, prize)
     rescue StandardError => e
       PEMK.log("prize: claim error #{e.class}: #{e.message}")
+    end
+
+    # M3: the engine adds +amount+ right after its claim (up to the money cap) - money the
+    # server has not paid yet, held back from the money frames until the verdict.
+    def paid_here(nonce, amount)
+      return unless enforced? && $player
+
+      @room ||= (Settings::MAX_MONEY rescue 999_999) - $player.money
+      added = [[amount, @room].min, 0].max
+      @room -= added
+      @local[nonce] = [added, mono, false, false]
+    end
+
+    # M3: a money frame waits while a prize the engine added this session has no verdict -
+    # at most HOLD_MAX, after which it goes and carries that money (released).
+    def holding?
+      return false unless enforced? && !@local.empty?
+
+      now = mono
+      held = false
+      @local.each_value do |e|
+        if now - e[1] < HOLD_MAX
+          held = true
+        else
+          e[2] = true
+        end
+      end
+      held
+    end
+
+    # M3: waits up to +bound+ seconds for this session's verdicts - a Mart judges the money
+    # the server holds. -> true once nothing is held.
+    def settle(bound)
+      deadline = mono + bound
+      while holding?
+        return false if mono >= deadline || !online?
+
+        Graphics.update
+        Input.update
+      end
+      true
+    end
+
+    # M3: the money the engine added becomes what the server paid. A refused frame that
+    # carried it already brought the game back to the server's balance, without it.
+    def correct(nonce, accepted)
+      e = @local.delete(nonce)
+      return unless e && enforced? && $player
+
+      paid = accepted.is_a?(Integer) ? accepted : 0
+      delta = e[3] ? paid : paid - e[0]
+      return if delta.zero?
+
+      $player.money = [$player.money + delta, 0].max
+      PEMK.log("prize: claim #{nonce} paid #{paid} of the #{e[0]} added: money #{delta.positive? ? '+' : ''}#{delta}")
+    end
+
+    # M3: the server refused a money frame - the game is back at its balance, and the
+    # released claims' money went with it.
+    def frame_refused
+      @local.each_value { |e| e[3] = true if e[2] }
+    end
+
+    # A fresh login adopted the ledger's balance: the prizes added here are in it or not,
+    # as the server says - nothing is left to correct.
+    def adopted
+      @local.clear
     end
 
     # -> the prize claim's nonce, or nil when its trainers were not built from data.
@@ -87,6 +163,7 @@ module PEMK
       entry = [new_nonce, opp.map { |t| t.pemk_key + t.pemk_event }, amount, amulet, happy, $game_map.map_id,
                partner ? [partner[0].to_s, partner[1].to_s] : nil]
       claims << entry
+      paid_here(entry[0], amount)
       send_claim(entry)
       entry[0]
     end
@@ -108,6 +185,7 @@ module PEMK
       end
       entry = [new_nonce, :payday, coins, amulet, happy, $game_map.map_id, proof]
       claims << entry
+      paid_here(entry[0], coins)
       send_claim(entry)
     end
 
@@ -140,6 +218,7 @@ module PEMK
       claims.reject! { |e| e[0] == n }
       @asked.delete(n)
       PEMK.log("prize: claim #{n} judged #{msg[:verdict]} (#{msg[:accepted]})")
+      correct(n, msg[:accepted])
     end
 
     # :on_start_battle, before the battle sets in_battle (which holds every flush): the
@@ -237,4 +316,19 @@ end
 if defined?(EventHandlers)
   EventHandlers.add(:on_frame_update, :pemk_prize_claims, proc { PEMK::PrizeClaim.tick })
   EventHandlers.add(:on_start_battle, :pemk_battle_facts, proc { PEMK::PrizeClaim.before_battle })
+end
+
+# M3: Triple Triad cards live on the client alone - their sale is closed while the server
+# enforces money (Sam, 2026-09-29), until it is a server transaction. Buying them is a
+# spend, and stays open.
+if respond_to?(:pbSellTriads, true) && !respond_to?(:pemk_orig_pbSellTriads, true)
+  alias pemk_orig_pbSellTriads pbSellTriads
+
+  def pbSellTriads
+    if (PEMK::PrizeClaim.enforced? rescue false)
+      pbMessage(_INTL("I'm sorry, I'm not buying cards on this server."))
+      return
+    end
+    pemk_orig_pbSellTriads
+  end
 end

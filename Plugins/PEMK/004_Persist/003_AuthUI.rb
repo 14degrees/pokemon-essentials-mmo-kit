@@ -103,6 +103,7 @@ module PEMK
       when "taken"         then _INTL("that email is already registered")
       when "invalid_email" then _INTL("that email looks invalid")
       when "weak_password" then _INTL("password needs at least 8 characters")
+      when "update_required" then _INTL("this server needs an updated game")
       when nil             then _INTL("no response from the server")
       else (reply[:reason]).to_s
       end

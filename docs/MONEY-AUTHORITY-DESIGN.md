@@ -500,7 +500,40 @@ Money conjured before is kept; a D5 review of large unattributed histories is th
 to that. The trainers an account beat before M1 can be claimed once more (one sum of
 one-shot prizes per existing account) until the flag mirror marks them paid.
 
+As built, a claim records what the server paid into L (`money_claims.credited`, 0 for
+one judged in shadow): a void takes back exactly that, so claims from before enforcement
+need no seal - their money came with the client's frames.
+
 ### Tests
 
 The `on` autotest needs a test-only waiver for blockers 3 and 4, and the harness grant
-must run on the account's mailbox and set the balance exactly.
+must run on the account's mailbox and set the balance exactly. With Sam's decisions no
+waiver is needed: in the demo nothing blocks once the gates are on (autotest 079). The
+harness grant sets L on the account's mailbox before the client's frame shows it.
+
+## 11. M3 as built (2026-09-29)
+
+Off by default; `PEMK_MONEY_AUTHORITY=on` enforces only once `money_blockers` is empty
+(D2 on, the Pay Day and local-sale allowances set, the shop gate and item enforcement on,
+complete exports, no event raising money by itself but the Triple Triad sales the client
+closes); with a blocker left it runs as shadow and the boot names each. The login tells
+the client the effective mode.
+
+Server:
+- A claim's accepted amount is paid into L in its verdict's transaction, up to the cap
+  (`prize:NONCE`, `payday:NONCE`), recorded as `credited`; the acknowledgement carries
+  what was paid. A void takes it back (`void:NONCE`).
+- A fresh money frame above L is refused with L (`econ_rej`, reason `unexplained`),
+  recorded under its seq (`refused:+N`, balance unchanged) and flagged.
+- An account without a money row starts from the exported start money, seeded by the
+  server at login - never from the save's value.
+- A login or resume without the `money_claims` capability is refused (`update_required`).
+- The sale rules (BP-bought units, the local allowance) refuse instead of logging.
+
+Client:
+- The money the engine adds for a claim this session is held back from the money frames
+  until its verdict (at most 60 seconds), then corrected to what the server paid; a frame
+  refused meanwhile already took it back, and the late verdict adds what was paid. A
+  fresh login's balance is the server's word.
+- A Mart waits for those verdicts (8 seconds) before it asks.
+- Triple Triad cards are not bought back.

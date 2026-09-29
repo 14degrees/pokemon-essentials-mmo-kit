@@ -102,9 +102,7 @@ module PEMK
         @money_shadow = MoneyShadow.new(@db, start_money: @battle.start_money, cap: @config.economy_caps.fetch(:money))
         @money_daily  = MoneyDaily.new(@db)   # the day's local sales (PEMK_MONEY_LOCAL_DAILY)
       end
-      # M3: the money rules refuse instead of logging. Until enforcement ships, 'on' runs
-      # as shadow.
-      @money_enforce = false
+      @money_enforce = false   # M3, decided below once item authority is
       @last_maps = {}   # account_id => the map its last connection ended on (M1a claims)
       @item_ledger = ItemLedger.new(@db, grace: @config.item_grace) if @config.item_authority != :off   # item authority E2
       @item_twins = {}
@@ -118,6 +116,9 @@ module PEMK
       # E4: enforcement only where every source is a credit the server hands out first.
       @item_enforce = @config.item_authority == :on && enforce_blockers.empty?
       @recent_down = RecentDecreases.new if @item_enforce   # what left the possession lately (a ball thrown)
+      # M3: money rises only through the server's own transactions - where every source
+      # is one it bounds; 'on' with a blocker left runs as shadow.
+      @money_enforce = @config.money_authority == :on && money_blockers.empty?
       @last_item_sweep = nil
       @item_sweeping   = false
       @audit      = Audit.new(@world, logger: @log)
@@ -378,10 +379,17 @@ module PEMK
       Array(conn.data[:caps]).include?("flag_repair")
     end
 
+    # M3: a client that claims no prizes would see every one of them refused - it has to
+    # update before it plays here.
+    def money_update_required?(conn)
+      @money_enforce && !Array(conn.data[:caps]).include?("money_claims")
+    end
+
     def handle_login(conn, env)
       return reply(conn, type: :login_err, reason: "rate_limited") unless @limiter.allow?(conn.addr)
 
       note_caps(conn, env)
+      return reply(conn, type: :login_err, reason: "update_required") if money_update_required?(conn)
 
       email = env[:email].to_s
       pw    = env[:password].to_s
@@ -421,6 +429,7 @@ module PEMK
     def handle_auth(conn, env)
       token = env[:token].to_s
       note_caps(conn, env)
+      return reply(conn, type: :auth_err, reason: "update_required") if money_update_required?(conn)
       # A reconnect resuming a live session must not be judged like a fresh one: the
       # client keeps its state, it does not load the stored blob.
       fresh = env[:resume] != true
@@ -518,12 +527,18 @@ module PEMK
           end
         end
         before = money_row(account_id) if @money_shadow && field.to_s == "money"
-        status = @ledger.apply_econ(account_id, field, value, seq, reason: reason)
+        # M3: money rises only through the server's own transactions (claims, deals).
+        enforced = @money_enforce && field.to_s == "money"
+        status = @ledger.apply_econ(account_id, field, value, seq, reason: reason, no_increase: enforced)
         if field.to_s == "money" && status.first == :ack
           # M1a: a fresh money frame carries the prizes claimed before it - they reached
           # the ledger, so a fresh login no longer voids them.
           @money_claims&.seal(account_id)
           shadow_frame(account_id, value, before) if current   # M1b: what no source explains
+        elsif enforced && status[2] == :unexplained
+          @log.call("money: account #{account_id} REFUSED a frame of #{value} over the balance #{status[1]}")
+          @money_shadow&.login(account_id, status[1])   # the client adopts the balance
+          flag_anomaly(account_id, :money_unexplained)
         end
         @reactor.post do
           case status.first
@@ -1539,7 +1554,7 @@ module PEMK
         done = @money_claims.find(account_id, nonce)
         verdict, accepted =
           if done && done[:voided_at] then ["void", 0]   # a fresh login undid it: never paid again by its nonce
-          elsif done then [done[:verdict], done[:accepted]]
+          elsif done then [done[:verdict], @money_enforce ? done[:credited] : done[:accepted]]
           elsif claim_waits?(conn, account_id, env, payday, prize_sent) then ["wait", 0]
           elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
@@ -1634,17 +1649,20 @@ module PEMK
         accepted = left
         verdict = "capped"   # the day's Pay Day allowance, until battle records prove the uses
       end
+      credited = 0
       @db.transaction do
-        @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
-                                                accepted: accepted, map: env[:map], trainers: trainers, kind: "payday")
+        before = money_row(account_id)
+        credited = pay_claim(account_id, nonce, "payday", accepted)
+        @money_claims.record(account_id, nonce, verdict: verdict, mode: money_mode, amount: amount, accepted: accepted,
+                                                map: env[:map], trainers: trainers, kind: "payday", credited: credited)
         if MoneyClaims::PAYDAY_SPENDS.include?(verdict)
           @money_claims.stamp_payday(rolls) if rolls
           @money_claims.stamp_prize_payday(account_id, prize[:nonce]) if prize
         end
-        @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
+        @money_shadow&.claim(account_id, accepted, before: before) if accepted.positive?
       end
       note_payday(account_id, verdict, amount, accepted, bound, label)
-      [verdict, accepted]
+      [verdict, @money_enforce ? credited : accepted]   # M3: what the client keeps is what was paid
     end
 
     # -> what the account may still be credited for Pay Day today.
@@ -1745,20 +1763,23 @@ module PEMK
       amount = env[:amount]
       accepted = verdict ? 0 : [amount, bound].min
       verdict ||= amount > bound ? "suspect" : "paid"
+      credited = 0
       @db.transaction do
-        @money_claims.record(account_id, nonce, verdict: verdict, mode: @config.money_authority, amount: amount,
-                                                accepted: accepted, map: map, trainers: trainers)
+        before = money_row(account_id)
+        credited = pay_claim(account_id, nonce, "prize", accepted)
+        @money_claims.record(account_id, nonce, verdict: verdict, mode: money_mode, amount: amount, accepted: accepted,
+                                                map: map, trainers: trainers, credited: credited)
         @money_claims.pay(account_id, keys.uniq, nonce, rematch: rematch || again) if MoneyClaims::PAID.include?(verdict)
-        @money_shadow&.claim(account_id, accepted, before: money_row(account_id)) if accepted.positive?
+        @money_shadow&.claim(account_id, accepted, before: before) if accepted.positive?
         # A battle paid before, fought again: its prize in the next frame is a repeat.
         # (what the battle pays by the server's own count, not what the client states) So
         # is a battle the game lets be fought again, fought before its cadence.
         if verdict == "repeat" || (verdict == "cadence" && again)
-          @money_shadow&.repeat(account_id, [amount, bound].min, before: money_row(account_id))
+          @money_shadow&.repeat(account_id, [amount, bound].min, before: before)
         end
       end
       note_claim(account_id, verdict, amount, accepted, bound, trainers, where, again: again)
-      [verdict, accepted]
+      [verdict, @money_enforce ? credited : accepted]   # M3: what the client keeps is what was paid
     end
 
     # -> nil when +map+ is where the server last saw the player (or the map just left, or
@@ -1859,10 +1880,15 @@ module PEMK
 
     # At boot: the mode, and what the claims cannot be judged by in this configuration.
     def log_money_authority
-      @log.call("server: money authority = #{@config.money_authority} (trainer prizes claimed and judged; logs only)")
+      what = if @money_enforce then "the server pays prizes and refuses money it cannot explain"
+             else "trainer prizes claimed and judged; logs only"
+             end
+      @log.call("server: money authority = #{@config.money_authority} (#{what})")
       return if @config.money_authority == :off
 
-      @log.call("server: WARNING money authority 'on' runs as shadow until enforcement ships") if @config.money_authority == :on
+      if @config.money_authority == :on && !@money_enforce
+        @log.call("server: WARNING money authority 'on' runs as shadow until: #{money_blockers.join('; ')}")
+      end
       gaps = []
       gaps << "the exports place no trainer battle" unless @world.trainers_known?
       gaps << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
@@ -1877,6 +1903,56 @@ module PEMK
       @log.call("server: money: battles the game lets be fought again, each paid at most once per 20 minutes: #{names.join(', ')}")
     end
 
+    # M3: an account with no money yet starts from the exported start money - the client
+    # would otherwise seed the ledger with its save's value, which enforcement refuses and
+    # could not trust. It adopts the seeded balance with the login.
+    def seed_start_money(account_id)
+      return unless @money_enforce && money_row(account_id).nil? && @battle.start_money.to_i.positive?
+
+      @ledger.adjust(account_id, :money, @battle.start_money, reason: "start")
+    end
+
+    # M3's preconditions: what keeps money authority 'on' from enforcing - every way money
+    # can rise must be a transaction the server makes or bounds. -> [what is missing]
+    def money_blockers
+      out = []
+      out << "D2 is not on (PEMK_BATTLE_ENFORCE_ENCOUNTERS): a wild Pay Day has no proof" unless @config.battle_enforce_encounters == :on
+      out << "Pay Day has no daily allowance (PEMK_MONEY_PAYDAY_DAILY=none)" unless @config.money_payday_daily
+      out << "the shop gate is not on (PEMK_SHOP_ENFORCE)" unless @config.shop_enforce == :on
+      out << "item authority does not enforce (PEMK_ITEM_AUTHORITY=on and its preconditions)" unless @item_enforce
+      out << "local sales have no daily allowance (PEMK_MONEY_LOCAL_DAILY=none)" unless @config.money_local_daily
+      out << "the exports place no trainer battle" unless @world.trainers_known?
+      out << "the exports do not say which trainer battles can be fought again" if @world.repeatable_trainers.nil?
+      out << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
+      out << "the battle data has no start money" unless @battle.start_money.is_a?(Integer)
+      sources = unbounded_money_sources
+      if sources.nil?
+        out << "the exports predate the money sources"
+      elsif sources.any?
+        out << "events raise money by themselves (until the event money gate): #{sources.join(', ')}"
+      end
+      out
+    end
+
+    # The events that raise money by themselves - money an honest player gets that no
+    # claim names: every exported source of money but the Triple Triad sales the client
+    # closes while enforcement runs (Sam, 2026-09-29). -> ["map 5 event 3 (change_gold)",
+    # ...], or nil for an export from before the sources.
+    def unbounded_money_sources
+      doc = @world.money_sources
+      return nil unless doc
+
+      Array(doc["events"]).filter_map do |e|
+        next unless e.is_a?(Hash) && Array(e["fields"]).include?("money")
+
+        calls = Array(e["calls"]) - ["pbSellTriads"]
+        next if calls.empty?
+
+        where = e["common_event"] ? "common event #{e['common_event']}" : "map #{e['map']} event #{e['event']}"
+        "#{where} (#{calls.join(', ')})"
+      end
+    end
+
     # A fresh login: a claim that neither a money frame nor a save sealed may be missing
     # from the save it loads, so its battle may be fought and claimed again.
     def void_claims(account_id)
@@ -1885,8 +1961,40 @@ module PEMK
       voided = @money_claims.void_unsealed(account_id)
       return if voided.empty?
 
-      voided.each { |c| @money_shadow&.void(account_id, c[:accepted], before: money_row(account_id)) if c[:accepted].positive? }
+      voided.each do |c|
+        @money_shadow&.void(account_id, c[:accepted], before: money_row(account_id)) if c[:accepted].positive?
+        take_back(account_id, c) if c[:credited].to_i.positive?
+      end
       @log.call("money: account #{account_id} voided #{voided.size} unsealed prize claim(s) at login")
+    end
+
+    # M3: a voided claim's payment leaves the ledger - what is left of it (the balance
+    # never goes below zero).
+    def take_back(account_id, claim)
+      amount = [claim[:credited].to_i, money_row(account_id).to_i].min
+      return unless amount.positive?
+
+      @ledger.adjust(account_id, :money, -amount, reason: "void:#{claim[:nonce]}")
+    end
+
+    # M3: what the server itself pays for an accepted claim, in its verdict's transaction -
+    # up to the balance cap, as the engine adds it. -> what it paid (nothing in shadow).
+    def pay_claim(account_id, nonce, kind, accepted)
+      return 0 unless @money_enforce && accepted.positive?
+
+      pay = [accepted, money_cap - money_row(account_id).to_i].min
+      return 0 unless pay.positive?
+
+      st, = @ledger.adjust(account_id, :money, pay, reason: "#{kind}:#{nonce}")
+      st == :ack ? pay : 0
+    end
+
+    # The mode claims are judged in: "on" only while enforcement runs ('on' with a
+    # blocker left runs as shadow).
+    def money_mode
+      return "off" unless @money_claims
+
+      @money_enforce ? "on" : "shadow"
     end
 
     # --- money authority M1b: the shadow balance -----------------------------------
@@ -2539,6 +2647,7 @@ module PEMK
       @trade_deliveries&.unack(account_id) if fresh   # the save it loads cannot hold them
       @item_ledger&.drop_credits(account_id) if fresh # E2: nor any item a waiting credit was for
       void_claims(account_id) if fresh                 # M1a: nor a prize whose battle it may lack
+      seed_start_money(account_id)                     # M3: the start money is the server's, not the save's
       @money_shadow&.login(account_id, money_row(account_id).to_i) if fresh   # M1b: the client adopts the ledger's
       snap = @ledger.snapshot(account_id)
       inv  = @inventory.snapshot(account_id)
@@ -2564,7 +2673,7 @@ module PEMK
         shop_gate: @config.shop_enforce != :off,                             # E3: Mart purchases asked first
         bp_shop_gate: @config.shop_enforce != :off,                          # ... and Battle Point exchanges
         shop_recheck: !@shop_deals.nil?,                                     # ... a deal given up on is asked again
-        money_claims: @config.money_authority.to_s,                          # money authority M1: prizes claimed
+        money_claims: money_mode,                                             # money authority: how prizes are claimed
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }

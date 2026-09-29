@@ -33,10 +33,13 @@ module PEMK
       @db[:money_claims].where(account_id: account_id, nonce: nonce).first
     end
 
-    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, kind: "trainer", now: Time.now)
+    # +credited+: what the server paid into the ledger for it (M3 enforcement; 0 in shadow).
+    def record(account_id, nonce, verdict:, mode:, amount:, accepted:, map:, trainers:, kind: "trainer", credited: 0,
+               now: Time.now)
       @db[:money_claims].insert_conflict.insert(
         account_id: account_id, nonce: nonce, kind: kind, verdict: verdict, mode: mode.to_s,
-        amount: amount, accepted: accepted, map: map, trainers: Sequel.pg_jsonb(trainers), created_at: now
+        amount: amount, accepted: accepted, map: map, trainers: Sequel.pg_jsonb(trainers), credited: credited,
+        created_at: now
       )
     end
 

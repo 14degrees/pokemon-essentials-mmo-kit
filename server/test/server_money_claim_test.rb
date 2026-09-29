@@ -115,11 +115,13 @@ class ServerMoneyClaimTest < Minitest::Test
     end
   end
 
-  def login(email = "claim@t.co", map: 31)
+  def login(email = "claim@t.co", map: 31, caps: nil)
     s = TCPSocket.new("127.0.0.1", @port)
     send_env(s, { type: :register, email: email, password: "password1" })
     recv_type(s, :register_ok, :register_err)
-    send_env(s, { type: :login, email: email, password: "password1" })
+    frame = { type: :login, email: email, password: "password1" }
+    frame[:caps] = caps if caps
+    send_env(s, frame)
     lo = recv_type(s, :login_ok)
     send_env(s, { type: :pos, map: map, x: 5, y: 5, dir: 2 }) if map
     [s, lo]
@@ -614,5 +616,72 @@ class ServerMoneyClaimTest < Minitest::Test
     send_env(s, { type: :money_claim, nonce: 1, trainers: [ANNA], amount: 400, map: 31 })
     assert_raises(Timeout::Error) { recv_type(s, :money_claim_ack) }
     assert_equal 0, @db[:money_claims].count
+  end
+
+  # --- M3: enforcement -------------------------------------------------------------
+
+  # 'on' enforces only once every source of money is one the server makes or bounds.
+  def test_on_runs_as_shadow_while_a_blocker_is_left
+    start_server("on")
+    boot = logs
+    assert(boot.any? { |l| l.include?("'on' runs as shadow until:") && l.include?("the shop gate is not on") })
+    assert_equal false, @server.instance_variable_get(:@money_enforce)
+    _, lo = login("claim@t.co", caps: %w[money_claims])
+    assert_equal "shadow", lo[:money_claims], "the mode the claims are judged in"
+  end
+
+  # Enforced: the server pays what it judges, and a frame above the balance is refused -
+  # recorded under its seq, so the next frame follows it.
+  def test_enforced_the_server_pays_and_refuses_the_rest
+    s, lo = enforced_login
+    assert_equal "on", lo[:money_claims]
+    assert_equal start_money, lo[:econ][:money], "the server's start money, adopted with the login"
+    assert_equal [:econ_ack, 1000], money(s, 1000, 1).values_at(:type, :value), "a spend"
+    assert_equal ["paid", 400], claim(s, 1, [ANNA], 400).values_at(:verdict, :accepted)
+    assert_equal 1400, balance(lo), "paid by the server"
+    assert_equal 400, @db[:money_claims].where(account_id: lo[:account_id], nonce: 1).get(:credited)
+    r = money(s, 1400, 2)
+    assert_equal [:econ_ack, 1400], r.values_at(:type, :value), "the frame that shows the prize"
+    r = money(s, 9999, 3)
+    assert_equal [:econ_rej, 1400, "unexplained"], r.values_at(:type, :value, :reason)
+    assert_equal 1, @db[:economy_ledger].where(account_id: lo[:account_id], seq: 3, reason: "refused:+8599").count
+    assert_equal [:econ_ack, 1300], money(s, 1300, 4).values_at(:type, :value), "a spend after it"
+    assert(logs.any? { |l| l.include?("REFUSED a frame of 9999 over the balance 1400") })
+  end
+
+  # Enforced: a claim a fresh login voids takes its payment back.
+  def test_enforced_a_void_takes_the_payment_back
+    s, lo = enforced_login
+    claim(s, 1, [ANNA], 400)
+    assert_equal balance(lo), @db[:money_claims].where(account_id: lo[:account_id]).get(:credited) + start_money
+    s.close
+    _, lo = login("claim@t.co", caps: %w[money_claims])
+    assert_equal start_money, balance(lo), "the save it loads may lack the battle"
+    assert_equal start_money, lo[:econ][:money]
+  end
+
+  # Enforced: a client that claims nothing would see every prize refused.
+  def test_enforced_an_older_client_must_update
+    start_server("on")
+    @server.instance_variable_set(:@money_enforce, true)
+    s = TCPSocket.new("127.0.0.1", @port)
+    send_env(s, { type: :register, email: "old@t.co", password: "password1" })
+    recv_type(s, :register_ok, :register_err)
+    send_env(s, { type: :login, email: "old@t.co", password: "password1" })
+    assert_equal "update_required", recv_type(s, :login_ok, :login_err)[:reason]
+  end
+
+  def enforced_login
+    start_server("on")
+    @server.instance_variable_set(:@money_enforce, true)
+    login("claim@t.co", caps: %w[money_claims])
+  end
+
+  def balance(lo)
+    @db[:economy_balances].where(account_id: lo[:account_id], field: "money").get(:balance)
+  end
+
+  def start_money
+    @server.instance_variable_get(:@battle).start_money
   end
 end
