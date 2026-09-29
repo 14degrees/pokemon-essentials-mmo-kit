@@ -72,6 +72,7 @@ module PEMK
     # The session latches mode+seed: later adopt_mode never touches a live battle.
     def arm_for(battle)
       return nil if @mode == :off || !online?
+      return arm_trainer(battle) if (battle.trainerBattle? rescue false)
       return nil unless battle.wildBattle?
       # SafariBattle overrides pbRandom itself (001_SafariBattle.rb:295) — its rolls
       # would bypass the tap entirely, yielding an armed-but-empty record (and in `on`,
@@ -97,6 +98,25 @@ module PEMK
       end
     rescue StandardError => e
       PEMK.log("battlerng: arm error #{e.class}: #{e.message}")
+      nil
+    end
+
+    # Trainer battles (docs/TRAINER-PROOF-DESIGN.md, P1): a single battle against one
+    # trainer is recorded in shadow, so the harness can rebuild the trainer's team and
+    # re-run its AI against what this client did. No seed yet: `on` leaves them vanilla.
+    def arm_trainer(battle)
+      return nil unless @mode == :shadow
+
+      foes = Array(battle.opponent)
+      return nil unless foes.length == 1 && Array(battle.player).length == 1
+      return nil unless (battle.pbSideSize(0) == 1 && battle.pbSideSize(1) == 1 rescue false)
+
+      s = Session.new(:shadow, nil)
+      s.trainers = foes.map { |t| t.respond_to?(:pemk_key) && t.pemk_key ? Array(t.pemk_key)[0, 3].map { |v| v.is_a?(Symbol) ? v.to_s : v } : nil }
+      s.watch_forgets(battle)
+      s
+    rescue StandardError => e
+      PEMK.log("battlerng: trainer arm error #{e.class}: #{e.message}")
       nil
     end
 
@@ -134,7 +154,7 @@ module PEMK
       M64        = (1 << 64) - 1
 
       attr_reader :mode, :seed
-      attr_accessor :run_context
+      attr_accessor :run_context, :trainers
 
       def initialize(mode, seed)
         @mode        = mode
@@ -155,6 +175,34 @@ module PEMK
         @desynced    = false
         @run_context = false
         @sent        = false
+        @trainers    = nil   # a trainer battle: [[type, name, version]], nil = wild
+        @map         = ($game_map.map_id rescue nil)   # a level-up's happiness reads it
+        @confirms    = []    # every yes/no the player answered (switch, forget a move...)
+        @forgets     = []    # the move slot given up for a new move (-1: none)
+      end
+
+      # The player's answers the battle asks for, in order: the replay gives them back.
+      def note_confirm(ret)
+        @confirms << (ret ? true : false) if @confirms.length < MAX_ROUNDS * 4
+      end
+
+      # A new move to learn asks which move to forget, on the scene: wrap THIS battle's
+      # scene so the choice is recorded (the replay's scene gives it back).
+      def watch_forgets(battle)
+        scene = battle.scene
+        session = self
+        orig = scene.method(:pbForgetMove)
+        scene.define_singleton_method(:pbForgetMove) do |*args|
+          ret = orig.call(*args)
+          (session.note_forget(ret) rescue nil)
+          ret
+        end
+      rescue StandardError
+        nil
+      end
+
+      def note_forget(ret)
+        @forgets << (ret.is_a?(Integer) ? ret : -1) if @forgets.length < MAX_ROUNDS
       end
 
       def outcome?; !@outcome.nil?; end
@@ -197,6 +245,22 @@ module PEMK
           :player => (battle.pbParty(0) || []).map { |p| p && mon_frame(p) },
           :foe    => (battle.pbParty(1) || []).map { |p| p && mon_frame(p) }
         }
+        @settings ||= battle_settings(battle) if @trainers
+      end
+
+      # What the battle was set to, that its mechanics read: the trainers' bag, the
+      # switch style, weather, terrain, environment, whether it can be lost.
+      def battle_settings(battle)
+        sym = ->(v) { v.nil? ? nil : v.to_s }
+        { :items       => Array(battle.items).map { |bag| Array(bag).map { |i| sym.(i) } },
+          :switch      => (battle.switchStyle ? true : false),
+          :weather     => sym.(battle.field.defaultWeather),   # Battle has only the setters
+          :terrain     => sym.(battle.field.defaultTerrain),
+          :environment => sym.(battle.environment),
+          :can_lose    => (battle.canLose ? true : false),
+          :money       => (battle.moneyGain ? true : false) }
+      rescue StandardError
+        nil
       end
 
       # End of pbCommandPhase: @choices is fully resolved (registration toggles
@@ -310,7 +374,7 @@ module PEMK
           :ability => (p.ability_id.to_s rescue nil), :nature => tr.nature_of(p),
           :item => (p.item_id ? p.item_id.to_s : nil), :shiny => (p.shiny? rescue false),
           :gender => (p.gender rescue nil), :form => (p.form rescue 0),
-          :happiness => (p.happiness rescue nil) }
+          :happiness => (p.happiness rescue nil), :obtain_map => (p.obtain_map rescue nil) }
       rescue StandardError
         nil
       end
@@ -322,11 +386,16 @@ module PEMK
       end
 
       def record_hash
-        { :v => 1, :mode => @mode.to_s, :seed => @seed,
-          :init => @init, :rounds => @rounds, :switches => @switches, :runs => @runs,
-          :outcome => @outcome,
-          :draws => { :b => stream_hash(:b), :a => stream_hash(:a), :r => stream_hash(:r) },
-          :truncated => @truncated, :desynced => @desynced }
+        h = { :v => 1, :mode => @mode.to_s, :seed => @seed, :map => @map,
+              :init => @init, :rounds => @rounds, :switches => @switches, :runs => @runs,
+              :outcome => @outcome,
+              :draws => { :b => stream_hash(:b), :a => stream_hash(:a), :r => stream_hash(:r) },
+              :truncated => @truncated, :desynced => @desynced }
+        if @trainers   # a trainer battle: what a rebuild and an AI re-run need
+          h.merge!(:kind => "trainer", :trainers => @trainers, :settings => @settings,
+                   :confirms => @confirms, :forgets => @forgets)
+        end
+        h
       end
 
       def stream_hash(k)
@@ -402,6 +471,15 @@ class Battle
     def pbEndOfBattle
       (@pemk_rng_session.snapshot_outcome(self) rescue nil) if @pemk_rng_session
       pemk_rng_orig_pbEndOfBattle
+    end
+
+    # Every yes/no the battle asks the player goes through here: a trainer battle's
+    # record keeps the answers, in order.
+    alias pemk_rng_orig_pbDisplayConfirm pbDisplayConfirm
+    def pbDisplayConfirm(msg)
+      ret = pemk_rng_orig_pbDisplayConfirm(msg)
+      (@pemk_rng_session.note_confirm(ret) rescue nil) if @pemk_rng_session&.trainers
+      ret
     end
   end
 end
