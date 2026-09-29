@@ -495,23 +495,36 @@ module PEMK
         return
       end
 
+      seq = env[:seq]
       if body.bytesize > SAVE_MAX_BYTES
         # Tell the client rather than dropping silently: a save that never lands is
         # invisible permanent progress loss.
         @log.call("server: account #{account_id} save too large (#{body.bytesize}B > #{SAVE_MAX_BYTES}) -> reject")
-        return reply(conn, type: :save_err, reason: "too_large", max: SAVE_MAX_BYTES)
+        return reply(conn, type: :save_err, reason: "too_large", max: SAVE_MAX_BYTES, seq: seq)
       end
 
       tid = env[:trainer_id]
       sv  = env[:save_version]
       wv  = env[:wire_version]
+      # A client that asks is told whether each save was written, so it sends one again
+      # rather than trusting a save that never landed (a database error, a full queue).
+      ack = Array(conn.data[:caps]).include?("save_ack")
+      answer = ->(**env) { @reactor.post { reply(conn, seq: seq, **env) if ack && @reactor.alive?(conn) } }
       # Persist the SERVER-tracked position (captured on the reactor thread when the
       # frame arrived, not client-claimed) alongside the blob, so the next login seeds
       # the position audit. nil (no presence yet) leaves the stored position untouched.
       fseq = env[:flags_seq]
-      @mailbox.submit(account_id) do
-        @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv, position: last_pos,
-                                      flags_seq: fseq)
+      queued = @mailbox.submit(account_id) do
+        begin
+          @characters.store(account_id, blob: body, trainer_id: tid, save_version: sv, wire_version: wv,
+                                        position: last_pos, flags_seq: fseq)
+        rescue StandardError => e
+          # Nothing below may run: it all counts on this save being on the server.
+          @log.call("server: save of account #{account_id} FAILED #{e.class}: #{e.message}")
+          answer.(type: :save_err, reason: "store_failed")
+          next
+        end
+        answer.(type: :save_ok)
         # The blob is the client's durability boundary: progression facts granted up
         # to the flags seq it carries are now on the player's disk, so promote them
         # out of pending. Anything granted after it waits for the next save, or a
@@ -524,6 +537,7 @@ module PEMK
         @money_claims&.seal(account_id)
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
+      answer.(type: :save_err, reason: "busy") unless queued   # the account's queue is full
     end
 
     # Server-authoritative economy. Serialized per account on the mailbox: apply the
@@ -2868,6 +2882,7 @@ module PEMK
         bp_shop_gate: @config.shop_enforce != :off,                          # ... and Battle Point exchanges
         shop_recheck: !@shop_deals.nil?,                                     # ... a deal given up on is asked again
         money_claims: money_mode,                                             # money authority: how prizes are claimed
+        save_ack: true,                                                      # each save is answered written or not
         flags_seq: (@flag_state ? (@flag_state.snapshot(account_id)&.fetch(:last_seq, 0) || 0) : 0),
         flag_policy: flag_policy,
         flag_facts: (@config.flag_state == :on && @flag_state ? @flag_state.materialize_facts(account_id) : nil) }

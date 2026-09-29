@@ -23,7 +23,7 @@ update fans out only to same-map players.
 | Area | Authority | Migration |
 |---|---|---|
 | **Accounts & auth** | email + password (bcrypt) → opaque 256-bit session token; unauthenticated connections drop every gameplay frame | `001`, `002` |
-| **Durable save** | opaque `bytea` blob, stored and returned verbatim, never deserialized server-side | `001` |
+| **Durable save** | opaque `bytea` blob, stored and returned verbatim, never deserialized server-side; each save is answered written or not (`:save_ok` / `:save_err`), and the game sends one that was not again | `001` |
 | **Economy** | server-side **append-only ledger** (money/coins/BP/soot), clamped to `config/economy_caps.yml` | `003` |
 | **Badges** | server-authoritative bitmask | `003` |
 | **Bag inventory** | server-persistent `jsonb` snapshot, restored at login | `004` |
