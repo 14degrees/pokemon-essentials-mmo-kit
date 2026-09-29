@@ -39,6 +39,17 @@ module Autotest
       @mutex.synchronize { @lines.grep(pattern) }
     end
 
+    # Money authority: money a scenario hands out itself is a source the server knows, so
+    # the shadow balance explains it (the harness's grant; nothing a client can send).
+    def explain_money(account_id, amount)
+      shadow = @server.instance_variable_get(:@money_shadow)
+      return unless shadow && amount.positive?
+
+      db = @server.instance_variable_get(:@db)
+      before = db[:economy_balances].where(account_id: account_id, field: "money").get(:balance)
+      shadow.claim(account_id, amount, before: before)
+    end
+
     # Keeps +account_id+'s mailbox busy for +seconds+: what the account asks meanwhile is
     # answered late, as by a slow server.
     def hold_account(account_id, seconds)

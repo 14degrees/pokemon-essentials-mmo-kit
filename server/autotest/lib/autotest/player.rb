@@ -90,6 +90,12 @@ module Autotest
       ap!(["add_item", item, qty].join(" "), timeout: timeout)
     end
 
+    # Money a test hands out itself: explained to the server's shadow balance first.
+    def money!(value, timeout: 30)
+      @scenario.explain_money_setup(self, value)
+      ap!("money #{value}", timeout: timeout)
+    end
+
     def state
       ap("state")
     end
