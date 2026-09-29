@@ -8,6 +8,7 @@ module PEMK
     NONCE       = (1...(1 << 62)).freeze
     REMATCH_SEC = 20 * 60   # the engine's own phone delay is 20 to 40 minutes
     PAID        = %w[paid suspect].freeze   # verdicts whose battles are paid for
+    PAYDAY_SPENDS = %w[paid suspect capped].freeze   # Pay Day verdicts that use up their proof
 
     def initialize(db)
       @db = db
@@ -52,6 +53,17 @@ module PEMK
 
     def stamp_payday(rolls, now: Time.now)
       @db[:encounter_rolls].where(id: rolls.map { |r| r[:id] }).update(payday_at: now)
+    end
+
+    # A trainer battle's prize claim backs one Pay Day claim.
+    def stamp_prize_payday(account_id, nonce, now: Time.now)
+      @db[:money_claims].where(account_id: account_id, nonce: nonce).update(payday_at: now)
+    end
+
+    # -> what Pay Day claims credited this account today (UTC day)
+    def payday_today(account_id, now: Time.now)
+      day = Time.utc(now.utc.year, now.utc.month, now.utc.day)
+      @db[:money_claims].where(account_id: account_id, kind: "payday").where { created_at >= day }.sum(:accepted).to_i
     end
 
 

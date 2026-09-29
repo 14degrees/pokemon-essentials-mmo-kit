@@ -10,6 +10,7 @@ class WorldExportTrainersPluginTest < Minitest::Test
 
   RUNNER = <<~'RUBY'
     module PEMK; def self.log(_m); end; end
+    module Settings; PHONE_REMATCHES_POSSIBLE_FROM_BEGINNING = true; end
     module GameData
       Tr = Struct.new(:trainer_type, :real_name, :version)
       module Trainer
@@ -37,6 +38,11 @@ class WorldExportTrainersPluginTest < Minitest::Test
     out[:unknown] = t.(ev.(%q{Phone.battle(:CAMPER, "Nobody")}))
     # the demo's own registration: two versions, from 0
     out[:counted] = t.(ev.(%Q{Phone.add(get_self,\n  :CAMPER, "Jeff", 2\n)}, %q{Phone.battle(:CAMPER, "Jeff")}))
+    # a game whose phone never offers a rematch (the demo): Phone.battle never runs
+    Settings.send(:remove_const, :PHONE_REMATCHES_POSSIBLE_FROM_BEGINNING)
+    Settings.const_set(:PHONE_REMATCHES_POSSIBLE_FROM_BEGINNING, false)
+    PEMK::WorldExport.instance_variable_set(:@rematches_possible, nil)
+    out[:never] = t.(ev.(%q{TrainerBattle.start(:CAMPER, "Jeff")}, %q{Phone.battle(:CAMPER, "Jeff")}))
     print out.inspect
   RUBY
 
@@ -50,5 +56,6 @@ class WorldExportTrainersPluginTest < Minitest::Test
     assert_equal [["PICNICKER", "Susie", 3, true]], o[:start], "from the start version on"
     assert_equal [], o[:unknown]
     assert_equal [["CAMPER", "Jeff", 0, true], ["CAMPER", "Jeff", 1, true]], o[:counted], "the versions Phone.add registered"
+    assert_equal [["CAMPER", "Jeff", 0, false]], o[:never], "no rematch where the phone never offers one"
   end
 end
