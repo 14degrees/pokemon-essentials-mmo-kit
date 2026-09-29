@@ -57,6 +57,7 @@ module PEMK
       (PEMK::TradeRedeliver.reset rescue nil)  # ... and any traded Pokemon still queued
       (PEMK::Shop.reset rescue nil)       # ... and the advertised shop gate
       (PEMK::Presence.announce_soon rescue nil)  # ... and the position it last sent: a new socket has none
+      (PEMK::PrizeClaim.reset rescue nil) # ... and the advertised money claims (every claim goes out again)
       (PEMK::Encounter.reset rescue nil)  # ... and the advertised encounter mode (M4-D2)
       (PEMK::Catch.reset rescue nil)      # ... and the advertised catch mode (M4-D3)
       (PEMK::Reward.reset rescue nil)     # ... and the advertised reward mode (M4-D4)

@@ -43,8 +43,12 @@ module PEMK
       "item_unexplained"    => 3,    # item increases no server-known source explained (E2);
                                      # one per account and sweep, so 3 tolerates a source the
                                      # server does not model yet
-      "item_correction_ignored" => 1 # a correction sent half an hour ago and still not applied
-                                     # (E4): an honest client applies it on its next free frame
+      "item_correction_ignored" => 1, # a correction sent half an hour ago and still not applied
+                                      # (E4): an honest client applies it on its next free frame
+      "money_suspect"       => 2,    # a prize claimed over the bound its trainers and facts
+                                     # allow (money authority M1)
+      "money_claim"         => 3     # prizes claimed away from their trainers, for trainers the
+                                     # exports do not place, or rematches out of order or cadence
     }.freeze
 
     FABRICATED_WILD_MIN = 5   # >= this many client-origin wild-table mons to report
