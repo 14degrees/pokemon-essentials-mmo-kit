@@ -47,10 +47,15 @@ module PEMK
           all_events << [map_id, event]
           o = classify_event(event); objects << unread_prices(map_id, o) if o
           collect_warps(event).each { |w| warps << w }
+          fought = battle_marks(event)   # money authority M3: once? which page? paying nothing?
           collect_trainers(event).each do |type, name, version, rematch|
             t = { :event_id => event.id, :x => event.x, :y => event.y, :type => type, :name => name,
                   :version => version }
             t[:rematch] = true if rematch
+            once, page, free = fought[[type, name, version]]
+            t[:repeatable] = true unless rematch || once
+            t[:page] = page if page && page > 0
+            t[:no_money] = true if free
             trainers << t
           end
         end
@@ -98,6 +103,9 @@ module PEMK
       doc[:item_sources] = sources if sources
       money = (money_sources(all_events) rescue nil)
       doc[:money_sources] = money if money
+      doc[:trainer_marks] = true   # the placements say which battles can be fought again
+      partners = (partner_registrations(all_events) rescue nil)
+      doc[:partners] = partners if partners
 
       File.open(File.expand_path(OUT_PATH), "w") { |f| f.write(pretty(doc, 0) + "\n") }
       counts.merge(:maps => maps.size, :connections => conns.size)
@@ -560,18 +568,21 @@ module PEMK
     # set to a constant (122 set, constant operand).
     def page_marks(page)
       marks = { :self => {}, :switches => {}, :variables => {} }
-      page.list.each do |cmd|
-        params = cmd.respond_to?(:parameters) ? cmd.parameters : nil
-        next unless params
-
-        case cmd.code
-        when 123 then marks[:self][params[0].to_s] = true if params[1] == 0
-        when 121 then (params[0]..params[1]).each { |id| marks[:switches][id] = true } if params[2] == 0
-        when 122
-          (params[0]..params[1]).each { |id| marks[:variables][id] = params[4] } if params[2] == 0 && params[3] == 0
-        end
-      end
+      page.list.each { |cmd| mark!(marks, cmd) }
       marks
+    end
+
+    # One command's mark, as page_marks reads them.
+    def mark!(marks, cmd)
+      params = cmd.respond_to?(:parameters) ? cmd.parameters : nil
+      return unless params
+
+      case cmd.code
+      when 123 then marks[:self][params[0].to_s] = true if params[1] == 0
+      when 121 then (params[0]..params[1]).each { |id| marks[:switches][id] = true } if params[2] == 0
+      when 122
+        (params[0]..params[1]).each { |id| marks[:variables][id] = params[4] } if params[2] == 0 && params[3] == 0
+      end
     end
 
     def waits_on?(cond, marks)
@@ -597,12 +608,7 @@ module PEMK
       script = event_script(event)
       return [] unless script
 
-      found = []
-      script.scan(/TrainerBattle\.start\(([^)]*)\)/) do |(args)|
-        args.scan(/:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, version|
-          found << [type, name, version.to_i, false]
-        end
-      end
+      found = battle_ids(script).map { |id| id + [false] }
       counts = {}
       script.scan(/Phone\.add\(\s*get_self\s*,\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+))?/) do |type, name, count, start|
         counts[[type, name, start.to_i]] = [count ? count.to_i : 1, 1].max
@@ -620,6 +626,119 @@ module PEMK
       found.reject { |t| !t[3] && rematches.include?(t[0, 3]) }.uniq
     rescue
       []
+    end
+
+    # The trainer battles a script starts: [[type, name, version], ...] (literal arguments
+    # only - a computed trainer would export a bogus id).
+    def battle_ids(script)
+      out = []
+      script.scan(/TrainerBattle\.start\(([^)]*)\)/) do |(args)|
+        args.scan(/:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, version|
+          out << [type, name, version.to_i]
+        end
+      end
+      out
+    end
+
+    # Money authority M3: what each battle an event starts is, by its commands.
+    # -> { [type, name, version] => [once, page, no_money] }
+    # - once: every call starting it is a conditional branch (111, script) whose win turns
+    #   on, at the branch's own level, all that a later page waits for - the event then
+    #   shows that page. A mark under a further condition may never be set (the demo's
+    #   repeat Grunt), a temporary switch is no page condition (Champion Blue), and a plain
+    #   script call has no win of its own: anything else can be fought again.
+    # - page: the index of the page it is on (the first, if several).
+    # - no_money: every call follows a setBattleRule("noMoney") since the page's last
+    #   battle - the engine pays nothing, and claims nothing.
+    def battle_marks(event)
+      seen = {}
+      event.pages.each_with_index do |pg, k|
+        next unless pg && pg.list
+
+        rules = +""   # the scripts since the last battle: the next one's rules
+        plain = []    # the page's script lines, for the calls outside a branch
+        pg.list.each_with_index do |cmd, i|
+          params = cmd.respond_to?(:parameters) ? cmd.parameters : nil
+          next unless params
+
+          case cmd.code
+          when 111
+            next unless params[0] == 12 && params[1].to_s.include?("TrainerBattle.start(")
+
+            marks = branch_marks(pg.list, i)
+            won = event.pages[(k + 1)..-1].any? { |p| p && p.condition && shows_after?(p.condition, marks) }
+            free = rules.match?(NO_MONEY)
+            rules = +""
+            battle_ids(params[1].to_s).each { |id| note_battle(seen, id, k, won, free) }
+          when 355, 655
+            rules << params[0].to_s << "\n"
+            plain << params[0].to_s
+          end
+        end
+        battle_ids(plain.join("\n")).each { |id| note_battle(seen, id, k, false, false) }
+      end
+      seen
+    rescue
+      {}
+    end
+
+    NO_MONEY = /setBattleRule\([^)]*["']nomoney["']/i.freeze
+
+    def note_battle(seen, id, page, won, free)
+      prev = seen[id]
+      seen[id] = prev ? [prev[0] && won && prev[1] == page, prev[1], prev[2] && free] : [won, page, free]
+    end
+
+    # What the branch opened at +list[i]+ turns on at its own level: the commands one
+    # indent deeper, up to its else or its end. A mark nested deeper may never be set.
+    def branch_marks(list, i)
+      depth = list[i].indent
+      marks = { :self => {}, :switches => {}, :variables => {} }
+      list[(i + 1)..-1].each do |cmd|
+        break if cmd.indent <= depth
+
+        mark!(marks, cmd) if cmd.indent == depth + 1
+      end
+      marks
+    end
+
+    # Does a page with +cond+ show once +marks+ are on, whatever else holds? Every
+    # condition it has is one of them.
+    def shows_after?(cond, marks)
+      held = []
+      held << marks[:self][cond.self_switch_ch.to_s] if cond.self_switch_valid
+      held << marks[:switches][cond.switch1_id] if cond.switch1_valid
+      held << marks[:switches][cond.switch2_id] if cond.switch2_valid
+      if cond.variable_valid
+        value = marks[:variables][cond.variable_id]
+        held << (value.is_a?(Integer) && value >= cond.variable_value)
+      end
+      !held.empty? && held.all?
+    end
+
+    # Money authority: the partner trainers the game registers (pbRegisterPartner), whose
+    # party may hold an Amulet Coin that doubles a prize - in map events and common events.
+    def partner_registrations(maps_events)
+      scripts = maps_events.filter_map { |_, event| event && event.respond_to?(:pages) && event.pages && event_script(event) }
+      Array((load_data("Data/CommonEvents.rxdata") rescue nil)).each do |ce|
+        scripts << list_script(ce.list) if ce && ce.respond_to?(:list) && ce.list
+      end
+      partners_in(scripts.compact)
+    end
+
+    # -> { :list => [[type, name, version], ...], :computed => a call names its partner at runtime }
+    def partners_in(scripts)
+      list = []
+      computed = false
+      scripts.each do |s|
+        literal = 0
+        s.scan(/pbRegisterPartner\(\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?\s*\)/) do |type, name, version|
+          list << [type, name, version.to_i]
+          literal += 1
+        end
+        computed ||= s.scan("pbRegisterPartner(").length > literal
+      end
+      { :list => list.uniq, :computed => computed }
     end
 
     # Can a phone contact of this game ever be ready for a rematch? The settings may allow

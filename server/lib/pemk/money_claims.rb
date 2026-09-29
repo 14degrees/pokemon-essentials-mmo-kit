@@ -22,8 +22,10 @@ module PEMK
       "trainer:#{type}:#{name}:#{version}"
     end
 
-    def self.event_key(map, event)
-      "event:#{map}:#{event}"
+    # The branches of one page are one battle; a later page's battle (the win moved the
+    # event on) is another. The first page keeps the key it always had.
+    def self.event_key(map, event, page = 0)
+      page.to_i.positive? ? "event:#{map}:#{event}:p#{page}" : "event:#{map}:#{event}"
     end
 
     # -> the recorded claim (a Hash), or nil

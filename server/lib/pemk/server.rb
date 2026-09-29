@@ -483,6 +483,9 @@ module PEMK
         @flag_state&.commit_facts(account_id, fseq)
         @flag_state&.note_durable(account_id, fseq)
         @trade_deliveries&.seal(account_id)   # traded Pokemon reported before this save are on disk
+        # A checkpoint waits for the battle's event to end: the prizes claimed before it
+        # are in this save, so a fresh login keeps them.
+        @money_claims&.seal(account_id)
         @log.call("server: saved account #{account_id} (#{body.bytesize}B)")
       end
     end
@@ -1474,18 +1477,39 @@ module PEMK
         return reply(conn, type: :money_claim_ack, nonce: nonce, verdict: "bad")
       end
 
+      waiting = (conn.data[:claims_waiting] ||= {})   # nonces this connection was told to wait on
       @mailbox.submit(account_id) do
         done = @money_claims.find(account_id, nonce)
         verdict, accepted =
           if done && done[:voided_at] then ["void", 0]   # a fresh login undid it: never paid again by its nonce
           elsif done then [done[:verdict], done[:accepted]]
+          elsif claim_waits?(conn, account_id, env, payday, waiting) then ["wait", 0]
           elsif payday then judge_payday(conn, account_id, nonce, env, foes)
           else judge_claim(conn, account_id, nonce, env, trainers)
           end
+        if verdict == "wait"
+          waiting[nonce] = true
+          waiting.shift if waiting.size > CLAIMS_WAITING_MAX
+        else
+          waiting.delete(nonce)
+        end
         @reactor.post { reply(conn, type: :money_claim_ack, nonce: nonce, verdict: verdict, accepted: accepted) if @reactor.alive?(conn) }
       rescue StandardError => e
         @log.call("money: claim failed #{e.class}: #{e.message}")
       end
+    end
+
+    CLAIMS_WAITING_MAX = 64
+
+    # A claim is judged with what this connection reported: none before its position
+    # (where the trainer stood), nor - Pay Day, or a claim stating Happy Hour - before its
+    # team (what bounds the one and brings the other); and a trainer battle's Pay Day
+    # never while its prize claim waits. "wait" is not recorded: the client asks again.
+    def claim_waits?(conn, account_id, env, payday, waiting)
+      return true if !payday && claim_away(conn, account_id, env[:map]) == :unknown
+      return true if (payday || env[:happy_hour] == true) && conn.data[:team].nil?
+
+      payday && waiting.key?(MoneyClaims.nonce(env[:trainer_claim]))
     end
 
     # -> a wild battle's foes' pids (one or two, distinct) | nil
@@ -1629,17 +1653,15 @@ module PEMK
       @config.economy_caps.fetch(:money, 999_999)
     end
 
-    # -> [verdict, accepted]. "wait" (no position on this connection yet) is not recorded:
-    # the claim is judged when it comes again.
+    # -> [verdict, accepted], judged once this connection has a position (claim_waits?).
     def judge_claim(conn, account_id, nonce, env, trainers)
       map = env[:map]
       where = claim_away(conn, account_id, map)
-      return ["wait", 0] if where == :unknown
-
       verdict = where ? "away" : nil
       bound = 0
       keys = []
       rematch = false
+      again = false   # a battle the game lets be fought again (not by the phone)
       trainers.each do |type, name, version, tmap, event|
         prize = @battle.trainer_prize(type, name, version)
         place = tmap == map ? @world.trainer_place(tmap, event, type, name, version) : nil
@@ -1648,10 +1670,12 @@ module PEMK
           next
         end
         bound += prize
+        verdict ||= "no_money" if place["no_money"]   # the engine pays nothing: no client claims it
         verdict ||= claim_repeat(account_id, type, name, version, tmap, event, place)
         rematch ||= place["rematch"]
+        again ||= place["repeatable"]
         keys << MoneyClaims.trainer_key(type, name, version)
-        keys << MoneyClaims.event_key(tmap, event) unless place["rematch"]
+        keys << MoneyClaims.event_key(tmap, event, place["page"]) unless place["rematch"]
       end
       bound *= 2 if env[:amulet] == true && prize_item_held?(account_id, env[:partner])
       bound *= 2 if env[:happy_hour] == true && happy_hour_possible?(conn, trainers)
@@ -1667,7 +1691,7 @@ module PEMK
         # (what the battle pays by the server's own count, not what the client states)
         @money_shadow&.repeat(account_id, [amount, bound].min, before: money_row(account_id)) if verdict == "repeat"
       end
-      note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
+      note_claim(account_id, verdict, amount, accepted, bound, trainers, where, again: again)
       [verdict, accepted]
     end
 
@@ -1692,7 +1716,7 @@ module PEMK
     def claim_repeat(account_id, type, name, version, map, event, place)
       paid = @money_claims.payout(account_id, MoneyClaims.trainer_key(type, name, version))
       unless place["rematch"]
-        return "repeat" if paid || @money_claims.payout(account_id, MoneyClaims.event_key(map, event))
+        return "repeat" if paid || @money_claims.payout(account_id, MoneyClaims.event_key(map, event, place["page"]))
 
         return nil
       end
@@ -1724,10 +1748,12 @@ module PEMK
       partner_holds?(partner)
     end
 
+    # Only the versions the game registers as a partner, when the export says (any other
+    # version of that trainer is not the one fighting alongside).
     def partner_holds?(partner)
       return false unless partner.is_a?(Array) && partner.length >= 2
 
-      (0..9).any? do |v|
+      (@world.partner_versions(partner[0], partner[1]) || (0..9)).any? do |v|
         party = @battle.trainer_party(partner[0].to_s, partner[1].to_s, v)
         party && party.any? { |p| PRIZE_ITEMS.include?(p[2].to_s) }
       end
@@ -1744,7 +1770,7 @@ module PEMK
       trainers.any? { |type, name, version, _, _| @battle.trainer_knows_any?(type, name, version, HAPPY_HOUR_MOVES) }
     end
 
-    def note_claim(account_id, verdict, amount, accepted, bound, trainers, where)
+    def note_claim(account_id, verdict, amount, accepted, bound, trainers, where, again: false)
       names = trainers.map { |t| "#{t[0]} #{t[1]} v#{t[2]}" }.join(", ")
       case verdict
       when "paid"
@@ -1754,7 +1780,8 @@ module PEMK
         flag_anomaly(account_id, :money_suspect)
       else
         @log.call("money: account #{account_id} WOULD-REFUSE prize #{amount} for #{names} (#{verdict}" \
-                  "#{where ? ", on map #{where}" : ''})")
+                  "#{where ? ", on map #{where}" : ''}" \
+                  "#{again && verdict == 'repeat' ? ', a battle the game lets be fought again' : ''})")
         flag_anomaly(account_id, :money_claim) unless verdict == "repeat"
       end
     end
@@ -1770,11 +1797,17 @@ module PEMK
       gaps << "the battle data has no base money" unless @battle.trainer_base_money(@battle.trainer_types_list.first.to_s)
       gaps << "positions are the client's word (PEMK_POS_ENFORCE is not on)" unless @config.position_enforcement == :on
       gaps << "no wild mints (D2 not on), so a wild battle's Pay Day is only bounded" unless @config.battle_enforce_encounters == :on
+      again = @world.repeatable_trainers
+      gaps << "the exports do not say which trainer battles can be fought again" if again.nil?
       @log.call("server: money claims cannot rely on: #{gaps.join('; ')}") unless gaps.empty?
+      return if again.nil? || again.empty?
+
+      names = again.map { |m, e, type, name, v| "#{type} #{name} v#{v} (map #{m} event #{e})" }
+      @log.call("server: money: battles the game lets be fought again, each re-fight refused as a repeat: #{names.join(', ')}")
     end
 
-    # A fresh login: a claim no money frame sealed may be missing from the save it loads,
-    # so its battle may be fought and claimed again.
+    # A fresh login: a claim that neither a money frame nor a save sealed may be missing
+    # from the save it loads, so its battle may be fought and claimed again.
     def void_claims(account_id)
       return unless @money_claims
 
