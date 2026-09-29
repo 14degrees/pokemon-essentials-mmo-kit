@@ -340,6 +340,10 @@ S credits only sales of units the item record judged. A sale of a local-tier ite
 an item bought with battle points, goes to a counter per account and day, logged
 `UNOWNED-SOURCE +n` and labelled in the ledger (`shop:sell:local:ITEM`).
 
+Built 2026-09-29 for the local tiers: the sale is labelled, logged `UNOWNED-SOURCE`, and
+moves C without S; without item authority every sale is unowned. Still to come: the items
+bought with battle points (they need a per-item count in the record) and the daily counter.
+
 ### Preconditions
 
 At boot, the server names what M1 cannot measure, and labels the claims instead of logging

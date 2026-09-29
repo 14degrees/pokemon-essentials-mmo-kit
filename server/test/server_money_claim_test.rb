@@ -34,7 +34,10 @@ class ServerMoneyClaimTest < Minitest::Test
         { "event_id" => 15, "x" => 3, "y" => 3, "type" => "RIVAL1", "name" => "Blue", "version" => 1 },
         { "event_id" => 9, "x" => 4, "y" => 4, "type" => "LASS", "name" => "Copy", "version" => 0 }
       ] },
-      "32" => { "name" => "Town", "width" => 20, "height" => 20, "objects" => [] }
+      "32" => { "name" => "Town", "width" => 20, "height" => 20, "objects" => [
+        { "kind" => "mart", "items" => %w[POTION], "prices" => {}, "price_options" => {}, "sell_options" => {},
+          "dynamic" => false, "x" => 9, "y" => 9, "event_id" => 20 }
+      ] }
     }
   ))
   WORLD.flush
@@ -67,8 +70,9 @@ class ServerMoneyClaimTest < Minitest::Test
     @db&.disconnect
   end
 
-  def start_server(mode = "shadow")
+  def start_server(mode = "shadow", extra = {})
     env = ENV.to_h.merge("PEMK_WORLD" => WORLD.path, "PEMK_BATTLE_DATA" => BATTLE.path, "PEMK_MONEY_AUTHORITY" => mode)
+                  .merge(extra)
     @server = PEMK::Server.new(config: PEMK::Config.new(env: env), logger: ->(m) { @logs << m })
     @server.start
     @port = @server.port
@@ -207,6 +211,33 @@ class ServerMoneyClaimTest < Minitest::Test
     lines = logs.grep(/money: account #{lo[:account_id]} UNEXPLAINED/)
     assert_equal ["UNEXPLAINED +600"], lines.map { |l| l[/UNEXPLAINED \+\d+/] }
     assert_equal [3400, 4000], @db[:money_shadow].where(account_id: lo[:account_id]).get(%i[s c])
+  end
+
+  def sell(s, item, qty, unit, seq)
+    send_env(s, { type: :shop_req, op: :sell, item: item, quantity: qty, unit_price: unit, map: 32, event: 20, seq: seq })
+    recv_type(s, :shop_grant, :shop_deny)
+  end
+
+  # M1d: a sale of items the server never judged moves the client's balance and not the
+  # shadow balance; one of a local tier is labelled so in the ledger.
+  def test_a_sale_of_items_never_judged
+    start_server("shadow", "PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login
+    money(s, 1000, 1)
+    send_env(s, { type: :inv, bag: { POTION: 2, NUGGET: 1 }, seq: 1 })
+    recv_type(s, :inv_ack)
+    @server.instance_variable_set(:@judged_local, Set["NUGGET"])   # what item authority's tiers would say
+    battle = @server.instance_variable_get(:@battle)
+    nugget = battle.item("NUGGET")["sell_price"]
+    potion = battle.item("POTION")["sell_price"]
+    assert_equal :shop_grant, sell(s, "NUGGET", 1, nugget, 1)[:type]
+    assert_equal :shop_grant, sell(s, "POTION", 1, potion, 2)[:type]
+    reasons = @db[:economy_ledger].where(account_id: lo[:account_id]).select_map(:reason)
+    assert_includes reasons, "shop:sell:local:NUGGETx1"
+    assert_includes reasons, "shop:sell:POTIONx1"
+    assert_equal [1000 + potion, 1000 + potion + nugget], @db[:money_shadow].where(account_id: lo[:account_id]).get(%i[s c]),
+                 "the Potion counts, the Nugget does not"
+    assert(logs.any? { |l| l.include?("UNOWNED-SOURCE +#{nugget} (sold NUGGET") })
   end
 
   def test_the_login_says_how_claims_are_judged

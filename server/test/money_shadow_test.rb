@@ -74,6 +74,16 @@ class MoneyShadowTest < Minitest::Test
     assert_equal 176, @m.frame(@aid, 1176, before: 1000), "the voided prize explains nothing"
   end
 
+  # M1d: a sale of items the server never judged moves the client's balance, not S; its
+  # echo is not unexplained, but spending it beyond S is.
+  def test_a_sale_of_items_never_judged
+    @m.frame(@aid, 1000, before: 1000)
+    assert_equal 0, @m.deal(@aid, 500, before: 1000, credit: false)
+    assert_equal [1000, 1500], sc
+    assert_equal 0, @m.frame(@aid, 1500, before: 1500), "the client's echo of the sale"
+    assert_equal 400, @m.deal(@aid, -1400, before: 1500), "400 of it spent beyond what S holds"
+  end
+
   def test_s_is_capped
     @m.frame(@aid, 999_900, before: 999_900)
     @m.claim(@aid, 500, before: 999_900)

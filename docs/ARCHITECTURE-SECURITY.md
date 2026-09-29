@@ -591,6 +591,11 @@ money conjured again after a spend is logged again. A purchase S cannot cover is
 adopts the ledger's balance, and a boot with the setting off drops the measurement, so a
 stretch without it never counts.
 
+A sale of items the server never judged - a local tier such as the Pickup table's Nuggets,
+or any sale without item authority - moves the client's balance but not S: the log says
+`UNOWNED-SOURCE`, and a local item's ledger row reads `shop:sell:local:ITEMxN`.
+Enforcement cannot trust that money until those sources are modelled or capped.
+
 ### A traded Pokemon is not lost (`PEMK_TRADE_REDELIVERY`)
 
 On by default (`off` turns it off). The swap is the server's, but the Pokemon itself

@@ -1353,10 +1353,16 @@ module PEMK
           end
           if why.nil? && on
             delta = op == :buy ? -(unit * qty) : unit * qty
-            st, value, = @ledger.adjust(account_id, field, delta, reason: "#{shop}:#{op}:#{item}x#{qty}")
+            # M1d: an item the server never judged (a local tier: Pickup, mining...) sells
+            # for money no source it owns explains - labelled, and left out of the shadow
+            # balance.
+            local = op == :sell && @judged_local&.include?(canon(item))
+            label = local ? "#{shop}:sell:local:#{item}x#{qty}" : "#{shop}:#{op}:#{item}x#{qty}"
+            st, value, = @ledger.adjust(account_id, field, delta, reason: label)
             if st == :ack
               balance = value
-              shadow_deal(account_id, delta, value - delta, item) if field == :money
+              owned = op == :buy || (@judged_local && !local)
+              shadow_deal(account_id, delta, value - delta, item, owned: owned) if field == :money
             else
               why = bp ? "bp" : "money"
               raise Sequel::Rollback   # nothing moves: not the items either
@@ -1631,10 +1637,13 @@ module PEMK
 
     # A deal the server made moved the money: the shadow balance moves with it. A
     # purchase it cannot cover spent money no source explains.
-    def shadow_deal(account_id, delta, before, item)
+    # M1d: +owned+ false - a sale of items the server never judged: the client's balance
+    # moves, the shadow balance does not, and the log names the unowned source.
+    def shadow_deal(account_id, delta, before, item, owned: true)
       return unless @money_shadow
 
-      short = @money_shadow.deal(account_id, delta, before: before)
+      short = @money_shadow.deal(account_id, delta, before: before, credit: owned)
+      @log.call("money: account #{account_id} UNOWNED-SOURCE +#{delta} (sold #{item}, never judged)") unless owned
       return unless short.positive?
 
       @log.call("money: account #{account_id} BOUGHT-UNEXPLAINED #{item} with #{short} no source explains")

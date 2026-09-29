@@ -45,14 +45,16 @@ module PEMK
       set(account_id, s: s - amount)
     end
 
-    # A deal the server made (Ledger#adjust, acked) moves both. -> what S could not cover
-    # of a purchase (0 when it could).
-    def deal(account_id, delta, before:)
+    # A deal the server made (Ledger#adjust, acked) moves both - but S only for a source
+    # the server owns (+credit+ false: a sale of items it never judged). -> what S could not
+    # cover of a purchase (0 when it could).
+    def deal(account_id, delta, before:, credit: true)
       s, c = row(account_id, before)
-      set(account_id, s: s + delta, c: c + delta)
-      return 0 if delta >= 0 || s + delta >= 0
+      s2 = credit ? s + delta : s
+      set(account_id, s: s2, c: c + delta)
+      return 0 if delta >= 0 || s2 >= 0
 
-      [-(s + delta), -delta].min
+      [-s2, -delta].min
     end
 
     # A fresh, acked frame of value +v+ from the account's current connection. -> the
