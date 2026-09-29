@@ -574,11 +574,17 @@ A second review of those fixes found, all fixed too:
 Its verification then found, fixed as well:
 - Dropping conjured units lowered the BP count (the decrease also settled their debts):
   the units the server never recognized - the item's open debts - now leave first.
-- An account that never saved gets no trusted baseline either, whenever it registered.
+- An account that had never played (no save, no record) when the flag came is flagged too,
+  once (migration 040): a live "has it saved?" check was satisfied by sending a save first,
+  so only facts about the past decide. An account registered while item authority is off
+  still gets one trusted baseline when it is turned on - the operator's cutover.
 - A purchase before a new account's first judgment is credited (the record had no judged
   totals to join), so judging it from nothing owes nothing for it.
-- The boot names an export that does not say which trainers share a battle.
+- The boot names an export that does not say which trainers share a battle; and no claim
+  names two versions of one trainer (a rival's branches, a phone contact's rematches),
+  battle calls or not.
 Left as they are: a claim that waited past the save holding its battle can be voided by
 a crash before the next frame (narrow); the daily allowances count voided claims; an
 older account with a save keeps one trusted baseline, whenever its first full snapshot
-comes.
+comes; a purchase credited before a new account's first judgment is dropped by a fresh
+login before it (only a client that sends no stores at first gets there).

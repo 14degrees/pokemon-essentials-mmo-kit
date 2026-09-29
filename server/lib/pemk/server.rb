@@ -655,13 +655,12 @@ module PEMK
       canonical(Inventory.totals(row[:bag].to_h, stores))
     end
 
-    # {} for an account registered while item authority ran (its inventory starts from
-    # nothing the server did not see), or one that never saved (no history to trust, when
-    # it was registered does not matter); nil for an older one with a save.
+    # {} for an account the server saw start from nothing - registered while item authority
+    # ran, or one that had never played when the flag came (migration 040) - else nil. A
+    # fact about the past only: a check of anything the client can still send (a save
+    # first, say) would be one it could satisfy.
     def from_zero(account_id)
-      return {} if @db[:accounts].where(id: account_id).get(:items_from_zero)
-
-      @db[:characters].where(account_id: account_id).empty? ? {} : nil
+      @db[:accounts].where(id: account_id).get(:items_from_zero) ? {} : nil
     end
 
     # Money authority: the units battle points bought leave their count only as the
@@ -1792,8 +1791,9 @@ module PEMK
         [t[0].to_s[0, 32], t[1].to_s[0, 32], t[2], t[3], t[4]]
       end
       # One battle names each trainer once - the same one placed on two events (a double
-      # battle's pair) is not two prizes.
-      out.map { |t| t[0, 3] }.uniq.length == out.length ? out : nil
+      # battle's pair) is not two prizes, and no battle faces two versions of one trainer
+      # (a rival's branches, a phone contact's rematches).
+      out.map { |t| t[0, 2] }.uniq.length == out.length ? out : nil
     end
 
     def money_cap

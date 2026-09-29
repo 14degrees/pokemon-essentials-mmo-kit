@@ -281,13 +281,25 @@ class ServerItemLedgerTest < Minitest::Test
     assert_empty owing(lo[:account_id])
   end
 
-  # An older account that never saved has no history to trust: judged from nothing too.
-  def test_an_account_that_never_saved_starts_from_nothing
+  # An account that had never played when the flag came has no history to trust: the
+  # backfill flags it, once - a save sent afterwards changes nothing.
+  def test_accounts_that_never_played_are_flagged_once
     start_server
-    s, lo = login("il5s@t.co", older: false)
-    @db[:accounts].where(id: lo[:account_id]).update(items_from_zero: false)   # registered before it ran
-    inv(s, 1, { NUGGET: 1, RARECANDY: 3 })
-    assert_equal [["RARECANDY", -3]], owing(lo[:account_id]), "the Nugget is a local tier"
+    ids = %w[bf-played bf-recorded bf-never].to_h do |name|
+      id = @db[:accounts].insert(email: "#{name}@t.co", password_hash: "x", status: "active", created_at: Time.now)
+      [name, id]
+    end
+    PEMK::Characters.new(@db).store(ids["bf-played"], blob: "\x04\b0".b)
+    @db[:inventory_snapshots].insert(account_id: ids["bf-recorded"], bag: Sequel.pg_jsonb({}), updated_at: Time.now)
+    Sequel.extension :migration
+    backfill = eval(File.read(File.expand_path("../db/migrate/040_items_from_zero_backfill.rb", __dir__))) # rubocop:disable Security/Eval -- our own migration file
+    backfill.apply(@db, :up)
+    flags = ids.transform_values { |id| @db[:accounts].where(id: id).get(:items_from_zero) }
+    assert_equal({ "bf-played" => false, "bf-recorded" => false, "bf-never" => true }, flags)
+    PEMK::Characters.new(@db).store(ids["bf-never"], blob: "\x04\b0".b)   # saving later
+    assert_equal({}, @server.send(:from_zero, ids["bf-never"]), "still judged from nothing")
+    assert_nil @server.send(:from_zero, ids["bf-played"])
+    assert_nil @server.send(:from_zero, ids["bf-recorded"]), "only the flag counts: nothing a client can still send"
   end
 
   def test_a_bp_exchange_explains_its_item
