@@ -110,10 +110,10 @@ randomness the client did not choose - before the prize counts.
 - Placements the export cannot rebuild (a trainer built by a script, edited in
   `:on_trainer_load`) are marked unprovable.
 
-## 5. Decisions for Sam
+## 5. Sam's decisions (2026-09-29)
 
 - **Unproven claims under `on`** (no answer to the seed request, an unprovable
-  placement): held and paid from a small daily allowance (proposed), paid under the caps
-  as today, or refused. Old clients are refused at login, as M3 does.
-- **Lookahead:** accept it for trainers as for wild battles (proposed, first), or reveal
-  per round later.
+  placement): **held, and paid from a small daily allowance**. Old clients are refused at
+  login, as M3 does.
+- **Lookahead: accepted for now**, as for wild battles; revealing each round's draws
+  after the player's choices stays possible later.
