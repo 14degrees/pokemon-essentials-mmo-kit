@@ -279,7 +279,8 @@ module PEMK
 
       list = g.pemk_prize_claims
       list = g.pemk_prize_claims = [] unless list.is_a?(Array)
-      list.select! { |e| e.is_a?(Array) && e.length == 7 && e[0].is_a?(Integer) && (e[1].is_a?(Array) || e[1] == :payday) }
+      # 7 fields; a trainer claim since the trainer proof has an 8th, its battle's seed.
+      list.select! { |e| e.is_a?(Array) && [7, 8].include?(e.length) && e[0].is_a?(Integer) && (e[1].is_a?(Array) || e[1] == :payday) }
       list
     end
 
