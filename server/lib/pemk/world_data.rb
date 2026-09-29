@@ -132,6 +132,13 @@ module PEMK
       @item_sources
     end
 
+    # Money authority M0: { "events" => [{ "map", "event" | "common_event", "calls",
+    # "fields", "amounts", "computed" }] } | nil - every way an event raises money, coins
+    # or battle points without a request the server answers.
+    def money_sources
+      @money_sources
+    end
+
     # Every object of +kind+ ("item", "gift", "prize", "mart", "bp_shop") on every map.
     # -> [[map_id, object], ...]
     def objects_of(kind)
@@ -260,6 +267,9 @@ module PEMK
       # Item authority E1b: the events that produce items no request names. Absent =
       # an export from before it: the server cannot tell those items apart.
       @item_sources = doc["item_sources"].is_a?(Hash) ? deep_freeze(doc["item_sources"]) : nil
+      # Money authority M0: the events that raise a balance by themselves. Absent = an
+      # export from before it.
+      @money_sources = doc["money_sources"].is_a?(Hash) ? deep_freeze(doc["money_sources"]) : nil
       @connections = freeze_connections(doc["connections"])
       @home  = coord_array(doc["home"], 4) || coord_array(doc["home"], 3)
       @start = coord_array(doc["start"], 3)

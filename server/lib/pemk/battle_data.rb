@@ -87,7 +87,8 @@ module PEMK
     end
 
     # -> whether any of the trainer's Pokemon knows one of +moves+, or nil when the export
-    # lists no moves for it. A foe's Happy Hour doubles the player's prize too.
+    # lists no moves for it. Only the player's side sets Happy Hour, but a copying move
+    # (Mimic, Copycat...) on the player's side can take it, or Metronome, from a foe.
     def trainer_knows_any?(type, name, version, moves)
       party = trainer_party(type, name, version)
       return nil unless party && party.all? { |p| p[3].is_a?(Array) }

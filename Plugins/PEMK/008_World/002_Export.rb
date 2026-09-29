@@ -46,9 +46,11 @@ module PEMK
           all_events << [map_id, event]
           o = classify_event(event); objects << unread_prices(map_id, o) if o
           collect_warps(event).each { |w| warps << w }
-          collect_trainers(event).each do |type, name, version|
-            trainers << { :event_id => event.id, :x => event.x, :y => event.y,
-                          :type => type, :name => name, :version => version }
+          collect_trainers(event).each do |type, name, version, rematch|
+            t = { :event_id => event.id, :x => event.x, :y => event.y, :type => type, :name => name,
+                  :version => version }
+            t[:rematch] = true if rematch
+            trainers << t
           end
         end
         passability = map_passability(map)
@@ -93,6 +95,8 @@ module PEMK
       doc[:start] = st if st
       sources = (item_sources(all_events) rescue nil)
       doc[:item_sources] = sources if sources
+      money = (money_sources(all_events) rescue nil)
+      doc[:money_sources] = money if money
 
       File.open(File.expand_path(OUT_PATH), "w") { |f| f.write(pretty(doc, 0) + "\n") }
       counts.merge(:maps => maps.size, :connections => conns.size)
@@ -579,11 +583,13 @@ module PEMK
 
     # === trainers (where each trainer battle starts) — Layer D D4 ================
 
-    # -> [[type, name, version], ...] for every TrainerBattle.start in the event's
-    # scripts; a double battle names two trainers. Literal arguments only: a computed
-    # trainer would export a bogus id. A phone rematch (Phone.battle) battles the
-    # contact's next version, which the engine picks at runtime: every version from the
-    # start one onwards is placed here, where the event calls it.
+    # -> [[type, name, version, rematch], ...] for every TrainerBattle.start in the
+    # event's scripts; a double battle names two trainers. Literal arguments only: a
+    # computed trainer would export a bogus id. A phone rematch (Phone.battle) battles
+    # the contact's next version, which the engine picks at runtime from the versions its
+    # Phone.add registered (start ... start + count - 1): each is placed here, where the
+    # event calls it, marked as a rematch - a battle that can be fought again. Without a
+    # Phone.add in the event, every version from the start one onwards.
     def collect_trainers(event)
       return [] unless event && event.respond_to?(:pages) && event.pages
 
@@ -593,13 +599,22 @@ module PEMK
       found = []
       script.scan(/TrainerBattle\.start\(([^)]*)\)/) do |(args)|
         args.scan(/:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, version|
-          found << [type, name, version.to_i]
+          found << [type, name, version.to_i, false]
         end
       end
-      script.scan(/Phone\.battle\(\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, start|
-        trainer_versions(type, name).each { |v| found << [type, name, v] if v >= start.to_i }
+      counts = {}
+      script.scan(/Phone\.add\(\s*get_self\s*,\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+))?/) do |type, name, count, start|
+        counts[[type, name, start.to_i]] = [count ? count.to_i : 1, 1].max
       end
-      found.uniq
+      script.scan(/Phone\.battle\(\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, start|
+        first = start.to_i
+        count = counts[[type, name, first]]
+        trainer_versions(type, name).each do |v|
+          found << [type, name, v, true] if v >= first && (count.nil? || v < first + count)
+        end
+      end
+      rematches = found.select { |t| t[3] }.map { |t| t[0, 3] }
+      found.reject { |t| !t[3] && rematches.include?(t[0, 3]) }.uniq
     rescue
       []
     end
@@ -702,6 +717,90 @@ module PEMK
       text = scripts.join("\n")
       { :events => list, :berry_plants => text.include?("pbBerryPlant") || text.include?("pbPickBerry("),
         :mining => text.include?("pbMiningGame") }
+    end
+
+    # === money sources the server cannot credit — money authority M0 ==========
+
+    # Calls that pay by themselves: Triple Triad sells cards for money, the Game Corner's
+    # machines pay coins.
+    MONEY_CALLS = { "pbSellTriads" => "money", "pbSlotMachine" => "coins", "pbVoltorbFlip" => "coins" }.freeze
+    # A script that adds to a balance, or sets it outright.
+    BALANCE_ADD = /(?:\$player|pbPlayer|\$Trainer)\.(money|coins|battle_points)\s*\+=\s*([^\n;]+)/.freeze
+    BALANCE_SET = /(?:\$player|pbPlayer|\$Trainer)\.(money|coins|battle_points)\s*=(?!=)/.freeze
+
+    # Every way an event can raise the player's money, coins or battle points without a
+    # request the server answers: Change Gold (code 125) increases with their literal
+    # amounts (a variable amount is computed), scripts that add to a balance or set it,
+    # and the calls that pay by themselves. A spend is not a source. With the prizes and
+    # the server's own deals, this names every other way money can appear, so enforcement
+    # can refuse to start while any of them is unbounded.
+    # -> { :events => [{ :map, :event | :common_event, :calls, :fields, :amounts, :computed }] }
+    def money_sources(maps_events)
+      list = []
+      maps_events.each do |map_id, event|
+        next unless event && event.respond_to?(:pages) && event.pages
+
+        src = money_source(event.pages.filter_map { |page| page && page.list })
+        list << { :map => map_id, :event => event.id }.merge(src) if src
+      end
+      commons = (load_data("Data/CommonEvents.rxdata") rescue nil)
+      Array(commons).each do |ce|
+        next unless ce && ce.respond_to?(:list) && ce.list
+
+        src = money_source([ce.list])
+        list << { :common_event => ce.id }.merge(src) if src
+      end
+      { :events => list }
+    end
+
+    # -> { :calls, :fields, :amounts, :computed } | nil for the command lists of one event.
+    def money_source(lists)
+      calls    = []
+      fields   = []
+      amounts  = []
+      computed = false
+      lists.each do |list|
+        list.each do |cmd|
+          next unless cmd.respond_to?(:code) && cmd.code == 125 && cmd.parameters && cmd.parameters[0] == 0
+
+          calls << "change_gold"   # an increase; 1 is a decrease
+          fields << "money"
+          if cmd.parameters[1] == 0
+            amounts << cmd.parameters[2].to_i
+          else
+            computed = true        # the amount is read from a variable
+          end
+        end
+        script = list_script(list)
+        next unless script
+
+        script.scan(BALANCE_ADD) do |field, arg|
+          calls << "script"
+          fields << field
+          if arg.strip.match?(/\A\d+\z/)
+            amounts << arg.strip.to_i
+          else
+            computed = true
+          end
+        end
+        script.scan(BALANCE_SET) do |(field)|
+          calls << "script"
+          fields << field
+          computed = true
+        end
+        MONEY_CALLS.each do |call, field|
+          next unless script.include?(call)
+
+          calls << call
+          fields << field
+          computed = true
+        end
+      end
+      return nil if calls.empty?
+
+      { :calls => calls.uniq, :fields => fields.uniq, :amounts => amounts, :computed => computed }
+    rescue
+      nil
     end
 
     # === warps (Transfer Player, code 201) — Layer B/C =========================

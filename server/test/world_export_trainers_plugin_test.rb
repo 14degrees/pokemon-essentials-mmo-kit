@@ -35,16 +35,20 @@ class WorldExportTrainersPluginTest < Minitest::Test
     out[:rematch] = t.(ev.(%q{TrainerBattle.start(:CAMPER, "Jeff")}, %q{Phone.battle(:CAMPER, "Jeff")}))
     out[:start]   = t.(ev.(%q{Phone.battle(:PICNICKER, "Susie", 1)}))
     out[:unknown] = t.(ev.(%q{Phone.battle(:CAMPER, "Nobody")}))
+    # the demo's own registration: two versions, from 0
+    out[:counted] = t.(ev.(%Q{Phone.add(get_self,\n  :CAMPER, "Jeff", 2\n)}, %q{Phone.battle(:CAMPER, "Jeff")}))
     print out.inspect
   RUBY
 
-  def test_a_phone_rematch_places_every_version
+  def test_a_phone_rematch_places_every_version_it_registered
     out = IO.popen([RbConfig.ruby, "-W0", "-e", RUNNER, EXPORT], err: %i[child out], &:read)
     assert $?.success?, "export runner crashed:\n#{out}"
     o = eval(out) # rubocop:disable Security/Eval -- our own runner's inspect output
-    assert_equal [["CAMPER", "Jeff", 0]], o[:plain]
-    assert_equal [["CAMPER", "Jeff", 0], ["CAMPER", "Jeff", 1], ["CAMPER", "Jeff", 2]], o[:rematch]
-    assert_equal [["PICNICKER", "Susie", 3]], o[:start], "from the start version on"
+    assert_equal [["CAMPER", "Jeff", 0, false]], o[:plain]
+    assert_equal [["CAMPER", "Jeff", 0, true], ["CAMPER", "Jeff", 1, true], ["CAMPER", "Jeff", 2, true]], o[:rematch],
+                 "no Phone.add here: every version; the first battle is a rematch's too"
+    assert_equal [["PICNICKER", "Susie", 3, true]], o[:start], "from the start version on"
     assert_equal [], o[:unknown]
+    assert_equal [["CAMPER", "Jeff", 0, true], ["CAMPER", "Jeff", 1, true]], o[:counted], "the versions Phone.add registered"
   end
 end
