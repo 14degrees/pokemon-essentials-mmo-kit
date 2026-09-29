@@ -18,7 +18,8 @@ module PEMK
     # client says it can take (an older one never gets a :flag_repair). gift_pos: it
     # sends where it stands before it asks for a gift, so it can be judged by place.
     # inv_correct: it takes back the items the server could not account for (E4).
-    CAPS = %w[flag_repair trade_redeliver gift_pos inv_correct].freeze
+    # money_claims: it claims its prizes, and holds its money for their verdicts (M3).
+    CAPS = %w[flag_repair trade_redeliver gift_pos inv_correct money_claims].freeze
     ACCOUNT_FILE       = "mmo_account.dat"
     GUEST_ACCOUNT_FILE = "mmo_account_guest.dat"
 
@@ -300,6 +301,7 @@ module PEMK
           PEMK.log("auth: reconcile field #{field} error: #{e.class}: #{e.message}")
         end
       end
+      (PEMK::PrizeClaim.adopted rescue nil) if econ.key?(:money) || econ.key?("money")   # M3: the ledger's money now
       seed_economy(econ)
     end
 

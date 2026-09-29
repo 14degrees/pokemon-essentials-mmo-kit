@@ -88,6 +88,11 @@ module PEMK
         # trusted, non-notifying applier (no echo back). :badges is a bitmask -> decode
         # it; money fields set directly.
         if $player && msg[:field] && msg[:value].is_a?(Integer)
+          # M3: money the server refused - the game goes back to its balance, the money of
+          # any prize claim released into that frame with it.
+          if msg[:type] == :econ_rej && msg[:field] == :money && msg[:reason].to_s == "unexplained"
+            (PrizeClaim.frame_refused rescue nil)
+          end
           value = Sync.econ_reply(msg[:field], msg[:seq], msg[:value])
           if value.nil?
             nil

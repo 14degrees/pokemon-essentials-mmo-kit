@@ -146,7 +146,9 @@ module PEMK
     # under +canon+'s names) in the same transaction as the money, as a sale's leave it.
     # A client that lost the answer and logs in again gets both sides of the deal back
     # from the server. +items+ { item => qty }. -> false when there is no record yet (the
-    # first snapshot brings them).
+    # first snapshot brings them), or no judged totals yet: the first judgment may start
+    # from nothing (a new account), so a credit must explain them there - the bag and the
+    # counts still take them.
     # +paid+: bought with money, so a resale draws on money the server received (M1d).
     # Battle points are the client's word until BP authority: what they buy is counted
     # apart (bp_bought), units that never sell for money.
@@ -168,7 +170,18 @@ module PEMK
       fields = { bag: Sequel.pg_jsonb(bag), column => Sequel.pg_jsonb(count), updated_at: now }
       fields[:judged] = Sequel.pg_jsonb(judged) if judged
       @db[:inventory_snapshots].where(account_id: account_id).update(fields)
-      true
+      judged ? true : false
+    end
+
+    # A traded Pokemon's held item that battle points bought: the receiver's count takes it
+    # (no record yet: nothing to count on).
+    def add_bp_tag(account_id, item, qty, now: Time.now)
+      row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
+      return unless row && qty.positive?
+
+      count = row[:bp_bought].to_h
+      count[item.to_s] = count[item.to_s].to_i + qty
+      @db[:inventory_snapshots].where(account_id: account_id).update(bp_bought: Sequel.pg_jsonb(count), updated_at: now)
     end
 
     # A sale spends the units the server sold first. -> how many of +qty+ it had sold.
@@ -188,14 +201,15 @@ module PEMK
       used
     end
 
-    # A judged snapshot: no more bought units than the possession holds (+totals+, by
-    # canonical id) - one used or tossed is gone, whichever unit it was. Both counts.
-    def clamp_bought(account_id, totals)
+    # No more counted units than the possession holds (+totals+, by canonical id) - one
+    # used or tossed is gone, whichever unit it was. +columns+: the counts to lower - the
+    # BP one only against judged totals, since a lower count frees units to sell.
+    def clamp_bought(account_id, totals, columns: %i[bought])
       row = @db[:inventory_snapshots].where(account_id: account_id).first
       return unless row
 
       fields = {}
-      %i[bought bp_bought].each do |column|
+      columns.each do |column|
         count = row[column].to_h
         next if count.empty?
 

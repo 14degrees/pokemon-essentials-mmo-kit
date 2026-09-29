@@ -104,14 +104,24 @@ class ServerItemLedgerTest < Minitest::Test
     end
   end
 
-  def login(email, register: true, caps: %w[trade_redeliver])
+  # +older+: an account from before item authority ran, with a save - its first snapshot
+  # the baseline (these tests' own premise); false - one the server saw born, judged from
+  # nothing.
+  def login(email, register: true, caps: %w[trade_redeliver], older: true)
     s = TCPSocket.new("127.0.0.1", @port)
     if register
       send_env(s, { type: :register, email: email, password: "password1" })
       recv_type(s, :register_ok, :register_err)
+      older_account(email) if older
     end
     send_env(s, { type: :login, email: email, password: "password1", caps: caps })
     [s, recv_type(s, :login_ok)]
+  end
+
+  def older_account(email)
+    id = @db[:accounts].where(email: email).get(:id)
+    @db[:accounts].where(id: id).update(items_from_zero: false)
+    PEMK::Characters.new(@db).store(id, blob: "\x04\b0".b) if @db[:characters].where(account_id: id).empty?
   end
 
   def st(pc: {}, mail: {}, held: nil, holders: {})
@@ -206,6 +216,16 @@ class ServerItemLedgerTest < Minitest::Test
     assert_empty owing(lo[:account_id])
   end
 
+  # ... unless the server saw the account born: then it starts from nothing, and a first
+  # snapshot declaring items owes them (the PC's start items excepted).
+  def test_a_new_account_starts_from_nothing
+    start_server
+    s, lo = login("il2n@t.co", older: false)
+    assert_equal true, @db[:accounts].where(id: lo[:account_id]).get(:items_from_zero)
+    inv(s, 1, { POTION: 5 }, st(pc: { ANTIDOTE: 2 }))
+    assert_equal [["ANTIDOTE", -2], ["POTION", -4]], owing(lo[:account_id]).sort, "the PC's start Potion excepted"
+  end
+
   def test_a_granted_pickup_explains_its_quantity
     start_server("PEMK_PICKUP_ENFORCE" => "on")
     s, lo = login("il3@t.co")
@@ -245,6 +265,61 @@ class ServerItemLedgerTest < Minitest::Test
     # The purchase joined the record: no credit is left over to explain ten more.
     inv(s, 3, { POKEBALL: 20, PREMIERBALL: 1 })
     assert_equal [["POKEBALL", -10]], owing(lo[:account_id])
+  end
+
+  # A new account buys before its first full snapshot: judged from nothing, the purchase
+  # is explained by a credit - the record had no judged totals to join.
+  def test_a_new_accounts_first_purchase_is_explained
+    start_server("PEMK_SHOP_ENFORCE" => "on")
+    s, lo = login("il5n@t.co", older: false)
+    send_env(s, { type: :econ, field: :money, value: 5000, seq: 1 })
+    recv_type(s, :econ_ack, :econ_rej)
+    inv(s, 1, {}, nil)   # bag-only: nothing judged yet
+    send_env(s, { type: :shop_req, op: :buy, item: "POKEBALL", quantity: 10, unit_price: 200, map: 15, event: 5, seq: 1 })
+    assert_equal :shop_grant, recv_type(s, :shop_grant, :shop_deny)[:type]
+    inv(s, 2, { POKEBALL: 10, PREMIERBALL: 1 })
+    assert_empty owing(lo[:account_id])
+  end
+
+  # An account that had never played when the flag came has no history to trust: the
+  # backfill flags it, once - a save sent afterwards changes nothing.
+  def test_accounts_that_never_played_are_flagged_once
+    start_server
+    ids = %w[bf-played bf-recorded bf-never].to_h do |name|
+      id = @db[:accounts].insert(email: "#{name}@t.co", password_hash: "x", status: "active", created_at: Time.now)
+      [name, id]
+    end
+    PEMK::Characters.new(@db).store(ids["bf-played"], blob: "\x04\b0".b)
+    @db[:inventory_snapshots].insert(account_id: ids["bf-recorded"], bag: Sequel.pg_jsonb({}), updated_at: Time.now)
+    Sequel.extension :migration
+    backfill = eval(File.read(File.expand_path("../db/migrate/040_items_from_zero_backfill.rb", __dir__))) # rubocop:disable Security/Eval -- our own migration file
+    backfill.apply(@db, :up)
+    flags = ids.transform_values { |id| @db[:accounts].where(id: id).get(:items_from_zero) }
+    assert_equal({ "bf-played" => false, "bf-recorded" => false, "bf-never" => true }, flags)
+    PEMK::Characters.new(@db).store(ids["bf-never"], blob: "\x04\b0".b)   # saving later
+    assert_equal({}, @server.send(:from_zero, ids["bf-never"]), "still judged from nothing")
+    assert_nil @server.send(:from_zero, ids["bf-played"])
+    assert_nil @server.send(:from_zero, ids["bf-recorded"]), "only the flag counts: nothing a client can still send"
+  end
+
+  # At every boot item authority runs, the accounts that never played are marked the same
+  # way - registered while it was off, or with a new game's empty record and no save.
+  def test_a_boot_marks_the_accounts_that_never_played
+    start_server
+    ids = %w[bt-played bt-holding bt-empty bt-judged bt-never].to_h do |name|
+      id = @db[:accounts].insert(email: "#{name}@t.co", password_hash: "x", status: "active", created_at: Time.now)
+      [name, id]
+    end
+    PEMK::Characters.new(@db).store(ids["bt-played"], blob: "\x04\b0".b)
+    { "bt-holding" => { bag: Sequel.pg_jsonb({ "POTION" => 1 }) }, "bt-empty" => {},
+      "bt-judged" => { judged: Sequel.pg_jsonb({}) } }.each do |name, cols|
+      @db[:inventory_snapshots].insert({ account_id: ids[name], bag: Sequel.pg_jsonb({}), updated_at: Time.now }.merge(cols))
+    end
+    @server.send(:flag_accounts_from_zero)
+    flags = ids.transform_values { |id| @db[:accounts].where(id: id).get(:items_from_zero) }
+    assert_equal({ "bt-played" => false, "bt-holding" => false, "bt-empty" => true, "bt-judged" => false,
+                   "bt-never" => true }, flags)
+    assert(logs.any? { |l| l.include?("2 account(s) that never played start from nothing") })
   end
 
   def test_a_bp_exchange_explains_its_item

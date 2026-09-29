@@ -138,7 +138,7 @@ module Autotest
     # balance first, so only the game's own sources are judged.
     def explain_money_setup(player, value)
       cur = player.state.dig("trainer", "money").to_i
-      server.explain_money(account_id(player), value.to_i - cur)
+      server.explain_money(account_id(player), value.to_i - cur, total: value.to_i)
     end
 
     def item_authority?

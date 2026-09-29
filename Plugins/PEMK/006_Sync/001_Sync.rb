@@ -226,8 +226,13 @@ module PEMK
       # A gated deal in doubt (E3): the money and the items wait for its outcome, so the
       # server's ledger and record still hold the deal when its answer comes back.
       doubt = (PEMK::Shop.holding? rescue false)
+      # M3: the money waits for the verdicts of the prizes the engine added this session,
+      # so the server never judges a frame ahead of its claims.
+      held = !doubt && (PEMK::PrizeClaim.holding? rescue false)
       unless doubt
         @econ.each do |field, value|
+          next if held && field == :money
+
           seq = (@seq[:economy] += 1)
           c.send_message({ :type => :econ, :field => field, :value => value, :seq => seq })
           @econ_sent[field] = [seq, value]
@@ -310,7 +315,9 @@ module PEMK
         end
         @mon_dirty = more ? true : false   # stay dirty while mints remain pending
       end
-      @econ = {} unless doubt
+      unless doubt
+        @econ = held && @econ.key?(:money) ? { :money => @econ[:money] } : {}
+      end
       # If a channel is still dirty (e.g. the bag couldn't be read this pass so
       # @inv_dirty stayed set), keep the debounce/staleness clocks armed so tick()
       # retries — resetting them unconditionally would strand the pending snapshot.

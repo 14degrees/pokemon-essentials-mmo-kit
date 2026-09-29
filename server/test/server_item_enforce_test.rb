@@ -96,11 +96,16 @@ class ServerItemEnforceTest < Minitest::Test
     nil
   end
 
+  # An account from before item authority ran (its first snapshot the baseline): these
+  # tests' premise.
   def login(email, register: true, caps: %w[inv_correct trade_redeliver])
     s = TCPSocket.new("127.0.0.1", @port)
     if register
       send_env(s, { type: :register, email: email, password: "password1" })
       recv_type(s, :register_ok, :register_err)
+      id = @db[:accounts].where(email: email).get(:id)
+      @db[:accounts].where(id: id).update(items_from_zero: false)
+      PEMK::Characters.new(@db).store(id, blob: "\x04\b0".b) if @db[:characters].where(account_id: id).empty?
     end
     send_env(s, { type: :login, email: email, password: "password1", caps: caps })
     [s, recv_type(s, :login_ok)]

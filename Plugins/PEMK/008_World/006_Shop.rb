@@ -36,6 +36,7 @@ module PEMK
   module Shop
     RECHECK_AFTER = 10.0   # seconds before a deal in doubt is asked about again
     RECHECK_MAX   = 12     # asked this often with no answer: the doubt is dropped (logged)
+    CLAIMS_WAIT   = 8.0    # M3: seconds a deal waits for this session's prize verdicts
 
     @gate    = false
     @bp_gate = false
@@ -106,6 +107,9 @@ module PEMK
     # -> reply Hash (:shop_grant / :shop_deny) | nil (no answer). +op+ :buy | :sell.
     def ask(op, item, qty, unit_price, bp: false)
       return { :type => :shop_deny, :reason => "doubt" } if holding?
+      # M3: the server judges the money it holds - this session's prizes get their
+      # verdicts first, so their money is there (or corrected) when it does.
+      return { :type => :shop_deny, :reason => "claims" } unless (PEMK::PrizeClaim.settle(CLAIMS_WAIT) rescue true)
 
       ctx = (PEMK::GiftClaim.context rescue nil)
       (PEMK::Sync.flush_primitives rescue nil)   # the money the server judges is ours
@@ -164,6 +168,9 @@ module PEMK
       when "not_sold" then _INTL("Sorry, that isn't something I sell.")
       when "not_held" then _INTL("You don't seem to have that.")
       when "doubt"    then _INTL("I'm still waiting to hear back about your last order. Please try again in a moment.")
+      when "claims"   then _INTL("One moment, please. Try again in a few seconds.")
+      when "bp_bought" then _INTL("I'm sorry, I can't buy that back. It came from the Battle Point exchange.")
+      when "local_daily" then _INTL("I'm sorry, I've bought all I can of those from you today. Please come back tomorrow.")
       when ""         then _INTL("The shop can't reach the server right now. Please try again.")
       else _INTL("Sorry, I can't do that right now.")
       end
