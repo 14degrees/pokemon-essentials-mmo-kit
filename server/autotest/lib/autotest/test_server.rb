@@ -77,6 +77,21 @@ module Autotest
       Timeout.timeout(10) { done.pop }
     end
 
+    # The next +times+ saves of +account_id+ are not written, as on a database error.
+    def fail_saves(account_id, times = 1)
+      left = times
+      chars = @server.instance_variable_get(:@characters)
+      chars.singleton_class.prepend(Module.new do
+        define_method(:store) do |aid, **kw|
+          if aid == account_id && left.positive?
+            left -= 1
+            raise "autotest: the database refused the save"
+          end
+          super(aid, **kw)
+        end
+      end)
+    end
+
     # Keeps +account_id+'s mailbox busy for +seconds+: what the account asks meanwhile is
     # answered late, as by a slow server.
     def hold_account(account_id, seconds)

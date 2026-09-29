@@ -19,6 +19,9 @@ module PEMK
     DEBOUNCE_FRAMES   = 30      # ~0.5 s of quiescence before an idle flush
     STALENESS_FRAMES  = 300     # ~5 s hard cap: never hold a dirty change longer
     BLOB_MIN_INTERVAL = 30.0    # seconds between throttled (non-forced) blob pushes
+    SAVE_ACK_WAIT     = 30.0    # seconds for the server to say a pushed save was written
+    SAVE_RETRY_FIRST  = 5.0     # a save not written goes out again after this; doubles each time
+    SAVE_RETRY_MAX    = 60.0
 
     @econ        = {}           # field => latest absolute value (coalesced; badges ride here as a :badges bitmask)
     @econ_sent   = {}           # field => [seq, value] of its latest frame (an answer to an older one is stale)
@@ -34,6 +37,11 @@ module PEMK
     @blob_at     = -1.0e18
     @blob_hash   = nil
     @blob_fseq   = 0        # flags seq the on-disk blob was serialized at
+    @save_ack     = false   # the server answers each save written or not (login flag)
+    @save_unacked = nil     # { :seq, :at } of the last pushed save, until its answer
+    @save_retry   = SAVE_RETRY_FIRST
+    @save_wait    = nil     # mono before which a save not written is not sent again
+    @save_failing = false   # the player was told saves fail: tell them when one lands
 
     module_function
 
@@ -71,6 +79,17 @@ module PEMK
       @blob_at = -1.0e18
       @blob_hash = nil
       @blob_fseq = 0
+      @save_ack = false
+      @save_unacked = nil
+      @save_retry = SAVE_RETRY_FIRST
+      @save_wait = nil
+      @save_failing = false
+    end
+
+    # The server says it answers each save (login/auth flag). An older one never does:
+    # its saves are trusted once sent, as before.
+    def adopt_save_ack(v)
+      @save_ack = v == true
     end
 
     # Adopt the server's canonical next-seq authority on (re)connect (from the
@@ -202,6 +221,7 @@ module PEMK
 
     # --- per-frame tick (from Pump): debounce + staleness cap ------------------
     def tick
+      watch_save_ack
       return unless dirty?
       # Nothing leaves mid-battle: the EXP a battle (or a catch) gives must reach the
       # server after the battle's end report, which opens the reward window it is
@@ -337,7 +357,11 @@ module PEMK
       return :offline unless c && c.connected? && File.file?(save_file)
 
       now = mono
-      return :throttled if !force && (now - @blob_at) < BLOB_MIN_INTERVAL
+      if @save_wait
+        return :throttled if !force && now < @save_wait   # a save not written: sent again at its time
+      elsif !force && (now - @blob_at) < BLOB_MIN_INTERVAL
+        return :throttled
+      end
 
       raw = File.binread(save_file)
       h = raw.hash
@@ -349,11 +373,58 @@ module PEMK
       c.send_message({ :type => :save, :seq => (@seq[:save] += 1), :flags_seq => @blob_fseq }, raw)
       @blob_hash = h
       @blob_at = now
+      @save_wait = nil
+      @save_unacked = { :seq => @seq[:save], :at => now } if @save_ack
       PEMK.log("sync: pushed save blob (#{raw.bytesize}B, seq #{@seq[:save]})")
       :pushed
     rescue => e
       PEMK.log("sync: blob push failed: #{e.class}: #{e.message}")
       :offline
+    end
+
+    # The server's word on a pushed save (:save_ok / :save_err, naming its seq). Only the
+    # latest save counts: an answer to an older one is overtaken by the newer save's.
+    def on_save_reply(msg)
+      seq = msg[:seq]
+      return unless seq.is_a?(Integer) && seq == @seq[:save]
+
+      if msg[:type] == :save_ok
+        @save_unacked = nil
+        @save_retry = SAVE_RETRY_FIRST
+        return unless @save_failing
+
+        @save_failing = false
+        (PEMK::NetStatus.reset_key(:save_failed) rescue nil)
+        (PEMK::NetStatus.notify(nil, _INTL("Your progress is saving online again.")) rescue nil)
+      elsif msg[:reason] == "too_large"
+        @save_unacked = nil   # the same bytes would be refused again
+        PEMK.log("sync: save too large for the server (max #{msg[:max]}B)")
+        (PEMK::NetStatus.notify(:save_too_large, _INTL("This save is too large for the server: your progress is only kept on this computer.")) rescue nil)
+      else
+        save_not_written("the server could not write it (#{msg[:reason]})")
+      end
+    end
+
+    # A save pushed SAVE_ACK_WAIT ago that the server never answered is sent again. With
+    # the connection gone, the reconnect sends the save anyway.
+    def watch_save_ack
+      return unless @save_unacked
+
+      c = PEMK.client
+      return (@save_unacked = nil) unless c && c.connected?
+
+      save_not_written("no answer in #{SAVE_ACK_WAIT.to_i}s") if mono - @save_unacked[:at] > SAVE_ACK_WAIT
+    end
+
+    def save_not_written(why)
+      PEMK.log("sync: save not written (#{why}) -> sent again in #{@save_retry.to_i}s")
+      @save_unacked = nil
+      @blob_hash = nil                     # the same bytes go out again
+      @save_wait = mono + @save_retry
+      @save_retry = [@save_retry * 2, SAVE_RETRY_MAX].min
+      @save_failing = true
+      (PEMK::Checkpoint.push_later rescue nil)
+      (PEMK::NetStatus.notify(:save_failed, _INTL("Your progress could not be saved to the server. Trying again...")) rescue nil)
     end
 
     def touch

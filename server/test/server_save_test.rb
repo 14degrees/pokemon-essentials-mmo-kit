@@ -120,4 +120,78 @@ class ServerSaveTest < Minitest::Test
     assert_equal evil, stored.to_s, "hostile bytes stored verbatim"
     c.close
   end
+
+  # Durability: a client that asks is told whether each save was written, so it sends
+  # one again instead of trusting a save that never landed.
+  def login_with(sock, user, pw, caps)
+    send_env(sock, { type: :login, email: "#{user}@t.co", password: pw, caps: caps })
+    recv(sock)
+  end
+
+  # The first frame of +type+, or nil when none comes within +timeout+. (IO.select, not
+  # a Timeout inside recv's: a nested Timeout can fire after its block has ended.)
+  def next_of(sock, type, timeout = 3)
+    deadline = Time.now + timeout
+    loop do
+      left = deadline - Time.now
+      return nil if left <= 0 || !IO.select([sock], nil, nil, left)
+
+      hdr = sock.read(4)
+      return nil unless hdr
+
+      env = W.decode_envelope(sock.read(hdr.unpack1("N")), false)[:env]
+      return env if env[:type] == type
+    end
+  end
+
+  def test_a_written_save_is_answered
+    c = open_conn
+    register(c, "Ash", "pikachu111")
+    lo = login_with(c, "Ash", "pikachu111", %w[save_ack])
+    assert_equal true, lo[:env][:save_ack], "the login says saves are answered"
+    send_env(c, { type: :save, seq: 7 }, Marshal.dump({ money: 1 }))
+    ok = next_of(c, :save_ok)
+    refute_nil ok
+    assert_equal 7, ok[:seq]
+    refute_nil @db[:characters].where(account_id: lo[:env][:account_id]).get(:save_blob), "answered once written"
+    c.close
+  end
+
+  def test_an_older_client_is_not_answered
+    c = open_conn
+    register(c, "Misty", "starmie111")
+    login_with(c, "Misty", "starmie111", [])
+    send_env(c, { type: :save, seq: 1 }, Marshal.dump({ money: 1 }))
+    assert_nil next_of(c, :save_ok, 1.5)
+    c.close
+  end
+
+  def test_a_save_the_database_refuses_is_answered_as_not_written
+    c = open_conn
+    register(c, "Brock", "onix111111")
+    id = login_with(c, "Brock", "onix111111", %w[save_ack])[:env][:account_id]
+    chars = @server.instance_variable_get(:@characters)
+    chars.define_singleton_method(:store) { |*, **| raise Sequel::DatabaseError, "disk full" }
+    sealed = []
+    deliveries = @server.instance_variable_get(:@trade_deliveries)   # on by default
+    refute_nil deliveries
+    deliveries.define_singleton_method(:seal) { |aid| sealed << aid }
+    send_env(c, { type: :save, seq: 3 }, Marshal.dump({ money: 1 }))
+    err = next_of(c, :save_err)
+    refute_nil err
+    assert_equal [3, "store_failed"], [err[:seq], err[:reason]]
+    assert_nil @db[:characters].where(account_id: id).get(:save_blob)
+    assert_empty sealed, "nothing that counts on the save runs"
+    c.close
+  end
+
+  def test_a_save_too_large_names_its_seq
+    c = open_conn
+    register(c, "Gary", "eevee11111")
+    login_with(c, "Gary", "eevee11111", %w[save_ack])
+    send_env(c, { type: :save, seq: 9 }, "x" * (PEMK::Server::SAVE_MAX_BYTES + 1))
+    err = next_of(c, :save_err)
+    assert_equal [9, "too_large"], [err[:seq], err[:reason]]
+    c.close
+  end
 end

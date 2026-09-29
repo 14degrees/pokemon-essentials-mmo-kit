@@ -73,6 +73,12 @@ module PEMK
       @activity = true
     end
 
+    # Sync: the server did not write the last save. The retry loop in tick sends it
+    # again (Sync.push_blob holds it until its time).
+    def push_later
+      @push_pending = true
+    end
+
     # Manual-save accounting, called AFTER the commit with its real outcome.
     # Only a SUCCESSFUL local write clears the pending auto work (a failed manual
     # save must not swallow an armed auto request or bump the periodic clock),

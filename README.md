@@ -31,7 +31,8 @@ truth for money, items and Pokémon (and, on the roadmap, gameplay itself).
   does), safe against duplication and disconnect mid-trade.
 - **Event-driven auto-save** — progress is checkpointed automatically at safe
   moments (no manual Save): important changes flush within a second, ambient
-  state on a short timer, plus a backstop when the window closes.
+  state on a short timer, plus a backstop when the window closes. The server says
+  whether each save was written; one it could not write is sent again.
 - **Synchronized PvP battles** — challenge another player on your map; a real,
   deterministic battle runs on both screens (the challenger's RNG stream is
   authoritative and replayed by the other side), each seeing their own team.

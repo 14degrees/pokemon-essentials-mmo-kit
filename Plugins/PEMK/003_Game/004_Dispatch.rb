@@ -57,6 +57,8 @@ module PEMK
         NetStatus.on_replaced            # logged in elsewhere: this window stays offline
       when :banned
         NetStatus.on_banned(msg)         # the operator suspended the account: offline, told why
+      when :save_ok, :save_err
+        Sync.on_save_reply(msg)          # a pushed save written, or to be sent again
       when :flag_repair
         Flags.note_repair(msg)           # step 5: owned values back to the server's
       when :inv_correct
