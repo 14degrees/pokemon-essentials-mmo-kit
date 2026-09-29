@@ -15,7 +15,7 @@ module PEMK
     ].freeze
 
     PBS_DATA = %w[003_Type 004_Ability 005_Move 006_Item 008_Species
-                  010_SpeciesMetrics 012_Ribbon 014_TrainerType
+                  010_SpeciesMetrics 012_Ribbon 014_TrainerType 015_Trainer
                   016_Metadata 017_PlayerMetadata].freeze   # Player.new reads Metadata.start_money
 
     POKEMON_TREE = [
@@ -31,7 +31,7 @@ module PEMK
       "013_Items/001_Item_Utilities.rb"                # the REAL ItemHandlers module
     ].freeze
 
-    GAMEDATA_CLASSES = %w[Type Ability Move Item Species SpeciesMetrics Ribbon TrainerType
+    GAMEDATA_CLASSES = %w[Type Ability Move Item Species SpeciesMetrics Ribbon TrainerType Trainer
                           Metadata PlayerMetadata].freeze
 
     module_function

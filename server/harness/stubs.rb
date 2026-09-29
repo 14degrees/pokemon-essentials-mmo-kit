@@ -32,6 +32,27 @@ def nil_or_empty?(str)
   return str.nil? || !str.is_a?(String) || str.empty?
 end
 
+# The map the battle is on (a record names it; -1 when an older one does not): a
+# level-up's happiness gain counts one more on the map a Pokemon was obtained on. Map
+# metadata (forms, evolutions) reads nil headless.
+class HarnessMap
+  attr_accessor :map_id
+
+  def initialize
+    @map_id = -1
+  end
+
+  def metadata; nil; end
+end
+$game_map = HarnessMap.new
+
+# 001_Technical/002_RubyUtilities.rb (not loaded): a trainer battle's prize message.
+class Integer
+  def to_s_formatted
+    to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse
+  end
+end
+
 class Module
   def deprecated_method_alias(old_name, new_name, removal_in: nil)
     alias_method(old_name, new_name) if method_defined?(new_name) || private_method_defined?(new_name)
