@@ -288,15 +288,22 @@ blocked. **Spawn/respawn is server-owned:** the last-good position is persisted
 
 **Water.** The passability grid counts every water tile as a wall. The world export
 also marks, per map, where a surfer may be (`water` rows: `w`, the engine's rule for
-a surfer, waterfalls included) and where Dive goes down or comes up (`d`), with the
-map's `dive_map`. A frame that says it surfs is a no-clip unless its tile is water;
-a diver walks the map below under the normal rule; and Dive is a legal map change
-only from deep water to the same tile of the map below, or back up onto deep water.
-An export from before these marks cannot tell water from walls: surfers are trusted
-there and a dive reads as an illegal warp, and the boot warns (one debug launch
-regenerates the export). Autotest `080_swim` surfs, dives and lands on Route 8, and
-flags a modified client that surfs into the cliff, dives from shallow water or walks
-through rock underwater.
+a surfer, waterfalls included), where Dive also goes down or comes up (`d`), and deep
+water under a rock (`x`: the engine lets a diver come up onto it, no surfer reaches
+it), with the map's `dive_map` and, on a map below, the `surface_map` the engine
+brings a diver up to. A frame that says it surfs is a no-clip unless its tile is
+water; a diver walks the map below under the normal rule; and Dive is a legal map
+change only from deep water to that very tile of the map below (wrapped into a
+smaller map, as the engine does), or back up to the surface map onto deep water. A
+snap-back keeps a swimmer swimming (surfing on water, diving below): on foot on water
+it could never move again. An export from before these marks cannot tell water from
+walls: surfers are trusted there and a dive reads as an illegal warp, and the boot
+warns (one debug launch regenerates the export). Autotest `080_swim` surfs, dives,
+is sent back three ways and lands on Route 8, and flags a modified client that surfs
+into the cliff, dives from shallow water or walks through rock underwater. Still
+open: the mode is the client's word, so surfing without Surf (or its badge) is not
+checked, and a two-tile hop over a rock between two water tiles is only a (logged)
+teleport.
 
 The end state for Layer B:
 

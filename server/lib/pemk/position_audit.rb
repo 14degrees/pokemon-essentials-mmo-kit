@@ -149,17 +149,21 @@ module PEMK
         dive?(prev, map, x, y)                # down from deep water, or back up onto it
     end
 
-    # Dive takes the player to the same tile of the map below (the map's DiveMap), from
-    # deep water; surfacing brings it back up onto deep water. (The first frame may come
-    # a step past, as after any warp.)
+    # Dive takes the player from deep water to the same tile of the map below (its
+    # DiveMap; Game_Character#moveto wraps it into a smaller map). Surfacing brings it
+    # back up to the same tile of the map the engine picks (the first whose DiveMap this
+    # is), where that tile is deep. The game reports the arrival tile itself, so no
+    # slack: a step off it could be a wall.
     def dive?(prev, map, x, y)
       pmap, px, py = prev
-      return false unless [(x - px).abs, (y - py).abs].max <= ARRIVAL_REACH
+      down = @world.dive_map(pmap) == map && @world.deep?(pmap, px, py) && [x, y] == wrap(map, px, py)
+      up   = @world.surface_map(pmap) == map && @world.deep?(map, px, py) && [x, y] == [px, py]
+      down || up
+    end
 
-      surface = if @world.dive_map(pmap) == map then pmap
-                elsif @world.dive_map(map) == pmap then map
-                end
-      !surface.nil? && @world.deep?(surface, px, py)
+    def wrap(map, x, y)
+      w, h = @world.dims(map)
+      w.to_i.positive? && h.to_i.positive? ? [x % w, y % h] : [x, y]
     end
 
     # On (or a step past) a tile a warp on +pmap+ lands on, or a start / home / heal

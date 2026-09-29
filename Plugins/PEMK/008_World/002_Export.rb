@@ -12,8 +12,10 @@
 # (Layer D); and top-level: map CONNECTIONS (edge stitching), HOME and START
 # (respawn/genesis whitelist). Passability is H hex-nibble row strings (W chars),
 # nibble = the ground tile's RMXP passage bits, 0x0f ('f') == fully blocked.
-# WATER rows mark where a surfer may be ('w') and where Dive goes down or comes up
-# ('d'); DIVE_MAP is the map below. The passability grid counts water as walls.
+# WATER rows mark where a surfer may be ('w'), where Dive also goes down or comes up
+# ('d'), and deep water under a rock ('x': a diver comes up there, no surfer goes);
+# DIVE_MAP is the map below, SURFACE_MAP (on a map below) the one a diver comes up to.
+# The passability grid counts water as walls.
 #
 # Triggered from the F9 debug menu ("PEMK: Export World"), so it never ships to
 # players and needs no core-script edit. JSON is hand-rolled (mkxp-z has no
@@ -66,12 +68,13 @@ module PEMK
         ledges      = map_ledges(map)
         water       = map_water(map)
         dive        = dive_map_of(map_id)
+        surface     = surface_map_of(map_id)
         heal        = map_heal(map_id)
         enc         = map_encounters(map_id)
 
         # Emit a map only if it carries at least one useful fact.
         next if objects.empty? && warps.empty? && passability.nil? && heal.nil? && enc.nil? && ledges.empty? &&
-                trainers.empty? && water.nil? && dive.nil?
+                trainers.empty? && water.nil? && dive.nil? && surface.nil?
 
         entry = { :name => map_name(mapinfos, map_id), :width => map.width, :height => map.height,
                   :objects => objects }
@@ -80,6 +83,7 @@ module PEMK
         entry[:ledges]      = ledges      unless ledges.empty?
         entry[:water]       = water       if water
         entry[:dive_map]    = dive        if dive
+        entry[:surface_map] = surface     if surface
         entry[:heal]        = heal        if heal
         entry[:encounters]  = enc         if enc
         entry[:trainers]    = trainers    unless trainers.empty?
@@ -1122,8 +1126,10 @@ module PEMK
     # === water — Layer B for surfers and divers =================================
 
     # -> Array of H row strings (W chars) | nil when the map holds no water. 'w' where a
-    # surfer may be, 'd' where it may also dive or surface, '.' elsewhere. The
-    # passability grid flattens water to walls; this says which of them a surfer crosses.
+    # surfer may be, 'd' where it may also dive or surface, 'x' deep water under a rock
+    # (terrain_tag skips the rock, so a diver may come up onto it; no surfer gets there),
+    # '.' elsewhere. The passability grid flattens water to walls; this says which of
+    # them a surfer crosses.
     def map_water(map)
       return nil unless $data_tilesets
 
@@ -1138,8 +1144,11 @@ module PEMK
       rows = Array.new(map.height) do |y|
         row = +""
         map.width.times do |x|
-          c = if deep_tile?(data, x, y, terrain_tags) then "d"
-              elsif surf_tile?(data, x, y, passages, priorities, terrain_tags) then "w"
+          surf = surf_tile?(data, x, y, passages, priorities, terrain_tags)
+          deep = deep_tile?(data, x, y, terrain_tags)
+          c = if surf && deep then "d"
+              elsif surf then "w"
+              elsif deep then "x"
               else "."
               end
           any ||= c != "."
@@ -1196,6 +1205,17 @@ module PEMK
       md = (GameData::MapMetadata.try_get(map_id) rescue nil)
       d = md && md.dive_map_id
       d.is_a?(Integer) && d > 0 ? d : nil
+    rescue
+      nil
+    end
+
+    # The map a diver on this one comes up to: the first whose DiveMap it is, in the
+    # order pbSurfacing searches | nil.
+    def surface_map_of(map_id)
+      GameData::MapMetadata.each do |md|
+        return md.id if md.dive_map_id == map_id
+      end
+      nil
     rescue
       nil
     end
