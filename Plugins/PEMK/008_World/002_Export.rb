@@ -35,6 +35,7 @@ module PEMK
       all_events = []   # [map_id, event] for the item sources (item authority E1b)
       @common_events = nil      # read again: the dev may have edited them since the last export
       @trainer_versions = nil   # ... and the trainers
+      @rematches_possible = nil # ... and whether the phone can ever offer a rematch
       mapinfos.keys.sort.each do |map_id|
         map = (load_data(sprintf("Data/Map%03d.rxdata", map_id)) rescue nil)
         next unless map && map.respond_to?(:events) && map.events
@@ -607,6 +608,8 @@ module PEMK
         counts[[type, name, start.to_i]] = [count ? count.to_i : 1, 1].max
       end
       script.scan(/Phone\.battle\(\s*:([A-Za-z0-9_]+)\s*,\s*"([^"]*)"(?:\s*,\s*(\d+))?/) do |type, name, start|
+        next unless rematches_possible?   # never ready for a rematch: this call never runs
+
         first = start.to_i
         count = counts[[type, name, first]]
         trainer_versions(type, name).each do |v|
@@ -617,6 +620,32 @@ module PEMK
       found.reject { |t| !t[3] && rematches.include?(t[0, 3]) }.uniq
     rescue
       []
+    end
+
+    # Can a phone contact of this game ever be ready for a rematch? The settings may allow
+    # it from the start, or an event may turn it on (Phone.rematches_enabled). Otherwise
+    # Phone.battle never runs - the demo's contacts were exported as rematches it can never
+    # fight. Read once per export.
+    def rematches_possible?
+      return @rematches_possible unless @rematches_possible.nil?
+
+      from_start = (Settings::PHONE_REMATCHES_POSSIBLE_FROM_BEGINNING rescue false) ? true : false
+      @rematches_possible = from_start || any_script_includes?("rematches_enabled")
+    end
+
+    # Does any map event or common event script mention +text+?
+    def any_script_includes?(text)
+      infos = (load_data("Data/MapInfos.rxdata") rescue nil) || {}
+      in_maps = infos.keys.any? do |id|
+        map = (load_data(sprintf("Data/Map%03d.rxdata", id)) rescue nil)
+        map && map.respond_to?(:events) && map.events &&
+          map.events.values.any? { |ev| (event_script(ev) || "").include?(text) }
+      end
+      in_maps || Array((load_data("Data/CommonEvents.rxdata") rescue nil)).any? do |ce|
+        ce && ce.respond_to?(:list) && ce.list && (list_script(ce.list) || "").include?(text)
+      end
+    rescue StandardError
+      false
     end
 
     # The versions the trainer data holds for +type+ and +name+, read once per export.

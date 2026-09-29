@@ -14,7 +14,8 @@ module PEMK
                 :battle_enforce_exp, :battle_enforce_rng, :corpus_retention_days,
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
-                :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority
+                :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority,
+                :money_payday_daily
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -202,6 +203,14 @@ module PEMK
       # the ledger unchanged. on is enforcement (M3); until it exists, on runs as shadow.
       mmode = env.fetch("PEMK_MONEY_AUTHORITY", "off").to_s.strip.downcase
       @money_authority = %w[off shadow on].include?(mmode) ? mmode.to_sym : :off
+      # The Pay Day an account may be credited per day (dollars) until battle records prove
+      # each use: a mint is handed out on request, so without them Pay Day is only bounded.
+      # A number, or "none" for no allowance cap. Default 20000.
+      raw = env.fetch("PEMK_MONEY_PAYDAY_DAILY", "").to_s.strip.downcase
+      @money_payday_daily = if raw == "none" then nil
+                            elsif raw.match?(/\A\d+\z/) then raw.to_i
+                            else 20_000
+                            end
 
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
