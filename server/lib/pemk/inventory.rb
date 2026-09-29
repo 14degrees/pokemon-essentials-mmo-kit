@@ -147,7 +147,9 @@ module PEMK
     # A client that lost the answer and logs in again gets both sides of the deal back
     # from the server. +items+ { item => qty }. -> false when there is no record yet (the
     # first snapshot brings them).
-    def add_bought(account_id, items, canon: ->(i) { i }, now: Time.now)
+    # +paid+: bought with money, so a resale draws on money the server received (M1d).
+    # Battle points are the client's word until BP authority: what they buy is not counted.
+    def add_bought(account_id, items, canon: ->(i) { i }, paid: true, now: Time.now)
       row = @db[:inventory_snapshots].where(account_id: account_id).for_update.first
       return false unless row && row[:bag]
 
@@ -159,7 +161,7 @@ module PEMK
 
         bag[item.to_s] = bag[item.to_s].to_i + qty
         judged[canon.call(item.to_s)] = judged[canon.call(item.to_s)].to_i + qty if judged
-        bought[canon.call(item.to_s)] = bought[canon.call(item.to_s)].to_i + qty
+        bought[canon.call(item.to_s)] = bought[canon.call(item.to_s)].to_i + qty if paid
       end
       fields = { bag: Sequel.pg_jsonb(bag), bought: Sequel.pg_jsonb(bought), updated_at: now }
       fields[:judged] = Sequel.pg_jsonb(judged) if judged

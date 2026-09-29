@@ -47,7 +47,9 @@ module PEMK
       @start        = nil   # [map,x,y]
       @encounters   = {}    # map_id => raw encounters hash
       @trainers_by_map = {} # map_id => frozen Array of [type, name, version]
-      @trainer_places  = {} # map_id => { event_id => frozen Array of [type, name, version, rematch] } (M1a)
+      @trainer_places  = {} # map_id => { event_id => frozen Array of [type, name, version, rematch, repeatable] } (M1a)
+      @trainer_marks   = false # does the export say which battles can be fought again?
+      @partners        = nil   # frozen Array of [type, name, version] the game registers as partners
       @gifts        = {}    # [map,event_id] => frozen gift/prize object (step 6 payout gate)
       @shops        = {}    # [map,event_id] => frozen mart / bp_shop object (item authority)
       @loaded       = false
@@ -220,14 +222,37 @@ module PEMK
     end
 
     # Money authority M1a: the event of +map_id+ that starts a battle against this
-    # trainer. -> { "rematch" => bool, "versions" => [the contact's versions here] } | nil
+    # trainer. -> { "rematch" => bool, "repeatable" => bool, "page" => the event page's
+    # index, "no_money" => bool (the battle rules say it pays nothing),
+    # "versions" => [the contact's versions here] } | nil
     def trainer_place(map_id, event_id, type, name, version)
       places = (@trainer_places[map_id] || {})[event_id.to_i] || []
       hit = places.find { |t| t[0] == type.to_s && t[1] == name.to_s && t[2] == version.to_i }
       return nil unless hit
 
       versions = places.select { |t| t[0] == hit[0] && t[1] == hit[1] && t[3] }.map { |t| t[2] }.sort
-      { "rematch" => hit[3], "versions" => versions }
+      { "rematch" => hit[3], "repeatable" => hit[4], "page" => hit[5], "no_money" => hit[6], "versions" => versions }
+    end
+
+    # Money authority: the versions of +type+ / +name+ the game registers as a partner
+    # trainer (pbRegisterPartner), whose party may hold an Amulet Coin. nil when the export
+    # cannot say: from before it, or a partner computed at runtime.
+    def partner_versions(type, name)
+      return nil unless @partners
+
+      @partners.select { |t, n, _| t == type.to_s && n == name.to_s }.map { |_, _, v| v }
+    end
+
+    # The placements whose battle the game lets be fought again outside the phone: the
+    # win turns on nothing a later page waits for (Champion Blue's temporary switch), or
+    # only under a further condition. nil when the export predates the mark.
+    # -> [[map, event, type, name, version], ...]
+    def repeatable_trainers
+      return nil unless @trainer_marks
+
+      @trainer_places.sort.flat_map do |map_id, events|
+        events.sort.flat_map { |event_id, list| list.select { |t| t[4] }.map { |t| [map_id, event_id, *t[0, 3]] } }
+      end
     end
 
     # Coarse: are these two maps joined by ANY edge connection? Used to accept an
@@ -282,6 +307,9 @@ module PEMK
       # Money authority M0: the events that raise a balance by themselves. Absent = an
       # export from before it.
       @money_sources = doc["money_sources"].is_a?(Hash) ? deep_freeze(doc["money_sources"]) : nil
+      # ... and whether its trainer placements say which battles can be fought again.
+      @trainer_marks = doc["trainer_marks"] == true
+      @partners = load_partners(doc["partners"])
       @connections = freeze_connections(doc["connections"])
       @home  = coord_array(doc["home"], 4) || coord_array(doc["home"], 3)
       @start = coord_array(doc["start"], 3)
@@ -373,14 +401,29 @@ module PEMK
         [t["type"].to_s, t["name"].to_s, t["version"].to_i].freeze
       end
       @trainers_by_map[map_id] = ids.uniq.freeze unless ids.empty?
-      # M1a: by event, with the rematch mark (an export before it has neither).
+      # M1a: by event, with the rematch and repeatable marks (an export before them has
+      # neither).
       by_event = {}
       list.each do |t|
         next unless t.is_a?(Hash) && t["type"] && t["name"] && t["event_id"].is_a?(Integer)
 
-        (by_event[t["event_id"]] ||= []) << [t["type"].to_s, t["name"].to_s, t["version"].to_i, t["rematch"] == true].freeze
+        (by_event[t["event_id"]] ||= []) << [t["type"].to_s, t["name"].to_s, t["version"].to_i, t["rematch"] == true,
+                                             t["repeatable"] == true, t["page"].is_a?(Integer) ? t["page"] : 0,
+                                             t["no_money"] == true].freeze
       end
       @trainer_places[map_id] = by_event.transform_values(&:freeze).freeze unless by_event.empty?
+    end
+
+    # { "list" => [[type, name, version], ...], "computed" => bool } -> the list, or nil
+    # when a partner is computed at runtime (or the export predates the list).
+    def load_partners(doc)
+      return nil unless doc.is_a?(Hash) && doc["computed"] != true && doc["list"].is_a?(Array)
+
+      doc["list"].filter_map do |e|
+        next unless e.is_a?(Array) && e.length == 3 && e[2].is_a?(Integer)
+
+        [e[0].to_s, e[1].to_s, e[2]].freeze
+      end.uniq.freeze
     end
 
     def load_warps(map_id, warps)
