@@ -191,6 +191,7 @@ module PEMK
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
       (PEMK::ExpCorrect.adopt_mode(reply[:battle_enforce_exp]) rescue nil)         # M4-D6: EXP mode
       (PEMK::BattleRng.adopt_mode(reply[:battle_enforce_rng]) rescue nil)          # M4-D7: rng/capture mode
+      (PEMK::BattleRng.adopt_trainer_seed(reply[:trainer_seed]) rescue nil)      # trainer proof P2: seeds asked first
       (PEMK::Flags.adopt_mode(reply[:flag_state]) rescue nil)                     # audit item 4: flag shadow
       (PEMK::Flags.adopt_policy(reply[:flag_policy]) rescue nil)   # build-time tier table (absent == local)
       (PEMK::Flags.note_facts(reply[:flag_facts]) rescue nil)      # applied after the save loads
@@ -247,6 +248,7 @@ module PEMK
       (PEMK::Reward.adopt_mode(reply[:battle_enforce_rewards]) rescue nil)         # M4-D4: reward mode
       (PEMK::ExpCorrect.adopt_mode(reply[:battle_enforce_exp]) rescue nil)         # M4-D6: EXP mode
       (PEMK::BattleRng.adopt_mode(reply[:battle_enforce_rng]) rescue nil)          # M4-D7: rng/capture mode
+      (PEMK::BattleRng.adopt_trainer_seed(reply[:trainer_seed]) rescue nil)      # trainer proof P2: seeds asked first
       (PEMK::Flags.adopt_mode(reply[:flag_state]) rescue nil)                     # audit item 4: flag shadow
       (PEMK::Flags.adopt_policy(reply[:flag_policy]) rescue nil)   # build-time tier table (absent == local)
       (PEMK::Flags.note_facts(reply[:flag_facts]) rescue nil)      # applied after the save loads

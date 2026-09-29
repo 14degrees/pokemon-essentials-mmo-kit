@@ -31,16 +31,77 @@ module PEMK
   module BattleRng
     MAX_ROUNDS = 200    # rounds snapshotted per record (beyond -> truncated flag)
     MAX_DRAWS  = 4096   # per-stream packed-log cap (counts/fps keep counting)
+    TRAINER_SEED_WAIT = 2.0   # seconds a trainer battle waits for its seed at the start
 
     @mode      = :off   # server-advertised mode (adopted at login/relogin)
     @pending   = nil    # {seed:, pid:} from the last :encounter_grant build
     @engine_fp = nil    # lazy cohort fingerprint (survives for the session)
+    @trainer_seed_ok = false   # the server seeds trainer battles (login flag, P2)
+    @trainer_asks    = {}      # nonce => nil (asked) | seed | :denied
+    @trainer_nonce   = 0
 
     module_function
 
     def reset
       @mode    = :off
       @pending = nil
+      @trainer_seed_ok = false
+      @trainer_asks    = {}
+    end
+
+    def adopt_trainer_seed(v)
+      @trainer_seed_ok = v == true
+    end
+
+    # Trainer proof P2 (docs/TRAINER-PROOF-DESIGN.md), from :on_trainer_load: a trainer is
+    # about to be fought - ask its placement's seed now, so the answer is back by the
+    # battle's start (the transition hides the round trip).
+    def ask_trainer_seed(trainer)
+      return unless @mode == :on && @trainer_seed_ok && online?
+
+      key = trainer.respond_to?(:pemk_key) ? trainer.pemk_key : nil
+      ev  = trainer.respond_to?(:pemk_event) ? trainer.pemk_event : nil
+      return unless key && ev
+
+      nonce = (@trainer_nonce += 1)
+      @trainer_asks[nonce] = nil
+      trainer.instance_variable_set(:@pemk_seed_nonce, nonce)
+      PEMK.send_message(:type => :trainer_battle_req, :nonce => nonce, :trainers => [key + ev])
+    rescue StandardError => e
+      PEMK.log("battlerng: trainer seed ask error #{e.class}: #{e.message}")
+    end
+
+    # Dispatch: :trainer_battle_seed / :trainer_battle_deny, by nonce.
+    def on_trainer_seed(msg)
+      n = msg[:nonce]
+      return unless @trainer_asks.key?(n)
+
+      seed = msg[:seed]
+      @trainer_asks[n] = msg[:type] == :trainer_battle_seed && seed.is_a?(Integer) && seed.positive? ? seed : :denied
+    end
+
+    # -> the seed asked for +trainer+, waiting up to TRAINER_SEED_WAIT for it; nil if none
+    # (denied, late, never asked: the battle is then recorded unseeded).
+    def trainer_seed(trainer)
+      n = trainer.instance_variable_get(:@pemk_seed_nonce)
+      return nil unless n && @trainer_asks.key?(n)
+
+      deadline = mono + TRAINER_SEED_WAIT
+      while @trainer_asks[n].nil? && mono < deadline && online?
+        Graphics.update
+        Input.update
+      end
+      seed = @trainer_asks.delete(n)
+      PEMK.log("battlerng: trainer battle #{seed.is_a?(Integer) ? 'seeded' : "unseeded (#{seed.inspect})"}")
+      seed.is_a?(Integer) ? seed : nil
+    rescue StandardError
+      nil
+    end
+
+    def mono
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    rescue StandardError
+      0.0
     end
 
     def adopt_mode(v)
@@ -101,17 +162,19 @@ module PEMK
       nil
     end
 
-    # Trainer battles (docs/TRAINER-PROOF-DESIGN.md, P1): a single battle against one
-    # trainer is recorded in shadow, so the harness can rebuild the trainer's team and
-    # re-run its AI against what this client did. No seed yet: `on` leaves them vanilla.
+    # Trainer battles (docs/TRAINER-PROOF-DESIGN.md): a single battle against one trainer
+    # is recorded, so the harness can rebuild the trainer's team and re-run its AI against
+    # what this client did. Under `on` it runs on its placement's seed (P2); without one
+    # (denied, late) it is recorded unseeded, as in shadow.
     def arm_trainer(battle)
-      return nil unless @mode == :shadow
+      return nil unless @mode == :shadow || @mode == :on
 
       foes = Array(battle.opponent)
       return nil unless foes.length == 1 && Array(battle.player).length == 1
       return nil unless (battle.pbSideSize(0) == 1 && battle.pbSideSize(1) == 1 rescue false)
 
-      s = Session.new(:shadow, nil)
+      seed = @mode == :on ? trainer_seed(foes[0]) : nil
+      s = Session.new(seed ? :on : :shadow, seed)
       s.trainers = foes.map { |t| t.respond_to?(:pemk_key) && t.pemk_key ? Array(t.pemk_key)[0, 3].map { |v| v.is_a?(Symbol) ? v.to_s : v } : nil }
       s.watch_forgets(battle)
       s
@@ -469,7 +532,12 @@ class Battle
 
     alias pemk_rng_orig_pbEndOfBattle pbEndOfBattle
     def pbEndOfBattle
-      (@pemk_rng_session.snapshot_outcome(self) rescue nil) if @pemk_rng_session
+      if (s = @pemk_rng_session)
+        (s.snapshot_outcome(self) rescue nil)
+        # A trainer battle's record leaves before its prize claim (made inside this call),
+        # so the server holds the record the claim will name (trainer proof P2).
+        (s.finalize_and_send rescue nil) if s.trainers
+      end
       pemk_rng_orig_pbEndOfBattle
     end
 
@@ -482,6 +550,12 @@ class Battle
       ret
     end
   end
+end
+
+# Trainer proof P2: a trainer loaded for a battle asks its placement's seed at once.
+if defined?(EventHandlers)
+  EventHandlers.add(:on_trainer_load, :pemk_trainer_seed,
+    proc { |trainer| PEMK::BattleRng.ask_trainer_seed(trainer) })
 end
 
 class Battle::AI
