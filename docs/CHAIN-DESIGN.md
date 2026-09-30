@@ -74,6 +74,15 @@ registry write ──same transaction──▶ asset_tokens / asset_events ─�
   subset (`name`, `symbol`, `ownerOf`, `balanceOf`, the `Transfer` event) so explorers and
   wallets list the tokens, plus `accountOf`, `assetOf`, `frozen`, `supplyOf`. A cap can
   never be set below what is minted.
+- **The audit** (`bin/pemk_chain.rb audit`, and every `PEMK_CHAIN_AUDIT_SEC` in the
+  daemon, 600 by default) reads both sides and names every disagreement: a token whose
+  chain account or frozen flag is not the registry's, a confirmed mint the chain does
+  not hold, a registry transfer of a tokenized Pokemon with no receipt, a contract
+  holding more tokens than the registry issued (the operator key used elsewhere). A
+  token with events still in flight is lag, not drift, and is skipped. A drift is an
+  alarm (exit 1, `chain: audit DRIFT` in the log), never a repair: the registry is the
+  owner of record, and a chain that disagrees with it means a key, a node or a relayer
+  did something the design forbids.
 - **The modes.** `PEMK_CHAIN=off` (default) writes nothing. `shadow` writes the same
   rows as `on` and the relayer stamps them `shadow` without a chain: the log shows what
   `on` would have sent. `on` relays. The game never waits on the chain in any mode.
@@ -125,11 +134,25 @@ server, reading the same `.env`.
 - `test/chain_relayer_test.rb` - the relayer against an in-memory contract: order,
   idempotence against chain state, a failure stopping the pass and its backoff, an
   out-of-order transfer refused, shadow.
-- `test/chain_evm_test.rb` - the same relayer against a real node and a freshly
-  deployed contract; a cap holding against the relayer. Skipped unless `PEMK_CHAIN_RPC`
-  and `PEMK_CHAIN_KEY` are set.
+- `test/chain_reconciler_test.rb` - the audit: a relayed registry agrees; each way the
+  chain can stop agreeing is a named finding; in-flight rows are lag.
+- `test/chain_evm_test.rb` - the same relayer and audit against a real node and a
+  freshly deployed contract; a cap holding against the relayer; the audit catching a
+  token moved behind the registry's back. Skipped unless `PEMK_CHAIN_RPC` and
+  `PEMK_CHAIN_KEY` are set.
 
-## 6. What comes next
+## 6. A browser client's door
+
+`PEMK_WS_PORT` opens a WebSocket listener on the same reactor (off unless set). The
+same envelopes, the same handlers, the same rate limits and idle sweeps: one binary
+(or text) message is one PEMK payload - the split envelope and body without the 4-byte
+length prefix the TCP framing carries. Handshake, masking, fragments, ping/pong and
+close are the reactor's, on stdlib alone. A browser on an https page needs `wss://`,
+which a reverse proxy (Caddy, nginx) terminates in front of this, exactly as TLS for
+the TCP port. The protocol codec (`protocol/pemk_wire.rb`) is primitives only, so a
+TypeScript port of it is the browser client's first file.
+
+## 7. What comes next
 
 - **Supply caps in the server** (C2): the server refusing to mint a capped species in
   the encounter path, so the game agrees with the contract instead of learning at relay

@@ -7,6 +7,7 @@ $LOAD_PATH.unshift(lib)   unless $LOAD_PATH.include?(lib)
 $LOAD_PATH.unshift(proto) unless $LOAD_PATH.include?(proto)
 require "pemk"
 require "pemk/chain/relayer"
+require "pemk/chain/reconciler"
 
 # Chain C1 against a REAL node: the outbox the registry wrote, relayed onto a freshly
 # deployed PemkAssets by the same Relayer the daemon runs. Needs a local EVM node and
@@ -57,6 +58,7 @@ class ChainEvmTest < Minitest::Test
     ub = mint(@b, "EEVEE", nonce: 2)
     st, = @trades.execute_trade("t1", a: @a, b: @b, a_gives: [ua], b_gives: [ub])
     assert_equal :ok, st
+    @db[:monsters].where(id: ua).update(status: "quarantined")   # as the verdict sweep does, with its receipt
     @events.freeze(ua, @b, reason: "walk_mismatch")
 
     t = @relay.pass
@@ -75,6 +77,14 @@ class ChainEvmTest < Minitest::Test
 
     # A second pass finds nothing; a re-queued mint is a no-op against the chain.
     assert_equal({ confirmed: 0, shadow: 0, failed: 0, waiting: 0 }, @relay.pass)
+
+    # The audit agrees - until the chain is moved behind the registry's back.
+    audit = PEMK::Chain::Reconciler.new(@db, @chain)
+    assert audit.run[:ok]
+    @chain.set_frozen(ua, false, reason: "tamper")
+    @chain.move(ua, to_account: @a, ref: "tamper")
+    r = audit.run
+    assert_equal %w[owner frozen], r[:drift].map { |d| d[:what] }
   end
 
   def test_the_contract_s_supply_cap_holds_against_the_relayer

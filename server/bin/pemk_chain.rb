@@ -12,9 +12,11 @@
 #   bundle exec ruby bin/pemk_chain.rb deploy             # deploy the contract; prints PEMK_CHAIN_CONTRACT
 #   bundle exec ruby bin/pemk_chain.rb cap <SPECIES> <n>  # set a species' supply cap on the contract (0 = none)
 #   bundle exec ruby bin/pemk_chain.rb retry <event id>   # clear a failed row's backoff so the next pass retries it now
+#   bundle exec ruby bin/pemk_chain.rb audit              # the chain against the registry; exit 1 on drift
 # Env: PEMK_CHAIN (shadow|on) with PEMK_CHAIN_SPECIES / PEMK_CHAIN_SHINY (the policy, as
 # the server reads them), and for `on`: PEMK_CHAIN_RPC (http://127.0.0.1:8545),
 # PEMK_CHAIN_KEY (the operator's private key, hex - never commit it), PEMK_CHAIN_CONTRACT.
+# PEMK_CHAIN_AUDIT_SEC: how often the loop audits the chain against the registry (600).
 
 server_root = File.expand_path("..", __dir__)
 $LOAD_PATH.unshift(File.join(server_root, "lib"))
@@ -23,6 +25,7 @@ require "pemk/config"
 require "pemk/db"
 require "pemk/asset_events"
 require "pemk/chain/relayer"
+require "pemk/chain/reconciler"
 
 config = PEMK::Config.new
 db     = PEMK::DB.connect(config.database_url, max_connections: 2)
@@ -46,10 +49,29 @@ case cmd
 when "loop"
   interval = (ARGV.shift || "15").to_i
   r = relayer.call
-  log.call("chain: #{config.chain} - relaying every #{interval}s or on notify (Ctrl-C to stop)")
+  audit_every = (ENV["PEMK_CHAIN_AUDIT_SEC"] || "600").to_i
+  audit = config.chain == :on && audit_every.positive? ? PEMK::Chain::Reconciler.new(db, adapter.call, logger: log) : nil
+  log.call("chain: #{config.chain} - relaying every #{interval}s or on notify#{audit ? ", auditing every #{audit_every}s" : ''} (Ctrl-C to stop)")
   trap("INT")  { puts "\nchain: stopping"; exit 0 }
   trap("TERM") { exit 0 }
+  if audit
+    Thread.new do
+      loop do
+        sleep audit_every
+        begin
+          audit.run
+        rescue StandardError => e
+          log.call("chain: audit failed #{e.class}: #{e.message}")
+        end
+      end
+    end
+  end
   r.run(interval: interval, db: db)
+
+when "audit"
+  abort "audit needs PEMK_CHAIN=on (a node to compare against)" unless config.chain == :on
+  report = PEMK::Chain::Reconciler.new(db, adapter.call, logger: log).run
+  exit(report[:ok] ? 0 : 1)
 
 when "run"
   t = relayer.call.pass(limit: (ENV["CHAIN_LIMIT"] || 500).to_i)
@@ -108,5 +130,5 @@ when "retry"
   puts n.positive? ? "event ##{id} will be retried on the next pass" : "event ##{id} is not failed"
 
 else
-  abort "usage: pemk_chain.rb loop [seconds] | run | status | show <uid> | backfill | deploy | cap <SPECIES> <n> | retry <id>"
+  abort "usage: pemk_chain.rb loop [seconds] | run | status | show <uid> | backfill | deploy | cap <SPECIES> <n> | retry <id> | audit"
 end

@@ -16,12 +16,19 @@ module PEMK
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
                 :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority,
                 :money_payday_daily, :money_local_daily, :money_repeat_daily,
-                :chain, :chain_species, :chain_shiny, :chain_rpc, :chain_key, :chain_contract
+                :chain, :chain_species, :chain_shiny, :chain_rpc, :chain_key, :chain_contract,
+                :ws_port
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
       @port         = Integer(env.fetch("PEMK_PORT", "9998"))
       @database_url = env.fetch("DATABASE_URL")
+      # A WebSocket listener for a browser client, on the same bind address: the same
+      # envelopes, one message per payload (see Reactor). Off unless set; "0" binds an
+      # ephemeral port (tests). A browser on an https page needs wss://, which a reverse
+      # proxy terminates in front of this, like TLS for the TCP port.
+      raw = env.fetch("PEMK_WS_PORT", "").to_s.strip
+      @ws_port = raw.match?(/\A\d+\z/) ? raw.to_i : nil
 
       # M4 Layer A: path to the build-time world export (server/data/world.json) the
       # WorldData model loads. Just a PATH here — a missing file is tolerated at boot

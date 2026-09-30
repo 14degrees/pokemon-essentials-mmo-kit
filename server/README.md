@@ -91,6 +91,8 @@ runs a `pg_dump`. Point clients at the host via `mmo_config.txt`
   Docker).
 - `PEMK_BIND` / `PEMK_PORT` — listen address/port (default `127.0.0.1:9998` in
   dev, `0.0.0.0:9998` in Docker/`dev-server.sh`).
+- `PEMK_WS_PORT` — a WebSocket listener for a browser client, same envelopes, off
+  unless set (`docs/CHAIN-DESIGN.md` §6). `wss://` is a reverse proxy's job.
 
 ## Roadmap (authority ladder)
 

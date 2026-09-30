@@ -150,7 +150,7 @@ module PEMK
       @trade_bodies   = {}                              # sender => its last locked escrow; reactor-thread only
       @conn_buckets   = {}                              # conn => [tokens, last_refill]; reactor-thread only
       @reactor  = Reactor.new(
-        host: @config.bind, port: @config.port,
+        host: @config.bind, port: @config.port, ws_port: @config.ws_port,   # ws: a browser client's door
         on_frame: method(:on_frame), on_close: method(:on_close),
         on_tick: method(:on_tick), logger: @log
       )
@@ -159,6 +159,10 @@ module PEMK
 
     def port
       @reactor.port
+    end
+
+    def ws_port
+      @reactor.ws_port
     end
 
     def start

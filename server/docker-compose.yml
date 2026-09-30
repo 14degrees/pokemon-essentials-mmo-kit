@@ -30,6 +30,7 @@ services:
       DATABASE_URL: postgres://pemk:${POSTGRES_PASSWORD:-pemk_dev}@db:5432/pemk
       PEMK_BIND: "0.0.0.0"
       PEMK_PORT: "9998"
+      PEMK_WS_PORT: ${PEMK_WS_PORT:-}
       # The protections, all off unless set (a .env file next to this one, or the
       # shell: PEMK_FLAG_STATE=shadow docker compose up). The ramp is in
       # docs/GETTING-STARTED.md.
@@ -60,6 +61,7 @@ services:
       PEMK_CHAIN_SHINY: ${PEMK_CHAIN_SHINY:-on}
     ports:
       - "${PEMK_PORT:-9998}:9998"
+      - "${PEMK_WS_PORT:-9999}:${PEMK_WS_PORT:-9999}"
     stop_grace_period: 30s   # audit: give SIGTERM time to drain pending saves
     command: ["sh", "-c", "bundle exec rake db:migrate && bundle exec ruby bin/pemk_server.rb"]
     restart: unless-stopped
@@ -82,6 +84,7 @@ services:
       PEMK_CHAIN_RPC: ${PEMK_CHAIN_RPC:-}
       PEMK_CHAIN_KEY: ${PEMK_CHAIN_KEY:-}
       PEMK_CHAIN_CONTRACT: ${PEMK_CHAIN_CONTRACT:-}
+      PEMK_CHAIN_AUDIT_SEC: ${PEMK_CHAIN_AUDIT_SEC:-600}
     command: ["sh", "-c", "bundle exec ruby bin/pemk_chain.rb loop 15"]
     restart: unless-stopped
 

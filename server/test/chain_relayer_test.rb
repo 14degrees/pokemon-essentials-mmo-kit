@@ -7,53 +7,12 @@ $LOAD_PATH.unshift(lib)   unless $LOAD_PATH.include?(lib)
 $LOAD_PATH.unshift(proto) unless $LOAD_PATH.include?(proto)
 require "pemk"
 require "pemk/chain/relayer"
+require_relative "support/fake_chain"
 
 # Chain C1 - the relayer: drains the outbox in order, idempotent against the chain's
 # state, stops on a failure and retries it after a backoff. The chain is a double here;
 # chain_evm_test.rb runs the same relayer against a real node.
 class ChainRelayerTest < Minitest::Test
-  # An in-memory PemkAssets: the same reads and writes, the same refusals.
-  class FakeChain
-    attr_reader :tokens, :calls
-    def initialize
-      @tokens = {}
-      @calls  = []
-      @fail_next = nil
-    end
-    def fail_next!(msg) = @fail_next = msg
-    def minted?(id) = @tokens.key?(id)
-    def account_of(id) = @tokens.fetch(id)[:account]
-    def frozen?(id) = @tokens.fetch(id)[:frozen]
-    def mint(id, account:, kind:, species:, shiny:, origin:)
-      boom!
-      raise "minted" if minted?(id)
-      @tokens[id] = { account: account, kind: kind, species: species, shiny: shiny, origin: origin, frozen: false }
-      tx(:mint, id)
-    end
-    def move(id, to_account:, ref:)
-      boom!
-      raise "frozen" if @tokens.fetch(id)[:frozen]
-      @tokens[id][:account] = to_account
-      tx(:move, id)
-    end
-    def set_frozen(id, frozen, reason:)
-      boom!
-      @tokens.fetch(id)[:frozen] = frozen
-      tx(:freeze, id)
-    end
-    private
-    def boom!
-      return unless @fail_next
-      m = @fail_next
-      @fail_next = nil
-      raise m
-    end
-    def tx(kind, id)
-      @calls << [kind, id]
-      "0x#{kind}#{id}#{@calls.size}"
-    end
-  end
-
   def setup
     @db = PEMK::DB.connect(ENV.fetch("DATABASE_URL"))
     %i[asset_events asset_tokens battle_records monster_transfers encounter_rolls monsters enforcement_events accounts].each { |t| @db[t].delete rescue nil }
