@@ -33,6 +33,7 @@ GEM
       rake (~> 13)
     sequel (5.106.0)
       bigdecimal
+    webrick (1.9.2)
 
 PLATFORMS
   x86_64-linux
@@ -44,6 +45,7 @@ DEPENDENCIES
   pg (~> 1.5)
   rake (~> 13.0)
   sequel (~> 5.0)
+  webrick (~> 1.8)
 
 RUBY VERSION
    ruby 3.1.2p20

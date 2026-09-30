@@ -71,7 +71,7 @@ bash bin/setup.sh        # one-time: installs Ruby+Postgres, creates the dev DB
 - **Dedicated server (ops, tests, schema):** [`server/README.md`](server/README.md)
 - **Security model & anti-cheat roadmap:** [`docs/ARCHITECTURE-SECURITY.md`](docs/ARCHITECTURE-SECURITY.md)
 - **The chain: tokens as receipts of what the server proved:** [`docs/CHAIN-DESIGN.md`](docs/CHAIN-DESIGN.md)
-- **Play in a browser tab (one streamed game per player):** [`stream/README.md`](stream/README.md)
+- **One website: sign in, play (streamed seats behind a lobby):** [`stream/README.md`](stream/README.md)
 - **Architecture & conversion audit:** [`docs/architecture/MMO_CONVERSION_AUDIT.md`](docs/architecture/MMO_CONVERSION_AUDIT.md)
 
 ## Where the authority is today

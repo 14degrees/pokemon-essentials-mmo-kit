@@ -12,6 +12,8 @@ services:
       POSTGRES_DB: pemk
     volumes:
       - pemk_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${PEMK_DB_PORT:-55433}:5432"   # localhost only: the lobby (stream/) and the operator's consoles
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pemk -d pemk"]
       interval: 5s

@@ -9,6 +9,7 @@ gem "pg",     "~> 1.5"    # PostgreSQL driver (native ext -> needs libpq-dev)
 gem "sequel", "~> 5.0"    # DB toolkit + migrations, without ActiveRecord weight
 gem "bcrypt", "~> 3.1"    # password hashing (cost 12 + SHA-256 pre-hash)
 gem "rake",   "~> 13.0"   # tasks: db:migrate, pemk:import_saves, pemk:backup
+gem "webrick", "~> 1.8"   # the lobby (stream/lobby/lobby.rb): the one website in front of the streamed games
 
 group :development, :test do
   gem "minitest", "~> 5.20"   # unit + integration tests
