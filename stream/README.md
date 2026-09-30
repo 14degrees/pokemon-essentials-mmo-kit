@@ -19,6 +19,18 @@ browser ──https──▶ Caddy ─┬─ /            ▶ lobby (stream/lobb
 Built on [neko](https://github.com/m1k1o/neko) for the streaming. The game itself is
 the Windows build in this repo, untouched.
 
+## The short way
+
+```bash
+bash stream/host-setup.sh                                          # once: docker, caddy, ruby
+# copy Graphics/ and Audio/ from your Windows install next to Game.exe
+PUBLIC_IP=<the IP friends reach> DOMAIN=play.example.com bash stream/deploy.sh 5
+```
+
+`deploy.sh` brings up the server, builds and generates five seats, and installs the
+lobby and Caddy as system services. Re-run it to change the seat count or after a
+`git pull`. The long way, piece by piece, follows.
+
 ## Setting it up, on a Linux host with Docker
 
 ```bash
