@@ -1,0 +1,10 @@
+#cloud-config
+# First boot of the host: Docker, Caddy, Ruby, the repo, ready for the assets and
+# deploy.sh. Used by stream/hcloud.sh (or paste it as "cloud config" when creating a
+# server in the Hetzner console). Log: /var/log/cloud-init-output.log on the box.
+package_update: true
+packages: [git, curl, ca-certificates]
+runcmd:
+  - [bash, -lc, "cd /root && git clone -b claude/relaxed-fermi-m81zrn https://github.com/14degrees/pokemon-essentials-mmo-kit.git pemk"]
+  - [bash, -lc, "cd /root/pemk && bash stream/host-setup.sh"]
+  - [bash, -lc, "echo 'pemk: host ready - upload Graphics/ and Audio/ to /root/pemk, then run stream/deploy.sh' > /etc/motd"]

@@ -19,6 +19,14 @@ browser ──https──▶ Caddy ─┬─ /            ▶ lobby (stream/lobb
 Built on [neko](https://github.com/m1k1o/neko) for the streaming. The game itself is
 the Windows build in this repo, untouched.
 
+## Renting the box from the command line
+
+With the [hcloud](https://github.com/hetznercloud/cli) CLI and an API token from the
+Hetzner console, `bash stream/hcloud.sh ~/.ssh/id_ed25519.pub` creates the server,
+its firewall (22, 80, 443, the WebRTC UDP range) and hands it `stream/cloud-init.yml`,
+so the box installs Docker, Caddy, Ruby and the repo on its first boot. It prints the
+IP. Then: point the domain, upload Graphics/ and Audio/, run `deploy.sh` over ssh.
+
 ## The short way
 
 ```bash
