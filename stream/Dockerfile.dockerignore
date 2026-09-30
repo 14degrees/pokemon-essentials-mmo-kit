@@ -1,0 +1,24 @@
+# The build context is the repo root; only the game folder belongs in the image.
+.git
+.gitignore
+.gitattributes
+.claude
+server
+docs
+protocol
+tools
+stream/README.md
+stream/docker-compose.yml
+stream/.env
+stream/Caddyfile
+autotest-reports
+autopilot
+*.log
+mmo_*.txt
+mmo_*.json
+mmo_*.dat
+server_saves
+Screenshots
+*.bat
+*.url
+*.URL
