@@ -21,9 +21,10 @@ module PEMK
   class Trades
     HOLD_TTL_SEC = 3600   # D8: fail-open window for a provisional catch's trade hold
 
-    def initialize(db, resim: :off)
+    def initialize(db, resim: :off, assets: nil)
       @db    = db
       @resim = resim   # D8: :on adds the provisional trade hold (walk-gated release)
+      @assets = assets # C1: the chain's outbox (nil = off) - a tokenized uid's move gets its receipt
     end
 
     # -> [:ok, {a_recv:, b_recv:}] | [:ok_replay, {a_recv:, b_recv:}] | [:abort, reason]
@@ -59,6 +60,10 @@ module PEMK
         end
 
         @db[:monster_transfers].multi_insert(rows)                # UNIQUE(trade_id, uid) dedup
+        if @assets                                                # C1: receipts, same commit or none
+          a_gives.each { |u| @assets.transfer(u, from: a, to: b, ref: trade_id, now: now) }
+          b_gives.each { |u| @assets.transfer(u, from: b, to: a, ref: trade_id, now: now) }
+        end
         yield if block_given?                                     # the caller's rows, in the same commit
         result = [:ok, { a_recv: b_gives, b_recv: a_gives }]
       end

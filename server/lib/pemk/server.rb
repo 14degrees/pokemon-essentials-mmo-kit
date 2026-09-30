@@ -50,10 +50,18 @@ module PEMK
       # Provenance labeling only makes sense when the server actually mints encounters:
       # off/shadow would label every honest catch "client" (and invert the signal). With
       # rolls disabled, origin stays NULL = its documented "unknown" meaning.
+      # C1: the chain's outbox. The registry writes a receipt for each Pokemon the policy
+      # takes, in its own transaction; the relayer (bin/pemk_chain.rb) is a separate
+      # process. shadow and on write the same rows - the relayer tells them apart.
+      @assets = if @config.chain != :off
+                  AssetEvents.new(@db, mode: @config.chain, species: @config.chain_species,
+                                       shiny: @config.chain_shiny, logger: @log)
+                end
       @monsters   = Monsters.new(@db, @config.monster_caps, logger: @log,
                                  rolls: (@config.battle_enforce_encounters == :on ? @encounter_rolls : nil),
-                                 resim: @config.battle_enforce_resim)   # D8: birth states
-      @trades     = Trades.new(@db, resim: @config.battle_enforce_resim)   # D8: provisional trade hold
+                                 resim: @config.battle_enforce_resim,   # D8: birth states
+                                 assets: @assets)
+      @trades     = Trades.new(@db, resim: @config.battle_enforce_resim, assets: @assets)   # D8: provisional trade hold
       # M4 Layer A: read-only world model + detection-only interaction audit. Both are
       # in-memory and DB-free; a missing export just makes the audit a no-op.
       @world      = WorldData.new(@config.world_path, logger: @log)
@@ -79,7 +87,7 @@ module PEMK
       @monster_stats = MonsterStats.new(@db, battle: @battle) if @config.battle_enforce_exp != :off
       # M4 Layer D D8: the re-sim verdict sweep (live-server writer of monster state).
       @resim = ResimVerdicts.new(@db, mode: @config.battle_enforce_resim,
-                                 min_strikes: @config.resim_min_strikes, logger: @log) if @config.battle_enforce_resim != :off
+                                 min_strikes: @config.resim_min_strikes, logger: @log, assets: @assets) if @config.battle_enforce_resim != :off
       @last_resim_sweep = nil
       @resim_sweeping   = false
       # M4 Layer D D7 part 1: the battle-record corpus ingest (shadow + on).

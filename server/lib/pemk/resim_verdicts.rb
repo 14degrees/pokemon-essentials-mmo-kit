@@ -25,11 +25,12 @@ module PEMK
     STORM_ACCOUNTS = 3          # distinct accounts adverse in one cohort/window -> suppress
     STORM_WINDOW_SEC = 86_400
 
-    def initialize(db, mode:, min_strikes: 2, logger: nil)
+    def initialize(db, mode:, min_strikes: 2, logger: nil, assets: nil)
       @db      = db
       @mode    = mode          # :shadow | :on  (constructed only when != :off)
       @strikes = min_strikes
       @log     = logger || ->(_m) {}
+      @assets  = assets        # C1: a quarantined token is frozen on chain (nil = off)
     end
 
     # One sweep. -> {verified:, quarantined:, would:, suppressed:} counts.
@@ -127,10 +128,13 @@ module PEMK
           @db[:encounter_rolls].where(id: roll_id).for_update.first if roll_id
           uid = roll_uid(roll_id)
           @db[:encounter_rolls].where(id: roll_id).update(condemned_at: now) if roll_id   # poison unclaimed catch
-          @db[:monsters].where(id: uid, status: "active").update(
-            status: "quarantined", quarantined_at: now,
-            quarantine_reason: "walk_mismatch", quarantine_record_id: rec[:id]
-          ) if uid
+          if uid
+            n = @db[:monsters].where(id: uid, status: "active").update(
+              status: "quarantined", quarantined_at: now,
+              quarantine_reason: "walk_mismatch", quarantine_record_id: rec[:id]
+            )
+            @assets.freeze(uid, account_id, reason: "walk_mismatch", now: now) if @assets && n.positive?   # C1
+          end
           audit(account_id, "quarantine", uid, rec[:id], "walk_mismatch, strikes>=#{@strikes}", now)
           stamp(rec[:id], "quarantined", now)
         end

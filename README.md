@@ -70,6 +70,7 @@ bash bin/setup.sh        # one-time: installs Ruby+Postgres, creates the dev DB
 - **Client SDK guide, configuration & LAN/deploy:** [`Plugins/PEMK/README.md`](Plugins/PEMK/README.md)
 - **Dedicated server (ops, tests, schema):** [`server/README.md`](server/README.md)
 - **Security model & anti-cheat roadmap:** [`docs/ARCHITECTURE-SECURITY.md`](docs/ARCHITECTURE-SECURITY.md)
+- **The chain: tokens as receipts of what the server proved:** [`docs/CHAIN-DESIGN.md`](docs/CHAIN-DESIGN.md)
 - **Architecture & conversion audit:** [`docs/architecture/MMO_CONVERSION_AUDIT.md`](docs/architecture/MMO_CONVERSION_AUDIT.md)
 
 ## Where the authority is today

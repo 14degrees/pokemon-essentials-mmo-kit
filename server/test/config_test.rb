@@ -165,3 +165,33 @@ class ConfigTest < Minitest::Test
     assert_equal false, PEMK::Config.new(env: ENV.to_h.merge("PEMK_ANOMALY_DETECTION" => "junk")).anomaly_detection
   end
 end
+
+# Chain C1: PEMK_CHAIN off by default, the policy knobs, the relayer's node settings.
+class ConfigChainTest < Minitest::Test
+  def env(h = {})
+    base = ENV.to_h
+    %w[PEMK_CHAIN PEMK_CHAIN_SPECIES PEMK_CHAIN_SHINY PEMK_CHAIN_RPC PEMK_CHAIN_KEY PEMK_CHAIN_CONTRACT].each { |k| base.delete(k) }
+    base.merge(h)
+  end
+
+  def test_chain_defaults_off_with_shiny_policy_on_and_no_species
+    cfg = PEMK::Config.new(env: env)
+    assert_equal :off, cfg.chain
+    assert_equal true, cfg.chain_shiny
+    assert_equal [], cfg.chain_species
+    assert_nil cfg.chain_rpc
+    assert_nil cfg.chain_contract
+  end
+
+  def test_chain_reads_its_modes_and_policy
+    cfg = PEMK::Config.new(env: env("PEMK_CHAIN" => "Shadow", "PEMK_CHAIN_SPECIES" => " mewtwo, Mew ,,", "PEMK_CHAIN_SHINY" => "off",
+                                    "PEMK_CHAIN_RPC" => "http://127.0.0.1:8545", "PEMK_CHAIN_CONTRACT" => " 0xabc "))
+    assert_equal :shadow, cfg.chain
+    assert_equal %w[MEWTWO MEW], cfg.chain_species
+    assert_equal false, cfg.chain_shiny
+    assert_equal "http://127.0.0.1:8545", cfg.chain_rpc
+    assert_equal "0xabc", cfg.chain_contract
+    assert_equal :on,  PEMK::Config.new(env: env("PEMK_CHAIN" => "on")).chain
+    assert_equal :off, PEMK::Config.new(env: env("PEMK_CHAIN" => "garbage")).chain
+  end
+end

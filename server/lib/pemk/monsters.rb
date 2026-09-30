@@ -31,12 +31,13 @@ module PEMK
   # wins — not necessarily the original), the other gets "client" — either way the
   # dupe is visible. Runs under the per-account PlayerMailbox.
   class Monsters
-    def initialize(db, caps, logger: nil, rolls: nil, resim: :off)
+    def initialize(db, caps, logger: nil, rolls: nil, resim: :off, assets: nil)
       @db    = db
       @caps  = caps                # { uid_req_max:, party_max:, level_max: }
       @log   = logger || ->(_m) {}
       @rolls = rolls               # EncounterRolls | nil (provenance recording off)
       @resim = resim               # D8 mode: :off | :shadow | :on (birth states)
+      @assets = assets             # AssetEvents | nil (C1: the chain's outbox, off)
     end
 
     # -> [:ack, grants] | [:rej, ["bad_shape"]]   (grants = [{tmp:, uid:}, ...])
@@ -152,6 +153,13 @@ module PEMK
       if uid && roll
         @rolls.stamp_claim(roll[:id], uid)   # same mint_batch transaction
         born_quarantine_audit(account_id, uid, roll) if row[:status] == "quarantined"
+      end
+      # C1: a fresh mint the policy takes gets its token and receipt in this same
+      # transaction (a replay conflicted above and never reaches here).
+      if uid && @assets
+        taken = @assets.tokenize(uid, account_id, species: m[:species].to_s, origin: origin,
+                                                   shiny: roll ? roll[:shiny] : false)
+        @assets.freeze(uid, account_id, reason: "born quarantined") if taken && row[:status] == "quarantined"
       end
       uid ? [uid, origin] : [existing_uid(account_id, m[:tmp]), nil]
     rescue Sequel::UniqueConstraintViolation

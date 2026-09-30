@@ -15,7 +15,8 @@ module PEMK
                 :battle_enforce_resim, :resim_min_strikes, :flag_state, :flag_enforce, :anomaly_detection,
                 :gift_enforce, :peer_check, :peer_classes, :trade_redelivery, :item_record,
                 :shop_enforce, :item_authority, :item_local, :item_grace, :money_authority,
-                :money_payday_daily, :money_local_daily, :money_repeat_daily
+                :money_payday_daily, :money_local_daily, :money_repeat_daily,
+                :chain, :chain_species, :chain_shiny, :chain_rpc, :chain_key, :chain_contract
 
     def initialize(env: ENV, root: File.expand_path("../..", __dir__))
       @bind         = env.fetch("PEMK_BIND", "127.0.0.1")
@@ -229,6 +230,26 @@ module PEMK
                             else 20_000
                             end
 
+      # Chain C1: the asset outbox. off = nothing; shadow = each Pokemon the policy
+      # tokenizes gets a token row and an outbox event, logged, and the relayer
+      # (bin/pemk_chain.rb) only marks them shadow; on = the same rows, and the relayer
+      # submits them to the contract. The server never waits on the chain in any mode:
+      # the outbox is written in the transaction that mints or moves the Pokemon, and a
+      # dead relayer only delays the receipt (docs/CHAIN-DESIGN.md).
+      cmode = env.fetch("PEMK_CHAIN", "off").to_s.strip.downcase
+      @chain = %w[off shadow on].include?(cmode) ? cmode.to_sym : :off
+      # Which Pokemon get a token. A shiny the server itself minted and saw caught
+      # (origin wild_caught, the roll shiny) - on unless PEMK_CHAIN_SHINY=off; and any
+      # species listed in PEMK_CHAIN_SPECIES (comma-separated ids, the legendaries), from
+      # any origin - the token then carries that origin, so a client-made one is visible.
+      @chain_shiny = env.fetch("PEMK_CHAIN_SHINY", "on").to_s.strip.downcase != "off"
+      @chain_species = env.fetch("PEMK_CHAIN_SPECIES", "").to_s.split(",").map { |i| i.strip.upcase }.reject(&:empty?).freeze
+      # The relayer's node (bin/pemk_chain.rb only; the server never reads them): the
+      # JSON-RPC url, the operator's private key (hex; a secret), the contract's address.
+      @chain_rpc      = blank_to_nil(env["PEMK_CHAIN_RPC"])
+      @chain_key      = blank_to_nil(env["PEMK_CHAIN_KEY"])
+      @chain_contract = blank_to_nil(env["PEMK_CHAIN_CONTRACT"])
+
       caps = YAML.safe_load_file(File.join(root, "config", "economy_caps.yml"))
       @economy_caps = {
         money:         require_cap(caps, "money"),
@@ -264,6 +285,11 @@ module PEMK
     end
 
     private
+
+    def blank_to_nil(v)
+      s = v.to_s.strip
+      s.empty? ? nil : s
+    end
 
     def require_cap(caps, key)
       value = caps.is_a?(Hash) ? caps[key] : nil

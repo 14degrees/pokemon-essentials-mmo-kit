@@ -96,7 +96,8 @@ module PEMK
       # is born quarantined). The uid is stamped right after the mint inserts
       # (stamp_claim) — same mint_batch transaction, so the link is crash-atomic.
       { label: row[:caught_at] ? :wild_caught : :wild,
-        id: row[:id], battle_seed: row[:battle_seed], condemned_at: row[:condemned_at] }
+        id: row[:id], battle_seed: row[:battle_seed], condemned_at: row[:condemned_at],
+        shiny: row[:shiny] == true }   # C1: a server-minted shiny is the one the chain may take
     end
 
     # The roll->mon link (the ONLY direction stored; mon->roll derives by join).

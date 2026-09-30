@@ -11,6 +11,8 @@
 #   DATABASE_URL=... bundle exec ruby bin/pemk_quarantine.rb reports        # open review queue
 
 require "sequel"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "pemk/asset_events"
 
 db  = Sequel.connect(ENV.fetch("DATABASE_URL"))
 cmd = ARGV.shift
@@ -73,6 +75,8 @@ when "pardon"
     db[:battle_records].where(encounter_roll_id: roll_ids, replay_status: "walk_mismatch")
                        .update(enforcement_action: "pardoned", enforced_at: Time.now) unless roll_ids.empty?
     audit(db, m[:owner_account_id], "pardon", uid, reason)
+    # C1: a frozen token thaws with its pardon (a no-op for a Pokemon without one).
+    PEMK::AssetEvents.new(db).unfreeze(uid, m[:owner_account_id], reason: reason) if db.table_exists?(:asset_tokens)
   end
   puts "pardoned uid #{uid} (#{m[:species]}, acct #{m[:owner_account_id]}) — now active + verified. reason: #{reason}"
 

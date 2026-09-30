@@ -13,3 +13,9 @@ gem "rake",   "~> 13.0"   # tasks: db:migrate, pemk:import_saves, pemk:backup
 group :development, :test do
   gem "minitest", "~> 5.20"   # unit + integration tests
 end
+
+# Chain C1: the relayer only (bin/pemk_chain.rb) - the game server never loads it.
+#   bundle install --with chain      (builds against libsecp256k1: apt install libsecp256k1-dev)
+group :chain, optional: true do
+  gem "eth", ">= 0.5.13", "< 0.6"   # JSON-RPC + signing for the PemkAssets contract
+end

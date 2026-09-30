@@ -29,6 +29,7 @@ update fans out only to same-map players.
 | **Bag inventory** | server-persistent `jsonb` snapshot, restored at login | `004` |
 | **Pokémon identity** | server-issued **monster UIDs** (idempotent minting, party shadow) — dupe-proof | `005` |
 | **Trading** | atomic ownership swap (CAS + row locks, whole-trade rollback) with an append-only `monster_transfers` audit/idempotency log | `006` |
+| **Chain receipts** | the Pokemon the policy takes (a server-proven shiny, a listed species) get a token on the `PemkAssets` contract: minted, moved and frozen by a relayer from an outbox written in the registry's own transactions; supply caps held by the contract (`PEMK_CHAIN`, off by default - [`../docs/CHAIN-DESIGN.md`](../docs/CHAIN-DESIGN.md)) | `045` |
 
 Auth retires the old client-claimed `account_id`, killing impersonation.
 Per-IP rate-limit + per-account lockout are evaluated before any password

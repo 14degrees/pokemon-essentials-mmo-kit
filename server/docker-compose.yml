@@ -55,10 +55,34 @@ services:
       PEMK_RESIM_MIN_STRIKES: ${PEMK_RESIM_MIN_STRIKES:-2}
       PEMK_ANOMALY_DETECTION: ${PEMK_ANOMALY_DETECTION:-off}
       PEMK_CORPUS_RETENTION_DAYS: ${PEMK_CORPUS_RETENTION_DAYS:-30}
+      PEMK_CHAIN: ${PEMK_CHAIN:-off}
+      PEMK_CHAIN_SPECIES: ${PEMK_CHAIN_SPECIES:-}
+      PEMK_CHAIN_SHINY: ${PEMK_CHAIN_SHINY:-on}
     ports:
       - "${PEMK_PORT:-9998}:9998"
     stop_grace_period: 30s   # audit: give SIGTERM time to drain pending saves
     command: ["sh", "-c", "bundle exec rake db:migrate && bundle exec ruby bin/pemk_server.rb"]
+    restart: unless-stopped
+
+  # Chain C1: the relayer (docs/CHAIN-DESIGN.md) - `docker compose --profile chain up`.
+  # Same image, the same policy env as the server, plus the node and the operator key.
+  relayer:
+    profiles: ["chain"]
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://pemk:${POSTGRES_PASSWORD:-pemk_dev}@db:5432/pemk
+      PEMK_CHAIN: ${PEMK_CHAIN:-shadow}
+      PEMK_CHAIN_SPECIES: ${PEMK_CHAIN_SPECIES:-}
+      PEMK_CHAIN_SHINY: ${PEMK_CHAIN_SHINY:-on}
+      PEMK_CHAIN_RPC: ${PEMK_CHAIN_RPC:-}
+      PEMK_CHAIN_KEY: ${PEMK_CHAIN_KEY:-}
+      PEMK_CHAIN_CONTRACT: ${PEMK_CHAIN_CONTRACT:-}
+    command: ["sh", "-c", "bundle exec ruby bin/pemk_chain.rb loop 15"]
     restart: unless-stopped
 
 volumes:
